@@ -34,6 +34,7 @@ from .error_handler import (
     should_retry_same_key,
     RequestErrorAccumulator,
     mask_credential,
+    ContextOverflowError,
 )
 from .provider_config import ProviderConfig
 from .providers import PROVIDER_PLUGINS
@@ -63,6 +64,12 @@ class StreamedAPIError(Exception):
     def __init__(self, message, data=None):
         super().__init__(message)
         self.data = data
+
+
+class ContextOverflowError(Exception):
+    """Custom exception to signal that input tokens exceed the model's context window."""
+
+    pass
 
 
 class RotatingClient:
@@ -1833,9 +1840,16 @@ class RotatingClient:
                             for m in litellm_kwargs["messages"]
                         ]
 
-                    litellm_kwargs = sanitize_request_payload(
+                    litellm_kwargs, should_reject = sanitize_request_payload(
                         litellm_kwargs, model, registry=self._model_registry
                     )
+
+                    # Reject request if input exceeds context window
+                    if should_reject:
+                        raise ContextOverflowError(
+                            f"Input tokens exceed context window for model {model}. "
+                            f"Request rejected to prevent API error."
+                        )
 
                     # If the provider is 'nvidia', set the custom provider to 'nvidia_nim'
                     # and strip the prefix from the model name for LiteLLM.
@@ -2641,9 +2655,16 @@ class RotatingClient:
                             for m in litellm_kwargs["messages"]
                         ]
 
-                    litellm_kwargs = sanitize_request_payload(
+                    litellm_kwargs, should_reject = sanitize_request_payload(
                         litellm_kwargs, model, registry=self._model_registry
                     )
+
+                    # Reject request if input exceeds context window
+                    if should_reject:
+                        raise ContextOverflowError(
+                            f"Input tokens exceed context window for model {model}. "
+                            f"Request rejected to prevent API error."
+                        )
 
                     # If the provider is 'qwen_code', set the custom provider to 'qwen'
                     # and strip the prefix from the model name for LiteLLM.

@@ -12,6 +12,9 @@ if TYPE_CHECKING:
     from .providers.provider_interface import ProviderInterface
     from .model_info_service import ModelInfoService, ModelInfo, ModelMetadata
     from . import anthropic_compat
+    from .http_client_pool import HttpClientPool, get_http_pool, close_http_pool
+    from .credential_weight_cache import CredentialWeightCache, get_weight_cache
+    from .batched_persistence import BatchedPersistence, UsagePersistenceManager
 
 __all__ = [
     "RotatingClient",
@@ -20,6 +23,14 @@ __all__ = [
     "ModelInfo",
     "ModelMetadata",
     "anthropic_compat",
+    # Performance optimization modules
+    "HttpClientPool",
+    "get_http_pool",
+    "close_http_pool",
+    "CredentialWeightCache",
+    "get_weight_cache",
+    "BatchedPersistence",
+    "UsagePersistenceManager",
 ]
 
 
@@ -45,4 +56,26 @@ def __getattr__(name):
         from . import anthropic_compat
 
         return anthropic_compat
+    # Performance optimization modules
+    if name == "HttpClientPool":
+        from .http_client_pool import HttpClientPool
+        return HttpClientPool
+    if name == "get_http_pool":
+        from .http_client_pool import get_http_pool
+        return get_http_pool
+    if name == "close_http_pool":
+        from .http_client_pool import close_http_pool
+        return close_http_pool
+    if name == "CredentialWeightCache":
+        from .credential_weight_cache import CredentialWeightCache
+        return CredentialWeightCache
+    if name == "get_weight_cache":
+        from .credential_weight_cache import get_weight_cache
+        return get_weight_cache
+    if name == "BatchedPersistence":
+        from .batched_persistence import BatchedPersistence
+        return BatchedPersistence
+    if name == "UsagePersistenceManager":
+        from .batched_persistence import UsagePersistenceManager
+        return UsagePersistenceManager
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

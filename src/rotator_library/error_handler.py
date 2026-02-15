@@ -211,6 +211,27 @@ class TransientQuotaError(Exception):
         super().__init__(self.message)
 
 
+class ContextOverflowError(Exception):
+    """
+    Raised when input tokens exceed the model's context window.
+
+    This is a pre-emptive rejection before sending the request to the API,
+    based on token counting and model context limits.
+
+    This is NOT a rotatable error - all credentials will fail for the same request.
+    The client should reduce the input size or use a model with a larger context window.
+
+    Attributes:
+        model: The model that was requested
+        message: Human-readable message about the error
+    """
+
+    def __init__(self, model: str, message: str = ""):
+        self.model = model
+        self.message = message or f"Input tokens exceed context window for model {model}"
+        super().__init__(self.message)
+
+
 # =============================================================================
 # ERROR TRACKING FOR CLIENT REPORTING
 # =============================================================================

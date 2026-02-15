@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 Mirrowel
 
-from typing import Dict, Any, Set, Optional
+from typing import Dict, Any, Set, Optional, Tuple
 
 from .token_calculator import adjust_max_tokens_in_payload
 
@@ -30,7 +30,7 @@ def sanitize_request_payload(
     model: str,
     registry: Optional[Any] = None,
     auto_adjust_max_tokens: bool = True,
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], bool]:
     """
     Sanitizes and adjusts the request payload based on the model.
 
@@ -45,7 +45,8 @@ def sanitize_request_payload(
         auto_adjust_max_tokens: Whether to auto-adjust max_tokens (default: True)
 
     Returns:
-        Sanitized payload dictionary
+        Tuple of (sanitized payload dictionary, should_reject flag).
+        should_reject is True if the request should be rejected (input exceeds context window).
     """
     normalized_model = model.strip().lower() if isinstance(model, str) else ""
 
@@ -70,7 +71,8 @@ def sanitize_request_payload(
                     del payload[param]
 
     # Auto-adjust max_tokens to prevent context window overflow
+    should_reject = False
     if auto_adjust_max_tokens:
-        payload = adjust_max_tokens_in_payload(payload, model, registry)
+        payload, should_reject = adjust_max_tokens_in_payload(payload, model, registry)
 
-    return payload
+    return payload, should_reject
