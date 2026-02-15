@@ -62,13 +62,30 @@ DEFAULT_CONTEXT_WINDOWS: Dict[str, int] = {
 }
 
 # Safety buffer (tokens reserved for system overhead, response formatting, etc.)
-DEFAULT_SAFETY_BUFFER = 100
+# Increased from 100 to 1000 to account for:
+# - Token counting estimation errors (~5-10%)
+# - Provider-specific tokenization differences
+# - System message and metadata overhead
+# - Tool definitions and function call overhead
+DEFAULT_SAFETY_BUFFER = 1000
 
 # Minimum max_tokens to request (avoid degenerate cases)
 MIN_MAX_TOKENS = 256
 
 # Maximum percentage of context window to use for output (prevent edge cases)
 MAX_OUTPUT_RATIO = 0.75
+
+# Maximum percentage of context window for input (leave room for output)
+# If input exceeds this, messages should be trimmed or request rejected
+MAX_INPUT_RATIO = 0.90
+
+# Extra buffer for providers with known tokenization differences
+PROVIDER_SAFETY_BUFFERS = {
+    "kilocode": 2000,  # Kilocode has additional overhead
+    "openrouter": 1500,
+    "gemini": 1000,  # Gemini tokenization can vary
+    "anthropic": 500,
+}
 
 
 def extract_model_name(model: str) -> str:
@@ -193,6 +210,24 @@ def count_input_tokens(
     return total
 
 
+def get_provider_safety_buffer(model: str) -> int:
+    """
+    Get provider-specific safety buffer based on model prefix.
+
+    Args:
+        model: Full model identifier (e.g., "kilocode/z-ai/glm-5:free")
+
+    Returns:
+        Safety buffer for this provider
+    """
+    # Extract provider from model
+    if "/" in model:
+        provider = model.split("/")[0].lower()
+        if provider in PROVIDER_SAFETY_BUFFERS:
+            return PROVIDER_SAFETY_BUFFERS[provider]
+    return DEFAULT_SAFETY_BUFFER
+
+
 def calculate_max_tokens(
     model: str,
     messages: Optional[list] = None,
@@ -200,7 +235,7 @@ def calculate_max_tokens(
     tool_choice: Optional[Any] = None,
     requested_max_tokens: Optional[int] = None,
     registry=None,
-    safety_buffer: int = DEFAULT_SAFETY_BUFFER,
+    safety_buffer: Optional[int] = None,
 ) -> Tuple[Optional[int], str]:
     """
     Calculate a safe max_tokens value based on context window and input.
@@ -212,10 +247,11 @@ def calculate_max_tokens(
         tool_choice: Optional tool choice parameter
         requested_max_tokens: User-requested max_tokens (if any)
         registry: Optional ModelRegistry for context window lookup
-        safety_buffer: Extra buffer for safety
+        safety_buffer: Extra buffer for safety (default: auto-detect from provider)
 
     Returns:
         Tuple of (calculated_max_tokens, reason) where reason explains the calculation
+        Returns (None, "input_exceeds_context") if input is too large and cannot be processed
     """
     # Get context window
     context_window = get_context_window(model, registry)
@@ -225,21 +261,36 @@ def calculate_max_tokens(
             return requested_max_tokens, "unknown_context_window_using_requested"
         return None, "unknown_context_window_no_request"
 
+    # Use provider-specific buffer if not specified
+    if safety_buffer is None:
+        safety_buffer = get_provider_safety_buffer(model)
+
     # Count input tokens
     input_tokens = 0
     if messages:
         input_tokens = count_input_tokens(messages, model, tools, tool_choice)
 
+    # CRITICAL CHECK: Input must not exceed max allowed ratio
+    max_input_allowed = int(context_window * MAX_INPUT_RATIO)
+    if input_tokens > max_input_allowed:
+        logger.error(
+            f"Input tokens ({input_tokens}) exceed maximum allowed ({max_input_allowed}) "
+            f"for context window ({context_window}). Model: {model}. "
+            f"Request will fail - consider reducing conversation history."
+        )
+        # Return None to signal the request should be rejected
+        return None, f"input_exceeds_context_by_{input_tokens - max_input_allowed}_tokens"
+
     # Calculate available space for output
     available_for_output = context_window - input_tokens - safety_buffer
 
     if available_for_output < MIN_MAX_TOKENS:
-        # Input is too large - return minimal value and warn
+        # Input is too large - log warning but allow minimal response
         logger.warning(
-            f"Input tokens ({input_tokens}) exceed context window ({context_window}) "
-            f"minus safety buffer ({safety_buffer}). Model: {model}"
+            f"Input tokens ({input_tokens}) leave insufficient space for output "
+            f"(available: {available_for_output}, min: {MIN_MAX_TOKENS}). Model: {model}"
         )
-        return MIN_MAX_TOKENS, "input_exceeds_context"
+        return MIN_MAX_TOKENS, "input_exceeds_context_minimal_output"
 
     # Apply maximum output ratio
     max_allowed_by_ratio = int(context_window * MAX_OUTPUT_RATIO)
@@ -261,7 +312,7 @@ def adjust_max_tokens_in_payload(
     payload: Dict[str, Any],
     model: str,
     registry=None,
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], bool]:
     """
     Adjust max_tokens in a request payload to prevent context overflow.
 
@@ -269,6 +320,7 @@ def adjust_max_tokens_in_payload(
     1. Calculates input token count from messages + tools
     2. Gets context window for the model
     3. Sets max_tokens to a safe value if not already set or if too large
+    4. Returns flag indicating if request should be rejected
 
     Args:
         payload: Request payload dictionary
@@ -276,7 +328,8 @@ def adjust_max_tokens_in_payload(
         registry: Optional ModelRegistry instance
 
     Returns:
-        Modified payload with adjusted max_tokens
+        Tuple of (modified payload, should_reject flag)
+        If should_reject is True, the input exceeds context window and request will fail
     """
     # Check if max_tokens adjustment is needed
     # Look for both max_tokens (OpenAI) and max_completion_tokens (newer OpenAI)
@@ -295,6 +348,14 @@ def adjust_max_tokens_in_payload(
         requested_max_tokens=requested_max,
         registry=registry,
     )
+
+    # Check if request should be rejected due to input exceeding context
+    if calculated_max is None and "input_exceeds_context" in reason:
+        logger.error(
+            f"Rejecting request for {model}: {reason}. "
+            f"Input tokens exceed context window capacity."
+        )
+        return payload, True  # Signal to reject
 
     if calculated_max is not None:
         # Log the adjustment
@@ -316,5 +377,7 @@ def adjust_max_tokens_in_payload(
         # Only set max_completion_tokens if it was originally present or for OpenAI models
         if "max_completion_tokens" in payload or model.startswith(("openai/", "gpt")):
             payload["max_completion_tokens"] = calculated_max
+
+    return payload, False
 
     return payload
