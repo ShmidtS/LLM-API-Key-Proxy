@@ -156,6 +156,7 @@ async def anthropic_streaming_wrapper_fast(
     request_id: Optional[str] = None,
     is_disconnected: Optional[Callable[[], Awaitable[bool]]] = None,
     transaction_logger: Optional["TransactionLogger"] = None,
+    precomputed_input_tokens: Optional[int] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Convert OpenAI streaming format to Anthropic streaming format (optimized version).
@@ -178,6 +179,9 @@ async def anthropic_streaming_wrapper_fast(
         request_id: Optional request ID (auto-generated if not provided)
         is_disconnected: Optional async callback that returns True if client disconnected
         transaction_logger: Optional TransactionLogger for logging the final Anthropic response
+        precomputed_input_tokens: Optional pre-computed input token count. Used as fallback
+            when provider doesn't return usage in stream (e.g., Kilocode without stream_options).
+            This is critical for Claude Code's context management to work correctly.
 
     Yields:
         SSE format strings in Anthropic's streaming format
@@ -195,10 +199,12 @@ async def anthropic_streaming_wrapper_fast(
     tool_calls_by_index: dict = {}  # Track tool calls by their index
     tool_block_indices: dict = {}  # Track which block index each tool call uses
 
-    # Token tracking
-    input_tokens = 0
+    # Token tracking - use precomputed input tokens as fallback
+    # This is critical for providers that don't return usage in stream (e.g., Kilocode)
+    input_tokens = precomputed_input_tokens if precomputed_input_tokens is not None else 0
     output_tokens = 0
     cached_tokens = 0
+    usage_received_from_provider = False  # Track if we got usage from provider
 
     # Accumulated content for logging
     accumulated_text = ""
@@ -268,7 +274,10 @@ async def anthropic_streaming_wrapper_fast(
             # Extract usage if present
             if "usage" in chunk and chunk["usage"]:
                 usage = chunk["usage"]
-                input_tokens = usage.get("prompt_tokens", input_tokens)
+                # Provider returned usage - use it (overrides precomputed)
+                if usage.get("prompt_tokens"):
+                    input_tokens = usage.get("prompt_tokens", input_tokens)
+                    usage_received_from_provider = True
                 output_tokens = usage.get("completion_tokens", output_tokens)
                 # Extract cached tokens from prompt_tokens_details
                 if usage.get("prompt_tokens_details"):

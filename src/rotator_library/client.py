@@ -3685,6 +3685,7 @@ class RotatingClient:
             openai_to_anthropic_response,
             anthropic_streaming_wrapper,
         )
+        from .token_calculator import count_input_tokens
         import uuid
 
         request_id = f"msg_{uuid.uuid4().hex[:24]}"
@@ -3724,6 +3725,28 @@ class RotatingClient:
             # Streaming response
             # [FIX] Don't pass raw_request to LiteLLM - it may contain client headers
             # (x-api-key, anthropic-version, etc.) that shouldn't be forwarded to providers
+
+            # Pre-compute input tokens for fallback when provider doesn't return usage
+            # This is critical for Claude Code's context management to work correctly
+            # with providers like Kilocode that don't support stream_options
+            precomputed_input_tokens = None
+            try:
+                messages = openai_request.get("messages", [])
+                tools = openai_request.get("tools")
+                tool_choice = openai_request.get("tool_choice")
+                if messages:
+                    precomputed_input_tokens = count_input_tokens(
+                        messages=messages,
+                        model=original_model,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                    )
+                    lib_logger.debug(
+                        f"Pre-computed input tokens for {original_model}: {precomputed_input_tokens}"
+                    )
+            except Exception as e:
+                lib_logger.warning(f"Failed to pre-compute input tokens: {e}")
+
             response_generator = self.acompletion(
                 pre_request_callback=pre_request_callback,
                 **openai_request,
@@ -3742,6 +3765,7 @@ class RotatingClient:
                 request_id=request_id,
                 is_disconnected=is_disconnected,
                 transaction_logger=anthropic_logger,
+                precomputed_input_tokens=precomputed_input_tokens,
             )
         else:
             # Non-streaming response

@@ -77,7 +77,7 @@ MAX_OUTPUT_RATIO = 0.75
 
 # Maximum percentage of context window for input (leave room for output)
 # If input exceeds this, messages should be trimmed or request rejected
-MAX_INPUT_RATIO = 0.90
+MAX_INPUT_RATIO = 1.0
 
 # Extra buffer for providers with known tokenization differences
 PROVIDER_SAFETY_BUFFERS = {
@@ -200,6 +200,7 @@ def count_input_tokens(
     if tools:
         try:
             import json
+
             tools_json = json.dumps(tools)
             total += token_counter(model=model, text=tools_json)
         except Exception as e:
@@ -279,7 +280,10 @@ def calculate_max_tokens(
             f"Request will fail - consider reducing conversation history."
         )
         # Return None to signal the request should be rejected
-        return None, f"input_exceeds_context_by_{input_tokens - max_input_allowed}_tokens"
+        return (
+            None,
+            f"input_exceeds_context_by_{input_tokens - max_input_allowed}_tokens",
+        )
 
     # Calculate available space for output
     available_for_output = context_window - input_tokens - safety_buffer
@@ -302,10 +306,16 @@ def calculate_max_tokens(
             return requested_max_tokens, "using_requested_within_limit"
         else:
             # User requested too much, cap it
-            return capped_available, f"capped_from_{requested_max_tokens}_to_{capped_available}"
+            return (
+                capped_available,
+                f"capped_from_{requested_max_tokens}_to_{capped_available}",
+            )
 
     # No specific request - use calculated value
-    return capped_available, f"calculated_from_context_{context_window}_input_{input_tokens}"
+    return (
+        capped_available,
+        f"calculated_from_context_{context_window}_input_{input_tokens}",
+    )
 
 
 def adjust_max_tokens_in_payload(
