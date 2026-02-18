@@ -37,6 +37,7 @@ from .error_handler import (
     ContextOverflowError,
 )
 from .provider_config import ProviderConfig
+from .http_client_pool import HttpClientPool, get_http_pool, close_http_pool
 from .providers import PROVIDER_PLUGINS
 from .providers.openai_compatible_provider import OpenAICompatibleProvider
 from .request_sanitizer import sanitize_request_payload
@@ -518,7 +519,17 @@ class RotatingClient:
             custom_caps=custom_caps,
         )
         self._model_list_cache = {}
-        self._http_client: Optional[httpx.AsyncClient] = None
+        # Use HttpClientPool singleton for optimized connection management
+        self._http_pool: Optional[HttpClientPool] = None
+        self._pool_initialized = False
+        # Cache for provider API endpoints (for pre-warming)
+        self._provider_endpoints: Dict[str, str] = {}
+
+        # Credential priority cache for fast lookups
+        # Structure: {provider: {credential: {"priority": int, "tier_name": str}}}
+        self._credential_priority_cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self._priority_cache_valid: Dict[str, bool] = {}  # Track cache validity per provider
+
         self.provider_config = ProviderConfig()
         self.cooldown_manager = CooldownManager()
         self.litellm_provider_params = litellm_provider_params or {}
@@ -540,20 +551,199 @@ class RotatingClient:
                 )
                 self.max_concurrent_requests_per_key[provider] = 1
 
-    def _get_http_client(self) -> httpx.AsyncClient:
-        """Get or create a healthy HTTP client."""
-        if not hasattr(self, "_http_client") or self._http_client is None or self._http_client.is_closed:
-            self._http_client = httpx.AsyncClient(
+    def _is_client_usable(self, client: Optional[httpx.AsyncClient]) -> bool:
+        """
+        Check if an HTTP client is usable for requests.
+
+        This is more thorough than just checking is_closed - it also checks
+        the internal transport state which can be closed independently.
+
+        Args:
+            client: The client to check
+
+        Returns:
+            True if the client is usable, False otherwise
+        """
+        if client is None:
+            return False
+        if client.is_closed:
+            return False
+        # Check internal transport - this catches "Cannot send a request, as the client has been closed"
+        # The internal _client attribute is the actual AsyncHTTPTransport
+        internal_client = getattr(client, '_client', None)
+        if internal_client is None:
+            return False
+        return True
+
+    def _build_credential_priority_cache(self, provider: str, credentials: List[str]) -> Tuple[Dict[str, int], Dict[str, str]]:
+        """
+        Build or update the credential priority cache for a provider.
+
+        This caches priorities and tier names to avoid repeated lookups
+        during request processing.
+
+        Args:
+            provider: Provider name
+            credentials: List of credentials to cache priorities for
+
+        Returns:
+            Tuple of (credential_priorities, credential_tier_names)
+        """
+        # Check if cache is valid
+        if self._priority_cache_valid.get(provider, False):
+            cached = self._credential_priority_cache.get(provider, {})
+            if len(cached) >= len(credentials):
+                # Cache is valid and complete
+                priorities = {}
+                tier_names = {}
+                for cred in credentials:
+                    if cred in cached:
+                        priorities[cred] = cached[cred].get("priority", 999)
+                        tier_name = cached[cred].get("tier_name")
+                        if tier_name:
+                            tier_names[cred] = tier_name
+                return priorities, tier_names
+
+        # Need to rebuild cache
+        provider_plugin = self._get_provider_instance(provider)
+        priorities = {}
+        tier_names = {}
+        cache_entry = {}
+
+        if provider_plugin:
+            # Check if provider supports priorities
+            has_priority = hasattr(provider_plugin, "get_credential_priority")
+            has_tier_name = hasattr(provider_plugin, "get_credential_tier_name")
+
+            for cred in credentials:
+                cred_cache = {}
+
+                if has_priority:
+                    priority = provider_plugin.get_credential_priority(cred)
+                    if priority is not None:
+                        priorities[cred] = priority
+                        cred_cache["priority"] = priority
+
+                if has_tier_name:
+                    tier_name = provider_plugin.get_credential_tier_name(cred)
+                    if tier_name:
+                        tier_names[cred] = tier_name
+                        cred_cache["tier_name"] = tier_name
+
+                if cred_cache:
+                    cache_entry[cred] = cred_cache
+
+        # Update cache
+        self._credential_priority_cache[provider] = cache_entry
+        self._priority_cache_valid[provider] = True
+
+        return priorities, tier_names
+
+    def _invalidate_priority_cache(self, provider: str) -> None:
+        """
+        Invalidate the priority cache for a provider.
+
+        Call this when credentials are added or removed.
+        """
+        self._priority_cache_valid[provider] = False
+
+    async def _ensure_http_pool(self) -> HttpClientPool:
+        """
+        Ensure the HTTP client pool is initialized.
+
+        Uses the global singleton pool for optimal connection sharing.
+        Pre-warms connections to known provider endpoints.
+        """
+        if self._http_pool is None or not self._pool_initialized:
+            self._http_pool = await get_http_pool()
+            if not self._http_pool.is_initialized:
+                # Build list of endpoints to pre-warm
+                warmup_hosts = self._get_provider_endpoints()
+                await self._http_pool.initialize(warmup_hosts=warmup_hosts)
+            self._pool_initialized = True
+            lib_logger.debug("HTTP client pool initialized with pre-warmed connections")
+        return self._http_pool
+
+    def _get_provider_endpoints(self) -> List[str]:
+        """
+        Get list of API endpoints for all configured providers.
+
+        Returns:
+            List of URLs to pre-warm connections for
+        """
+        endpoints = []
+
+        # Map of provider names to their API base URLs
+        provider_urls = {
+            "openai": "https://api.openai.com",
+            "anthropic": "https://api.anthropic.com",
+            "gemini": "https://generativelanguage.googleapis.com",
+            "kilocode": "https://api.kilocode.ai",
+            "antigravity": "https://api.antigravity.ai",
+            "iflow": "https://api.iflow.ai",
+        }
+
+        # Add endpoints for configured providers
+        for provider in self.all_credentials.keys():
+            if provider in provider_urls:
+                endpoints.append(provider_urls[provider])
+            elif provider in self.provider_config.api_bases:
+                # Custom API base from config
+                api_base = self.provider_config.api_bases[provider]
+                if api_base:
+                    # Extract just the origin for warmup
+                    from urllib.parse import urlparse
+                    parsed = urlparse(api_base)
+                    if parsed.scheme and parsed.netloc:
+                        endpoints.append(f"{parsed.scheme}://{parsed.netloc}")
+
+        # Cache for later use
+        self._provider_endpoints = {p: u for p, u in provider_urls.items() if p in self.all_credentials}
+
+        return list(set(endpoints))[:5]  # Dedupe and limit
+
+    def _get_http_client(self, streaming: bool = False) -> httpx.AsyncClient:
+        """
+        Get HTTP client from the pool (sync version for compatibility).
+
+        Prefer _get_http_client_async() for production use.
+
+        Args:
+            streaming: Whether this client will be used for streaming requests
+
+        Returns:
+            httpx.AsyncClient instance
+        """
+        # If pool not initialized, return a temporary client
+        # (this should rarely happen if initialize() is called properly)
+        if self._http_pool is None:
+            lib_logger.warning("HTTP pool accessed before initialization")
+            return httpx.AsyncClient(
                 timeout=httpx.Timeout(self.global_timeout, connect=30.0),
                 limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
             )
-            lib_logger.debug("Created new HTTP client")
-        return self._http_client
+        return self._http_pool.get_client(streaming=streaming)
+
+    async def _get_http_client_async(self, streaming: bool = False) -> httpx.AsyncClient:
+        """
+        Get HTTP client from the pool with automatic recovery.
+
+        This is the preferred method for getting an HTTP client.
+        It ensures the pool is initialized and returns a healthy client.
+
+        Args:
+            streaming: Whether this client will be used for streaming requests
+
+        Returns:
+            Usable httpx.AsyncClient instance
+        """
+        pool = await self._ensure_http_pool()
+        return await pool.get_client_async(streaming=streaming)
 
     @property
     def http_client(self) -> httpx.AsyncClient:
-        """Property that ensures client is always usable."""
-        return self._get_http_client()
+        """Property that returns client from pool (non-streaming by default)."""
+        return self._get_http_client(streaming=False)
 
     def _parse_custom_cap_env_key(
         self, remainder: str
@@ -766,10 +956,12 @@ class RotatingClient:
         await self.close()
 
     async def close(self):
-        """Close the HTTP client to prevent resource leaks."""
-        if hasattr(self, "_http_client") and self._http_client is not None:
-            await self._http_client.aclose()
-            self._http_client = None
+        """Close the HTTP client pool to prevent resource leaks."""
+        # Note: We don't close the global pool here as it may be shared
+        # across multiple RotatingClient instances.
+        # The pool will be closed on application shutdown via close_http_pool().
+        self._http_pool = None
+        self._pool_initialized = False
 
     def _apply_default_safety_settings(
         self, litellm_kwargs: Dict[str, Any], provider: str
@@ -1066,6 +1258,11 @@ class RotatingClient:
         has_tool_calls = False  # Track if ANY tool calls were seen in stream
         chunk_index = 0  # Track chunk count for better error logging
 
+        # Fallback token estimation for providers that don't return usage data
+        # We accumulate content length and estimate tokens (rough: 1 token ≈ 4 chars)
+        accumulated_content_length = 0
+        has_usage_data = False  # Track if we ever saw usage data
+
         try:
             while True:
                 if request and await request.is_disconnected():
@@ -1098,6 +1295,14 @@ class RotatingClient:
                         choice = chunk_dict["choices"][0]
                         delta = choice.get("delta", {})
                         usage = chunk_dict.get("usage", {})
+
+                        # Track content length for fallback token estimation
+                        if delta.get("content"):
+                            accumulated_content_length += len(delta.get("content", ""))
+
+                        # Check if we have usage data
+                        if usage and isinstance(usage, dict) and usage.get("completion_tokens"):
+                            has_usage_data = True
 
                         # Track tool_calls across ALL chunks - if we ever see one, finish_reason must be tool_calls
                         if delta.get("tool_calls"):
@@ -1144,6 +1349,22 @@ class RotatingClient:
                         await self.usage_manager.record_success(
                             key, model, dummy_response
                         )
+                    elif not has_usage_data and accumulated_content_length > 0:
+                        # Fallback: Estimate tokens from accumulated content length
+                        # Rough estimation: ~4 characters per token for most models
+                        estimated_completion_tokens = max(1, accumulated_content_length // 4)
+                        lib_logger.info(
+                            f"No usage data from provider. Estimated {estimated_completion_tokens} completion tokens "
+                            f"from {accumulated_content_length} chars for model {model}."
+                        )
+                        # Create estimated usage object
+                        estimated_usage = litellm.Usage(
+                            prompt_tokens=0,  # We don't have input token count
+                            completion_tokens=estimated_completion_tokens,
+                            total_tokens=estimated_completion_tokens
+                        )
+                        dummy_response = litellm.ModelResponse(usage=estimated_usage)
+                        await self.usage_manager.record_success(key, model, dummy_response)
                     else:
                         # If no usage seen (rare), record success without tokens/cost
                         await self.usage_manager.record_success(key, model)
@@ -1454,25 +1675,15 @@ class RotatingClient:
                         f"Request will likely fail."
                     )
 
-        # Build priority map and tier names map for usage_manager
-        credential_tier_names = None
-        if provider_plugin and hasattr(provider_plugin, "get_credential_priority"):
-            credential_priorities = {}
-            credential_tier_names = {}
-            for cred in credentials_for_provider:
-                priority = provider_plugin.get_credential_priority(cred)
-                if priority is not None:
-                    credential_priorities[cred] = priority
-                # Also get tier name for logging
-                if hasattr(provider_plugin, "get_credential_tier_name"):
-                    tier_name = provider_plugin.get_credential_tier_name(cred)
-                    if tier_name:
-                        credential_tier_names[cred] = tier_name
+        # Build priority map and tier names map for usage_manager (using cache)
+        credential_priorities, credential_tier_names = self._build_credential_priority_cache(
+            provider, credentials_for_provider
+        )
 
-            if credential_priorities:
-                lib_logger.debug(
-                    f"Credential priorities for {provider}: {', '.join(f'P{p}={len([c for c in credentials_for_provider if credential_priorities.get(c) == p])}' for p in sorted(set(credential_priorities.values())))}"
-                )
+        if credential_priorities:
+            lib_logger.debug(
+                f"Credential priorities for {provider}: {', '.join(f'P{p}={len([c for c in credentials_for_provider if credential_priorities.get(c) == p])}' for p in sorted(set(credential_priorities.values())))}"
+            )
 
         # Initialize error accumulator for tracking errors across credential rotation
         error_accumulator = RequestErrorAccumulator()
@@ -1733,30 +1944,11 @@ class RotatingClient:
                                 f"Cred {mask_credential(current_cred)} server error. Retrying in {wait_time:.2f}s."
                             )
                             await asyncio.sleep(wait_time)
+
+                            # CRITICAL: Ensure HTTP client is usable before retry
+                            # Connection errors can leave the client in a closed state
+                            await self._get_http_client_async(streaming=False)
                             continue
-
-                        except Exception as e:
-                            last_exception = e
-                            log_failure(
-                                api_key=current_cred,
-                                model=model,
-                                attempt=attempt + 1,
-                                error=e,
-                                request_headers=(
-                                    dict(request.headers) if request else {}
-                                ),
-                            )
-                            classified_error = classify_error(e, provider=provider)
-                            error_message = str(e).split("\n")[0]
-
-                            # Record in accumulator
-                            error_accumulator.record_error(
-                                current_cred, classified_error, error_message
-                            )
-
-                            lib_logger.warning(
-                                f"Cred {mask_credential(current_cred)} {classified_error.error_type} (HTTP {classified_error.status_code})."
-                            )
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
@@ -2000,6 +2192,10 @@ class RotatingClient:
                                 f"Key {mask_credential(current_cred)} server error. Retrying in {wait_time:.2f}s."
                             )
                             await asyncio.sleep(wait_time)
+
+                            # CRITICAL: Ensure HTTP client is usable before retry
+                            # Connection errors can leave the client in a closed state
+                            await self._get_http_client_async(streaming=False)
                             continue  # Retry with the same key
 
                         except httpx.HTTPStatusError as e:
@@ -2055,6 +2251,10 @@ class RotatingClient:
                                         f"Server error, retrying same key in {wait_time:.2f}s."
                                     )
                                     await asyncio.sleep(wait_time)
+
+                                    # CRITICAL: Ensure HTTP client is usable before retry
+                                    # Connection errors can leave the client in a closed state
+                                    await self._get_http_client_async(streaming=False)
                                     continue
 
                             # Record failure and rotate to next key
@@ -2256,25 +2456,15 @@ class RotatingClient:
                         f"Request will likely fail."
                     )
 
-        # Build priority map and tier names map for usage_manager
-        credential_tier_names = None
-        if provider_plugin and hasattr(provider_plugin, "get_credential_priority"):
-            credential_priorities = {}
-            credential_tier_names = {}
-            for cred in credentials_for_provider:
-                priority = provider_plugin.get_credential_priority(cred)
-                if priority is not None:
-                    credential_priorities[cred] = priority
-                # Also get tier name for logging
-                if hasattr(provider_plugin, "get_credential_tier_name"):
-                    tier_name = provider_plugin.get_credential_tier_name(cred)
-                    if tier_name:
-                        credential_tier_names[cred] = tier_name
+        # Build priority map and tier names map for usage_manager (using cache)
+        credential_priorities, credential_tier_names = self._build_credential_priority_cache(
+            provider, credentials_for_provider
+        )
 
-            if credential_priorities:
-                lib_logger.debug(
-                    f"Credential priorities for {provider}: {', '.join(f'P{p}={len([c for c in credentials_for_provider if credential_priorities.get(c) == p])}' for p in sorted(set(credential_priorities.values())))}"
-                )
+        if credential_priorities:
+            lib_logger.debug(
+                f"Credential priorities for {provider}: {', '.join(f'P{p}={len([c for c in credentials_for_provider if credential_priorities.get(c) == p])}' for p in sorted(set(credential_priorities.values())))}"
+            )
 
         # Initialize error accumulator for tracking errors across credential rotation
         error_accumulator = RequestErrorAccumulator()
@@ -2559,6 +2749,10 @@ class RotatingClient:
                                     f"Cred {mask_credential(current_cred)} server error. Retrying in {wait_time:.2f}s."
                                 )
                                 await asyncio.sleep(wait_time)
+
+                                # CRITICAL: Ensure HTTP client is usable before retry
+                                # Connection errors can leave the client in a closed state
+                                await self._get_http_client_async(streaming=True)
                                 continue
 
                             except Exception as e:
@@ -2904,6 +3098,10 @@ class RotatingClient:
                                 f"Credential {mask_credential(current_cred)} encountered a server error for model {model}. Reason: '{error_message_text}'. Retrying in {wait_time:.2f}s."
                             )
                             await asyncio.sleep(wait_time)
+
+                            # CRITICAL: Ensure HTTP client is usable before retry
+                            # Connection errors can leave the client in a closed state
+                            await self._get_http_client_async(streaming=True)
                             continue
 
                         except Exception as e:

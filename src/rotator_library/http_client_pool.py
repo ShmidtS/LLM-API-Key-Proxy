@@ -220,12 +220,62 @@ class HttpClientPool:
         if warmed > 0:
             lib_logger.info(f"Pre-warmed {warmed} connection(s) in {elapsed:.2f}s")
 
+    def _is_client_closed(self, client: Optional[httpx.AsyncClient]) -> bool:
+        """
+        Check if a client is closed or unusable.
+
+        Args:
+            client: The client to check
+
+        Returns:
+            True if the client is closed or None, False otherwise
+        """
+        if client is None:
+            return True
+        # httpx.AsyncClient sets _client to None when closed
+        # We check the internal _client attribute which is the actual transport
+        return getattr(client, '_client', None) is None
+
+    async def _ensure_client(self, streaming: bool) -> httpx.AsyncClient:
+        """
+        Ensure a valid client exists for the given mode, recreating if necessary.
+
+        This is an async method that can safely recreate closed clients.
+
+        Args:
+            streaming: Whether to get streaming client
+
+        Returns:
+            Valid httpx.AsyncClient instance
+        """
+        if streaming:
+            client = self._streaming_client
+            if self._is_client_closed(client):
+                lib_logger.warning(
+                    "Streaming HTTP client was closed, recreating..."
+                )
+                self._streaming_client = await self._create_client(streaming=True)
+                self._stats["reconnects"] += 1
+            return self._streaming_client
+        else:
+            client = self._non_streaming_client
+            if self._is_client_closed(client):
+                lib_logger.warning(
+                    "Non-streaming HTTP client was closed, recreating..."
+                )
+                self._non_streaming_client = await self._create_client(streaming=False)
+                self._stats["reconnects"] += 1
+            return self._non_streaming_client
+
     def get_client(self, streaming: bool = False) -> httpx.AsyncClient:
         """
         Get the appropriate HTTP client.
 
         Note: This is a sync method for compatibility. The client is created
         during initialize(). If not initialized, returns a lazily-created client.
+
+        WARNING: This method does NOT auto-recreate closed clients. Use
+        get_client_async() for automatic recovery from closed clients.
 
         Args:
             streaming: Whether the request will be streaming
@@ -241,6 +291,28 @@ class HttpClientPool:
         else:
             self._stats["requests_non_streaming"] += 1
             return self._non_streaming_client or self._get_lazy_client(streaming=False)
+
+    async def get_client_async(self, streaming: bool = False) -> httpx.AsyncClient:
+        """
+        Get the appropriate HTTP client with automatic recovery.
+
+        This async method checks if the client is closed and recreates it
+        if necessary. Use this for resilience in production code.
+
+        Args:
+            streaming: Whether the request will be streaming
+
+        Returns:
+            Valid httpx.AsyncClient instance
+        """
+        self._stats["requests_total"] += 1
+
+        if streaming:
+            self._stats["requests_streaming"] += 1
+        else:
+            self._stats["requests_non_streaming"] += 1
+
+        return await self._ensure_client(streaming)
 
     def _get_lazy_client(self, streaming: bool) -> httpx.AsyncClient:
         """
@@ -321,9 +393,79 @@ class HttpClientPool:
             },
         }
 
+    async def health_check(self) -> Dict[str, any]:
+        """
+        Perform a health check on the client pool.
+
+        Returns:
+            Dict with health status for each client
+        """
+        health = {
+            "streaming_client": "unknown",
+            "non_streaming_client": "unknown",
+            "overall_healthy": True,
+        }
+
+        # Check streaming client
+        if self._streaming_client is None:
+            health["streaming_client"] = "not_initialized"
+        elif self._is_client_closed(self._streaming_client):
+            health["streaming_client"] = "closed"
+            health["overall_healthy"] = False
+        else:
+            health["streaming_client"] = "healthy"
+
+        # Check non-streaming client
+        if self._non_streaming_client is None:
+            health["non_streaming_client"] = "not_initialized"
+        elif self._is_client_closed(self._non_streaming_client):
+            health["non_streaming_client"] = "closed"
+            health["overall_healthy"] = False
+        else:
+            health["non_streaming_client"] = "healthy"
+
+        self._healthy = health["overall_healthy"]
+        return health
+
+    async def recover(self) -> bool:
+        """
+        Attempt to recover closed or unhealthy clients.
+
+        Returns:
+            True if recovery was successful, False otherwise
+        """
+        recovered = []
+
+        if self._is_client_closed(self._streaming_client):
+            try:
+                self._streaming_client = await self._create_client(streaming=True)
+                recovered.append("streaming")
+                self._stats["reconnects"] += 1
+            except Exception as e:
+                lib_logger.error(f"Failed to recover streaming client: {e}")
+
+        if self._is_client_closed(self._non_streaming_client):
+            try:
+                self._non_streaming_client = await self._create_client(streaming=False)
+                recovered.append("non-streaming")
+                self._stats["reconnects"] += 1
+            except Exception as e:
+                lib_logger.error(f"Failed to recover non-streaming client: {e}")
+
+        if recovered:
+            lib_logger.info(f"HTTP client pool recovered: {', '.join(recovered)}")
+            self._healthy = True
+
+        return len(recovered) > 0 or (self._streaming_client is not None and self._non_streaming_client is not None)
+
     @property
     def is_healthy(self) -> bool:
         """Check if the client pool is healthy."""
+        # Quick synchronous check - for async health check use health_check()
+        if self._is_client_closed(self._streaming_client):
+            return False
+        if self._is_client_closed(self._non_streaming_client):
+            return False
         return self._healthy
 
     @property

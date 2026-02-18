@@ -15,7 +15,34 @@ TODO: Remove this workaround once litellm patches the issue above.
 """
 
 import os
+import sys
 import warnings
+from contextlib import contextmanager
+from io import StringIO
+
+
+@contextmanager
+def suppress_litellm_prints():
+    """
+    Context manager to suppress LiteLLM's direct print() statements.
+
+    LiteLLM uses print() directly for "Provider List" messages when it encounters
+    unknown providers. This context manager temporarily redirects stdout to prevent
+    this spam from appearing in logs/console.
+
+    Usage:
+        with suppress_litellm_prints():
+            cost = litellm.completion_cost(completion_response, model=model)
+    """
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    sys.stdout = StringIO()
+    sys.stderr = StringIO()
+    try:
+        yield
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
 
 
 def suppress_litellm_serialization_warnings():

@@ -15,7 +15,9 @@ import litellm
 
 from .error_handler import ClassifiedError, NoAvailableKeysError, mask_credential
 from .providers import PROVIDER_PLUGINS
+from .async_locks import ReadWriteLock
 from .utils.resilient_io import ResilientStateWriter
+from .batched_persistence import UsagePersistenceManager
 from .utils.paths import get_data_file
 from .config import (
     DEFAULT_FAIR_CYCLE_DURATION,
@@ -154,6 +156,12 @@ class UsageManager:
         # In-memory cycle state: {provider: {tier_key: {tracking_key: {"cycle_started_at": float, "exhausted": Set[str]}}}}
         self._cycle_exhausted: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = {}
 
+        # Per-provider locks for parallel access (sharded locking)
+        # This allows concurrent operations on different providers
+        self._provider_locks: Dict[str, asyncio.Lock] = {}
+        self._provider_locks_lock = asyncio.Lock()  # Protects _provider_locks dict
+
+        # Legacy global lock - kept for file I/O operations only
         self._data_lock = asyncio.Lock()
         self._usage_data: Optional[Dict] = None
         self._initialized = asyncio.Event()
@@ -165,6 +173,11 @@ class UsageManager:
         # Resilient writer for usage data persistence
         self._state_writer = ResilientStateWriter(file_path, lib_logger)
 
+        # Batch persistence manager for high-throughput scenarios
+        # Enabled via USAGE_PERSISTENCE_ENABLE=true environment variable
+        self._batch_persistence: Optional[UsagePersistenceManager] = None
+        self._use_batch_persistence = os.getenv("USAGE_BATCH_PERSISTENCE", "false").lower() in ("true", "1", "yes")
+
         if daily_reset_time_utc:
             hour, minute = map(int, daily_reset_time_utc.split(":"))
             self.daily_reset_time_utc = dt_time(
@@ -172,6 +185,52 @@ class UsageManager:
             )
         else:
             self.daily_reset_time_utc = None
+
+    async def _get_provider_lock(self, provider: str) -> asyncio.Lock:
+        """
+        Get or create a lock for a specific provider.
+
+        This enables parallel access to different providers' data while
+        maintaining thread-safety within each provider's operations.
+
+        Args:
+            provider: Provider name
+
+        Returns:
+            asyncio.Lock specific to this provider
+        """
+        # Fast path: lock already exists
+        if provider in self._provider_locks:
+            return self._provider_locks[provider]
+
+        # Slow path: create new lock
+        async with self._provider_locks_lock:
+            if provider not in self._provider_locks:
+                self._provider_locks[provider] = asyncio.Lock()
+            return self._provider_locks[provider]
+
+    def _get_provider_from_credential(self, credential: str) -> Optional[str]:
+        """
+        Extract provider name from a credential string.
+
+        Credentials are typically stored as "provider:credential_id" or
+        we can infer from the key format.
+
+        Args:
+            credential: Credential identifier
+
+        Returns:
+            Provider name or None if not determinable
+        """
+        # Check for provider prefix format (e.g., "openai:sk-xxx")
+        if ":" in credential:
+            provider = credential.split(":")[0]
+            if provider in self.provider_rotation_modes or provider in self.fair_cycle_enabled:
+                return provider
+
+        # Fallback: try to extract from known credential patterns
+        # This is a best-effort approach
+        return None
 
     def _get_rotation_mode(self, provider: str) -> str:
         """
@@ -1455,6 +1514,14 @@ class UsageManager:
             if not self._initialized.is_set():
                 await self._load_usage()
                 await self._reset_daily_stats_if_needed()
+
+                # Initialize batch persistence if enabled
+                if self._use_batch_persistence:
+                    from pathlib import Path
+                    self._batch_persistence = UsagePersistenceManager(Path(self.file_path))
+                    await self._batch_persistence.initialize()
+                    lib_logger.info("Batch persistence enabled for usage data")
+
                 self._initialized.set()
 
     async def _load_usage(self):
@@ -1488,7 +1555,7 @@ class UsageManager:
                 self._deserialize_cycle_state(fair_cycle_data)
 
     async def _save_usage(self):
-        """Saves the current usage data using the resilient state writer."""
+        """Saves the current usage data using the resilient state writer or batch persistence."""
         if self._usage_data is None:
             return
 
@@ -1503,8 +1570,12 @@ class UsageManager:
                 # Clean up empty cycle data
                 del self._usage_data["__fair_cycle__"]
 
-            # Hand off to resilient writer - handles retries and disk failures
-            self._state_writer.write(self._usage_data)
+            # Use batch persistence if enabled (high-throughput mode)
+            if self._use_batch_persistence and self._batch_persistence:
+                self._batch_persistence.update_usage(self._usage_data)
+            else:
+                # Hand off to resilient writer - handles retries and disk failures
+                self._state_writer.write(self._usage_data)
 
     async def _get_usage_data_snapshot(self) -> Dict[str, Any]:
         """
@@ -2201,6 +2272,26 @@ class UsageManager:
         await self._lazy_init()
         await self._reset_daily_stats_if_needed()
         self._initialize_key_states(available_keys)
+
+        # FAST PATH: Single credential case - skip complex logic
+        if len(available_keys) == 1:
+            key = available_keys[0]
+            state = self.key_states[key]
+            async with state["lock"]:
+                if not state["models_in_use"]:
+                    state["models_in_use"][model] = 1
+                    lib_logger.info(
+                        f"Acquired key {mask_credential(key)} for model {model} (fast path: single credential)"
+                    )
+                    return key
+                elif state["models_in_use"].get(model, 0) < max_concurrent:
+                    state["models_in_use"][model] = state["models_in_use"].get(model, 0) + 1
+                    lib_logger.info(
+                        f"Acquired key {mask_credential(key)} for model {model} "
+                        f"(fast path: concurrent {state['models_in_use'][model]}/{max_concurrent})"
+                    )
+                    return key
+            # If we get here, the single key is at capacity - fall through to waiting logic
 
         # Normalize model name for consistent cooldown lookup
         # (cooldowns are stored under normalized names by record_failure)
@@ -2926,24 +3017,29 @@ class UsageManager:
                             f"Skipping cost calculation for provider '{provider_name}' (custom provider)."
                         )
                     else:
-                        if isinstance(completion_response, litellm.EmbeddingResponse):
-                            model_info = litellm.get_model_info(model)
-                            input_cost = model_info.get("input_cost_per_token")
-                            if input_cost:
-                                cost = (
-                                    completion_response.usage.prompt_tokens * input_cost
-                                )
+                        # Suppress LiteLLM's direct print() statements for unknown providers
+                        # LiteLLM prints "Provider List: https://..." spam for unknown models
+                        from .utils.suppress_litellm_warnings import suppress_litellm_prints
+
+                        with suppress_litellm_prints():
+                            if isinstance(completion_response, litellm.EmbeddingResponse):
+                                model_info = litellm.get_model_info(model)
+                                input_cost = model_info.get("input_cost_per_token")
+                                if input_cost:
+                                    cost = (
+                                        completion_response.usage.prompt_tokens * input_cost
+                                    )
+                                else:
+                                    cost = None
                             else:
-                                cost = None
-                        else:
-                            cost = litellm.completion_cost(
-                                completion_response=completion_response, model=model
-                            )
+                                cost = litellm.completion_cost(
+                                    completion_response=completion_response, model=model
+                                )
 
                         if cost is not None:
                             usage_data_ref["approx_cost"] += cost
                 except Exception as e:
-                    lib_logger.warning(
+                    lib_logger.debug(
                         f"Could not calculate cost for model {model}: {e}"
                     )
             elif isinstance(completion_response, asyncio.Future) or hasattr(
