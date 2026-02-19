@@ -703,22 +703,21 @@ class RotatingClient:
         """
         endpoints = []
 
-        # Map of provider names to their API base URLs
+        # Map of provider names to their default API base URLs
+        # These are only used as fallbacks if no custom API_BASE is configured
         provider_urls = {
             "openai": "https://api.openai.com",
             "anthropic": "https://api.anthropic.com",
             "gemini": "https://generativelanguage.googleapis.com",
-            "kilocode": "https://api.kilocode.ai",
             "antigravity": "https://api.antigravity.ai",
             "iflow": "https://api.iflow.ai",
         }
 
         # Add endpoints for configured providers
+        # Priority: custom API_BASE from env > hardcoded defaults
         for provider in self.all_credentials.keys():
-            if provider in provider_urls:
-                endpoints.append(provider_urls[provider])
-            elif provider in self.provider_config.api_bases:
-                # Custom API base from config
+            # First check if provider has a custom API_BASE configured
+            if provider in self.provider_config.api_bases:
                 api_base = self.provider_config.api_bases[provider]
                 if api_base:
                     # Extract just the origin for warmup
@@ -726,9 +725,24 @@ class RotatingClient:
                     parsed = urlparse(api_base)
                     if parsed.scheme and parsed.netloc:
                         endpoints.append(f"{parsed.scheme}://{parsed.netloc}")
+                        continue
+            # Fall back to hardcoded defaults
+            if provider in provider_urls:
+                endpoints.append(provider_urls[provider])
 
-        # Cache for later use
-        self._provider_endpoints = {p: u for p, u in provider_urls.items() if p in self.all_credentials}
+        # Cache resolved endpoints for later use
+        self._provider_endpoints = {}
+        for provider in self.all_credentials.keys():
+            if provider in self.provider_config.api_bases:
+                api_base = self.provider_config.api_bases[provider]
+                if api_base:
+                    from urllib.parse import urlparse
+                    parsed = urlparse(api_base)
+                    if parsed.scheme and parsed.netloc:
+                        self._provider_endpoints[provider] = f"{parsed.scheme}://{parsed.netloc}"
+                        continue
+            if provider in provider_urls:
+                self._provider_endpoints[provider] = provider_urls[provider]
 
         return list(set(endpoints))[:5]  # Dedupe and limit
 
