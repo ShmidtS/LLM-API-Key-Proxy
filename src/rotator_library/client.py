@@ -647,6 +647,36 @@ class RotatingClient:
         """
         self._priority_cache_valid[provider] = False
 
+    def _reset_litellm_client_cache(self) -> None:
+        """
+        Reset LiteLLM's internal HTTP client cache.
+
+        LiteLLM caches async HTTP clients internally. When a connection error
+        occurs (e.g., "Cannot send a request, as the client has been closed"),
+        we need to clear this cache to force LiteLLM to create a fresh client.
+
+        This addresses the issue where LiteLLM's cached client becomes unusable
+        after certain network errors.
+        """
+        try:
+            # LiteLLM caches clients in litellm.llms.openai.openai module
+            # We need to clear the async client cache
+            if hasattr(litellm, '_async_client_cache'):
+                litellm._async_client_cache.clear()
+                lib_logger.debug("Cleared LiteLLM async client cache")
+
+            # Also clear any provider-specific client caches
+            from litellm.llms import custom_httpx
+            if hasattr(custom_httpx, 'httpx_handler'):
+                handler = custom_httpx.httpx_handler
+                if hasattr(handler, '_async_client_cache'):
+                    handler._async_client_cache.clear()
+                    lib_logger.debug("Cleared custom_httpx async client cache")
+
+        except Exception as e:
+            # Non-critical - just log and continue
+            lib_logger.debug(f"Could not reset LiteLLM client cache: {e}")
+
     async def _ensure_http_pool(self) -> HttpClientPool:
         """
         Ensure the HTTP client pool is initialized.
@@ -1385,6 +1415,7 @@ class RotatingClient:
                     BadRequestError,
                     InvalidRequestError,
                     httpx.HTTPStatusError,
+                    RuntimeError,  # "Cannot send a request, as the client has been closed"
                 ) as e:
                     # This is a critical, typed error from litellm or httpx that signals a key failure.
                     # We do not try to parse it here. We wrap it and raise it immediately
@@ -1896,6 +1927,7 @@ class RotatingClient:
                             APIConnectionError,
                             litellm.InternalServerError,
                             litellm.ServiceUnavailableError,
+                            RuntimeError,  # "Cannot send a request, as the client has been closed"
                         ) as e:
                             last_exception = e
                             log_failure(
@@ -1944,6 +1976,10 @@ class RotatingClient:
                                 f"Cred {mask_credential(current_cred)} server error. Retrying in {wait_time:.2f}s."
                             )
                             await asyncio.sleep(wait_time)
+
+                            # Reset LiteLLM internal HTTP client cache on connection errors
+                            if isinstance(e, RuntimeError) and "client has been closed" in str(e):
+                                self._reset_litellm_client_cache()
 
                             # CRITICAL: Ensure HTTP client is usable before retry
                             # Connection errors can leave the client in a closed state
@@ -2140,6 +2176,7 @@ class RotatingClient:
                             APIConnectionError,
                             litellm.InternalServerError,
                             litellm.ServiceUnavailableError,
+                            RuntimeError,  # "Cannot send a request, as the client has been closed"
                         ) as e:
                             last_exception = e
                             log_failure(
@@ -2192,6 +2229,10 @@ class RotatingClient:
                                 f"Key {mask_credential(current_cred)} server error. Retrying in {wait_time:.2f}s."
                             )
                             await asyncio.sleep(wait_time)
+
+                            # Reset LiteLLM internal HTTP client cache on connection errors
+                            if isinstance(e, RuntimeError) and "client has been closed" in str(e):
+                                self._reset_litellm_client_cache()
 
                             # CRITICAL: Ensure HTTP client is usable before retry
                             # Connection errors can leave the client in a closed state
@@ -2701,6 +2742,7 @@ class RotatingClient:
                                 APIConnectionError,
                                 litellm.InternalServerError,
                                 litellm.ServiceUnavailableError,
+                                RuntimeError,  # "Cannot send a request, as the client has been closed"
                             ) as e:
                                 last_exception = e
                                 log_failure(
@@ -2731,6 +2773,10 @@ class RotatingClient:
                                         f"Cred {mask_credential(current_cred)} failed after max retries. Rotating."
                                     )
                                     break
+
+                                # Reset LiteLLM internal HTTP client cache on connection errors
+                                if isinstance(e, RuntimeError) and "client has been closed" in str(e):
+                                    self._reset_litellm_client_cache()
 
                                 wait_time = classified_error.retry_after or (
                                     2**attempt
@@ -3049,6 +3095,7 @@ class RotatingClient:
                             APIConnectionError,
                             litellm.InternalServerError,
                             litellm.ServiceUnavailableError,
+                            RuntimeError,  # "Cannot send a request, as the client has been closed"
                         ) as e:
                             consecutive_quota_failures = 0
                             last_exception = e
@@ -3083,6 +3130,11 @@ class RotatingClient:
                                 )
                                 # [MODIFIED] Do not yield to the client here.
                                 break
+
+                            # Reset LiteLLM internal HTTP client cache on connection errors
+                            # This fixes "Cannot send a request, as the client has been closed"
+                            if isinstance(e, RuntimeError) and "client has been closed" in str(e):
+                                self._reset_litellm_client_cache()
 
                             wait_time = classified_error.retry_after or (
                                 2**attempt

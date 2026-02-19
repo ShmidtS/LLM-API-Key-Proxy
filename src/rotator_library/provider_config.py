@@ -717,6 +717,11 @@ class ProviderConfig:
         """Get the set of detected custom provider names."""
         return self._custom_providers.copy()
 
+    @property
+    def api_bases(self) -> Dict[str, str]:
+        """Get the dictionary of configured API bases (read-only view)."""
+        return self._api_bases.copy()
+
     def convert_for_litellm(self, **kwargs) -> Dict[str, Any]:
         """
         Convert model params for LiteLLM call.
