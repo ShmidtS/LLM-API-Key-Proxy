@@ -133,3 +133,6 @@ oauth_creds/
 
 #Agentic tools
 .omc/
+.memorious/
+.vscode/
+AGENTS.md

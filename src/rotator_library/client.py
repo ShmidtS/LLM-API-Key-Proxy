@@ -1,6 +1,11 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 Mirrowel
 
+# CRITICAL: Apply finish_reason patch BEFORE importing litellm/openai
+# LiteLLM caches OpenAI models on import, so patch must run first
+from .utils.patch_litellm_finish_reason import patch_litellm_finish_reason
+patch_litellm_finish_reason()
+
 import asyncio
 import fnmatch
 import json
@@ -49,6 +54,7 @@ from .model_definitions import ModelDefinitions
 from .transaction_logger import TransactionLogger
 from .utils.paths import get_default_root, get_logs_dir, get_oauth_dir, get_data_file
 from .utils.suppress_litellm_warnings import suppress_litellm_serialization_warnings
+from .utils.patch_litellm_finish_reason import patch_litellm_finish_reason
 from .config import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_GLOBAL_TIMEOUT,
@@ -136,6 +142,11 @@ class RotatingClient:
         # See: https://github.com/BerriAI/litellm/issues/11759
         # TODO: Remove this workaround once litellm patches the issue
         suppress_litellm_serialization_warnings()
+
+        # Patch LiteLLM to normalize invalid finish_reason values from providers
+        # Some providers (e.g., Z.AI) return 'error', 'unknown', 'abort' which
+        # don't match LiteLLM's Pydantic schema and cause ValidationError
+        patch_litellm_finish_reason()
 
         if configure_logging:
             # When True, this allows logs from this library to be handled

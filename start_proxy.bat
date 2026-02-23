@@ -9,8 +9,6 @@ echo.
 
 cd /d "%~dp0"
 
-echo Активация виртуального окружения...
-call venv\Scripts\activate.bat
 
 echo.
 echo Запуск прокси-сервера на http://127.0.0.1:8000
