@@ -125,3 +125,95 @@ COOLDOWN_TRANSIENT_ERROR: int = 30
 
 # Default rate limit cooldown when retry_after not provided (seconds)
 COOLDOWN_RATE_LIMIT_DEFAULT: int = 60
+
+# =============================================================================
+# CIRCUIT BREAKER DEFAULTS
+# =============================================================================
+# Circuit breaker prevents cascade exhaustion during IP-level throttling.
+
+# Number of consecutive failures before opening circuit
+# Override: CIRCUIT_BREAKER_FAILURE_THRESHOLD=<count>
+CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = 3
+
+# Seconds to wait before attempting recovery
+# Override: CIRCUIT_BREAKER_RECOVERY_TIMEOUT=<seconds>
+CIRCUIT_BREAKER_RECOVERY_TIMEOUT: int = 60
+
+# Max test requests in half-open state
+# Override: CIRCUIT_BREAKER_HALF_OPEN_REQUESTS=<count>
+CIRCUIT_BREAKER_HALF_OPEN_REQUESTS: int = 1
+
+# Disable circuit breaker entirely (for debugging)
+# Override: CIRCUIT_BREAKER_DISABLED=true
+CIRCUIT_BREAKER_DISABLED: bool = False
+
+# Provider-specific circuit breaker overrides
+# These providers route to multiple backends and need different settings
+# Keys: failure_threshold, recovery_timeout, half_open_requests
+CIRCUIT_BREAKER_PROVIDER_OVERRIDES: Dict[str, Dict[str, int]] = {
+    "kilocode": {
+        "failure_threshold": 5,      # More tolerant (routes to multiple backends)
+        "recovery_timeout": 30,      # Faster recovery
+        "half_open_requests": 3,     # More test requests
+    },
+    "openrouter": {
+        "failure_threshold": 5,
+        "recovery_timeout": 30,
+        "half_open_requests": 3,
+    },
+}
+
+# =============================================================================
+# IP THROTTLE DETECTOR DEFAULTS
+# =============================================================================
+# Detects IP-level throttling via correlation of 429 errors across credentials.
+
+# Time window in seconds to correlate 429 errors
+# Override: IP_THROTTLE_WINDOW_SECONDS=<seconds>
+IP_THROTTLE_WINDOW_SECONDS: int = 10
+
+# Minimum credentials with 429 to detect IP throttle
+# Override: IP_THROTTLE_MIN_CREDENTIALS=<count>
+IP_THROTTLE_MIN_CREDENTIALS: int = 2
+
+# Default cooldown for IP-level throttling
+# Override: IP_THROTTLE_COOLDOWN=<seconds>
+IP_THROTTLE_COOLDOWN: int = 30
+
+# Disable IP throttle detection
+# Override: IP_THROTTLE_DETECTION_DISABLED=true
+IP_THROTTLE_DETECTION_DISABLED: bool = False
+
+# =============================================================================
+# PROVIDER-SPECIFIC BACKOFF DEFAULTS
+# =============================================================================
+# Tunable retry backoff settings per provider.
+
+# Kilocode provider backoff settings
+# Override via environment: KILOCODE_BACKOFF_BASE, KILOCODE_MAX_BACKOFF
+KILOCODE_BACKOFF_BASE: float = 1.0  # Base multiplier for server errors
+KILOCODE_MAX_BACKOFF: float = 30.0  # Maximum backoff in seconds
+
+# =============================================================================
+# COOLDOWN DISABLE FLAGS (from theblazehen fork)
+# =============================================================================
+# Allows disabling cooldowns per-provider for debugging/emergency purposes.
+
+import os
+
+
+def is_cooldown_disabled(provider: str) -> bool:
+    """
+    Check if cooldown is disabled for a provider via env var.
+
+    Args:
+        provider: Provider name (e.g., "openai", "anthropic")
+
+    Returns:
+        True if DISABLE_COOLDOWN_<PROVIDER>=true is set
+
+    Example:
+        DISABLE_COOLDOWN_OPENAI=true  # Disables cooldowns for OpenAI
+        DISABLE_COOLDOWN_ANTHROPIC=true  # Disables cooldowns for Anthropic
+    """
+    return os.environ.get(f"DISABLE_COOLDOWN_{provider.upper()}", "false").lower() == "true"

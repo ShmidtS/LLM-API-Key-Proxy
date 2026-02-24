@@ -5,7 +5,7 @@ import re
 import json
 import os
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 import httpx
 
 from litellm.exceptions import (
@@ -21,10 +21,139 @@ from litellm.exceptions import (
     ContextWindowExceededError,
 )
 
+from .ip_throttle_detector import (
+    IPThrottleDetector,
+    ThrottleAssessment,
+    ThrottleScope,
+    get_ip_throttle_detector,
+)
+
 lib_logger = logging.getLogger("rotator_library")
 
 # Default cooldown for rate limits without retry_after (reduced from 60s)
 RATE_LIMIT_DEFAULT_COOLDOWN = 10  # seconds
+
+# IP-based throttle detection patterns
+# These patterns indicate rate limiting at IP level rather than API key level
+IP_THROTTLE_INDICATORS = frozenset(
+    {
+        "ip",
+        "ip_address",
+        "source ip",
+        "client ip",
+        "rate limit exceeded for your ip",
+        "too many requests from your ip",
+        "rate limit exceeded for ip",
+        "too many requests from ip",
+        "ip rate limit",
+        "ip-based rate limit",
+    }
+)
+
+# Patterns that indicate a GENERIC rate limit (no specific key mentioned)
+# When these appear without key-specific info, it's likely IP-level throttling
+GENERIC_RATE_LIMIT_PATTERNS = frozenset(
+    {
+        "rate limit exceeded",
+        "too many requests",
+        "requests per minute",
+        "requests per second",
+        "rate_limit_exceeded",
+        "ratelimitexceeded",
+        "429 too many requests",
+        "usage limit reached",
+        "usage limit exceeded",
+        "limit reached",
+    }
+)
+
+# Patterns that indicate KEY-SPECIFIC rate limiting (not IP-level)
+KEY_SPECIFIC_PATTERNS = frozenset(
+    {
+        "api key",
+        "apikey",
+        "key ",
+        "your key",
+        "this key",
+        "credential",
+        "token",
+        "quota",  # quota is usually per-key/account
+        "resource_exhausted",  # Google's quota error
+    }
+)
+
+# Providers that route through multiple backends - IP throttle detection is unreliable
+# These providers aggregate multiple upstream APIs, so rate limits may vary per backend
+PROXY_PROVIDERS = frozenset(
+    {
+        "kilocode",    # Routes to multiple providers (minimax, moonshot, z-ai, etc.)
+        "openrouter",  # Routes to 100+ providers
+        "requesty",    # Router/aggregator
+    }
+)
+
+
+def _detect_ip_throttle(error_body: Optional[str], provider: Optional[str] = None) -> Optional[int]:
+    """
+    Detect IP-based rate limiting from error response body.
+
+    IP throttling affects all credentials from the same IP, so rotation
+    won't help. Returns a cooldown period to wait before retrying.
+
+    Detection strategy:
+    1. Explicit IP mentions -> IP throttle (high confidence)
+    2. Generic rate limit WITHOUT key-specific info -> likely IP throttle
+       (BUT skip for PROXY_PROVIDERS - they route to multiple backends)
+    3. Key-specific rate limit info -> NOT IP throttle
+
+    Args:
+        error_body: The raw error response body (case-insensitive matching)
+        provider: Optional provider name (used to skip unreliable detection for proxy providers)
+
+    Returns:
+        Cooldown seconds if IP throttle detected, None otherwise
+    """
+    if not error_body:
+        return None
+
+    error_body_lower = error_body.lower()
+
+    # Check for explicit IP throttle indicators (highest confidence)
+    # This is reliable even for proxy providers
+    for indicator in IP_THROTTLE_INDICATORS:
+        if indicator in error_body_lower:
+            lib_logger.info(
+                f"Detected IP-based rate limiting: found indicator '{indicator}'"
+            )
+            return RATE_LIMIT_DEFAULT_COOLDOWN
+
+    # For PROXY_PROVIDERS (kilocode, openrouter), skip generic rate limit detection
+    # These providers route to multiple backends, so generic rate limits may be
+    # backend-specific rather than IP-specific
+    if provider and provider in PROXY_PROVIDERS:
+        lib_logger.debug(
+            f"Skipping generic IP throttle detection for proxy provider '{provider}' "
+            "- rate limits may be backend-specific"
+        )
+        return None
+
+    # Check if this is a generic rate limit without key-specific info
+    # This indicates IP-level throttling (provider doesn't know which key)
+    has_generic_rate_limit = any(
+        pattern in error_body_lower for pattern in GENERIC_RATE_LIMIT_PATTERNS
+    )
+    has_key_specific_info = any(
+        pattern in error_body_lower for pattern in KEY_SPECIFIC_PATTERNS
+    )
+
+    if has_generic_rate_limit and not has_key_specific_info:
+        lib_logger.info(
+            "Detected likely IP-based rate limiting: generic rate limit message "
+            "without key-specific info"
+        )
+        return RATE_LIMIT_DEFAULT_COOLDOWN
+
+    return None
 
 
 def _parse_duration_string(duration_str: str) -> Optional[int]:
@@ -249,6 +378,7 @@ ABNORMAL_ERROR_TYPES = frozenset(
 NORMAL_ERROR_TYPES = frozenset(
     {
         "rate_limit",  # 429 - expected during high load
+        "ip_rate_limit",  # 429 - IP-based rate limit (affects all credentials)
         "quota_exceeded",  # Expected when quota runs out
         "server_error",  # 5xx - transient provider issues
         "api_connection",  # Network issues - transient
@@ -459,10 +589,11 @@ class ClassifiedError:
     def __init__(
         self,
         error_type: str,
-        original_exception: Exception,
+        original_exception: Optional[Exception] = None,
         status_code: Optional[int] = None,
         retry_after: Optional[int] = None,
         quota_reset_timestamp: Optional[float] = None,
+        throttle_assessment: Optional[ThrottleAssessment] = None,
     ):
         self.error_type = error_type
         self.original_exception = original_exception
@@ -471,6 +602,8 @@ class ClassifiedError:
         # Unix timestamp when quota resets (from quota_exhausted errors)
         # This is the authoritative reset time parsed from provider's error response
         self.quota_reset_timestamp = quota_reset_timestamp
+        # IP throttle assessment (when multiple credentials show correlated 429s)
+        self.throttle_assessment = throttle_assessment
 
     def __str__(self):
         parts = [
@@ -480,8 +613,85 @@ class ClassifiedError:
         ]
         if self.quota_reset_timestamp:
             parts.append(f"quota_reset_ts={self.quota_reset_timestamp}")
+        if self.throttle_assessment:
+            parts.append(f"throttle_scope={self.throttle_assessment.scope.value}")
         parts.append(f"original_exc={self.original_exception}")
         return f"ClassifiedError({', '.join(parts)})"
+
+
+class AllProviders:
+    """
+    Handles provider-specific settings and custom API bases.
+    Supports custom OpenAI-compatible providers via PROVIDERNAME_API_BASE env vars.
+
+    Usage:
+        export KILOCODE_API_BASE=https://kilo.ai/api/openrouter
+        # Then model "kilocode/z-ai/glm-5:free" will use this API base
+
+    Known providers are skipped (they have native LiteLLM support):
+        openai, anthropic, google, gemini, nvidia, mistral, cohere, groq, openrouter
+    """
+
+    KNOWN_PROVIDERS = frozenset({
+        "openai", "anthropic", "google", "gemini", "nvidia",
+        "mistral", "cohere", "groq", "openrouter"
+    })
+
+    def __init__(self):
+        self.providers: Dict[str, Dict[str, Any]] = {}
+        self._load_custom_providers()
+
+    def _load_custom_providers(self) -> None:
+        """Load custom providers from PROVIDERNAME_API_BASE env vars."""
+        for env_var, value in os.environ.items():
+            if env_var.endswith("_API_BASE") and value:
+                provider = env_var[:-9].lower()  # Remove "_API_BASE"
+                if provider not in self.KNOWN_PROVIDERS:
+                    self.providers[provider] = {
+                        "api_base": value.rstrip("/"),
+                        "model_prefix": None,  # No prefix transformation
+                    }
+                    lib_logger.info(
+                        f"AllProviders: registered custom provider '{provider}' "
+                        f"with api_base={value.rstrip('/')}"
+                    )
+
+    def get_provider_kwargs(self, **kwargs) -> Dict[str, Any]:
+        """
+        Inject provider-specific settings into kwargs.
+
+        Called before LiteLLM request to override api_base for custom providers.
+        """
+        model = kwargs.get("model", "")
+        if "/" in model:
+            provider = model.split("/")[0]
+            settings = self.providers.get(provider, {})
+            if "api_base" in settings:
+                kwargs["api_base"] = settings["api_base"]
+                lib_logger.debug(
+                    f"AllProviders: using custom api_base={settings['api_base']} "
+                    f"for provider={provider}"
+                )
+        return kwargs
+
+    def is_custom_provider(self, model: str) -> bool:
+        """Check if model uses a custom provider."""
+        if "/" in model:
+            provider = model.split("/")[0]
+            return provider in self.providers
+        return False
+
+
+# Singleton instance
+_all_providers_instance: Optional["AllProviders"] = None
+
+
+def get_all_providers() -> "AllProviders":
+    """Get the global AllProviders instance."""
+    global _all_providers_instance
+    if _all_providers_instance is None:
+        _all_providers_instance = AllProviders()
+    return _all_providers_instance
 
 
 def _extract_retry_from_json_body(json_text: str) -> Optional[int]:
@@ -542,6 +752,42 @@ def _extract_retry_from_json_body(json_text: str) -> Optional[int]:
         pass
 
     return None
+
+
+def _extract_quota_details(json_text: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Extract quotaValue and quotaId from Google/Gemini API errors.
+
+    Google API errors structure:
+    {
+        "error": {
+            "details": [{
+                "violations": [{
+                    "quotaValue": "60",
+                    "quotaId": "GenerateRequestsPerMinutePerProjectPerRegion"
+                }]
+            }]
+        }
+    }
+    """
+    try:
+        json_match = re.search(r"(\{.*\})", json_text, re.DOTALL)
+        if not json_match:
+            return None, None
+
+        error_json = json.loads(json_match.group(1))
+        details = error_json.get("error", {}).get("details", [])
+
+        for detail in details:
+            violations = detail.get("violations", [])
+            for violation in violations:
+                quota_value = violation.get("quotaValue")
+                quota_id = violation.get("quotaId")
+                if quota_value or quota_id:
+                    return str(quota_value) if quota_value else None, quota_id
+    except Exception:
+        pass
+    return None, None
 
 
 def get_retry_after(error: Exception) -> Optional[int]:
@@ -643,7 +889,132 @@ def get_retry_after(error: Exception) -> Optional[int]:
     return None
 
 
-def get_retry_backoff(classified_error: "ClassifiedError", attempt: int) -> float:
+# SSE Stream Error Patterns
+STREAM_ABORT_INDICATORS = frozenset({
+    "finish_reason",  # When value is "error"
+    "native_finish_reason",  # When value is "abort"
+    "stream error",
+    "stream aborted",
+    "connection reset",
+    "mid-stream error",
+})
+
+
+def is_provider_abort(raw_response: Optional[Dict]) -> bool:
+    """
+    Detect if provider aborted the stream.
+
+    Returns True if:
+    - finish_reason == 'error'
+    - native_finish_reason == 'abort'
+    - Empty content with error indication
+    """
+    if not raw_response:
+        return False
+
+    finish_reason = raw_response.get('finish_reason')
+    native_reason = raw_response.get('native_finish_reason')
+
+    if finish_reason == 'error':
+        return True
+    if native_reason == 'abort':
+        return True
+
+    # Check for empty content with error
+    choices = raw_response.get('choices', [])
+    if choices:
+        for choice in choices:
+            if choice.get('finish_reason') == 'error':
+                return True
+            message = choice.get('message', {})
+            delta = choice.get('delta', {})
+            # Empty content with error indication
+            if not message.get('content') and not delta.get('content'):
+                if choice.get('finish_reason') == 'error':
+                    return True
+
+    return False
+
+
+def classify_stream_error(raw_response: Dict) -> "ClassifiedError":
+    """
+    Classify streaming errors from provider response.
+
+    Creates ClassifiedError appropriate for retry logic.
+    """
+    if is_provider_abort(raw_response):
+        return ClassifiedError(
+            error_type="api_connection",  # Treat as transient for retry
+            status_code=503,
+            original_exception=None,
+            retry_after=2,  # Short retry delay
+        )
+
+    # Default to server_error for unknown stream issues
+    return ClassifiedError(
+        error_type="server_error",
+        status_code=500,
+        original_exception=None,
+        retry_after=5,
+    )
+
+
+# =============================================================================
+# Provider-Specific Backoff Configuration
+# =============================================================================
+# Allows tuning retry behavior per provider for better resilience.
+
+PROVIDER_BACKOFF_CONFIGS: Dict[str, Dict[str, float]] = {
+    "kilocode": {
+        "server_error_base": 1.0,  # Faster retry for kilocode 500s
+        "connection_base": 0.5,
+        "max_backoff": 30.0,
+    },
+    "friendli": {  # z-ai uses Friendli backend
+        "server_error_base": 1.5,
+        "connection_base": 0.5,
+        "max_backoff": 20.0,
+    },
+}
+
+
+def _get_provider_backoff_config(provider: Optional[str]) -> Dict[str, float]:
+    """
+    Get backoff config for a provider, with env var overrides.
+
+    Env vars:
+        KILOCODE_BACKOFF_BASE - base multiplier for server errors
+        KILOCODE_MAX_BACKOFF - maximum backoff in seconds
+
+    Returns:
+        Dict with server_error_base, connection_base, max_backoff
+    """
+    if not provider:
+        return {}
+
+    config = PROVIDER_BACKOFF_CONFIGS.get(provider, {}).copy()
+
+    # Env var overrides for kilocode
+    if provider == "kilocode":
+        if "KILOCODE_BACKOFF_BASE" in os.environ:
+            try:
+                config["server_error_base"] = float(os.environ["KILOCODE_BACKOFF_BASE"])
+            except ValueError:
+                pass
+        if "KILOCODE_MAX_BACKOFF" in os.environ:
+            try:
+                config["max_backoff"] = float(os.environ["KILOCODE_MAX_BACKOFF"])
+            except ValueError:
+                pass
+
+    return config
+
+
+def get_retry_backoff(
+    classified_error: "ClassifiedError",
+    attempt: int,
+    provider: Optional[str] = None
+) -> float:
     """
     Calculate retry backoff time based on error type and attempt number.
 
@@ -651,6 +1022,15 @@ def get_retry_backoff(classified_error: "ClassifiedError", attempt: int) -> floa
     - api_connection: More aggressive retry (network issues are transient)
     - server_error: Standard exponential backoff
     - rate_limit: Use retry_after if available, otherwise shorter default
+    - ip_rate_limit: Use retry_after (from detection) or default cooldown
+
+    Args:
+        classified_error: The classified error with type and retry_after
+        attempt: Current retry attempt number (0-indexed)
+        provider: Optional provider name for provider-specific tuning
+
+    Returns:
+        Backoff time in seconds
     """
     import random
 
@@ -660,19 +1040,225 @@ def get_retry_backoff(classified_error: "ClassifiedError", attempt: int) -> floa
 
     error_type = classified_error.error_type
 
+    # Provider-specific config
+    config = _get_provider_backoff_config(provider)
+    max_backoff = config.get("max_backoff", 60.0)
+
     if error_type == "api_connection":
         # More aggressive retry for network errors - they're usually transient
         # 0.5s, 0.75s, 1.1s, 1.7s, 2.5s...
-        return 0.5 * (1.5 ** attempt) + random.uniform(0, 0.5)
+        base = config.get("connection_base", 0.5)
+        backoff = base * (1.5 ** attempt) + random.uniform(0, 0.5)
     elif error_type == "server_error":
-        # Standard exponential backoff: 1s, 2s, 4s, 8s...
-        return (2 ** attempt) + random.uniform(0, 1)
+        # Standard exponential backoff with provider-specific base
+        # Default: 1s, 2s, 4s, 8s... (base=2)
+        # Kilocode: 1s, 1s, 1s, 1s... (base=1.0, slower growth)
+        base = config.get("server_error_base", 2.0)
+        backoff = (base ** attempt) + random.uniform(0, 1)
     elif error_type == "rate_limit":
         # Short default for transient rate limits without retry_after
-        return 5 + random.uniform(0, 2)
+        backoff = 5 + random.uniform(0, 2)
+    elif error_type == "ip_rate_limit":
+        # IP throttle - use default cooldown with jitter
+        backoff = RATE_LIMIT_DEFAULT_COOLDOWN + random.uniform(0, 2)
     else:
         # Default backoff
-        return (2 ** attempt) + random.uniform(0, 1)
+        backoff = (2 ** attempt) + random.uniform(0, 1)
+
+    return min(backoff, max_backoff)
+
+
+# =============================================================================
+# Unified 429 Error Handler
+# =============================================================================
+
+from dataclasses import dataclass, field as dataclass_field
+from enum import Enum
+
+
+class ThrottleActionType(Enum):
+    """Actions to take after processing a 429 error."""
+    CREDENTIAL_COOLDOWN = "credential_cooldown"  # Single credential throttled
+    PROVIDER_COOLDOWN = "provider_cooldown"      # IP-level throttle detected
+    FAIL_IMMEDIATELY = "fail_immediately"        # Non-recoverable (should not happen for 429)
+
+
+@dataclass
+class ThrottleAction:
+    """
+    Result of processing a 429 error with unified handling.
+
+    This dataclass consolidates all decisions about what to do after a 429:
+    - What action to take (credential vs provider cooldown)
+    - How long to wait
+    - Whether to open the circuit breaker
+    - Related metadata for logging/debugging
+    """
+    action_type: ThrottleActionType
+    cooldown_seconds: int = 0
+    open_circuit_breaker: bool = False
+    throttle_scope: ThrottleScope = ThrottleScope.CREDENTIAL
+    confidence: float = 0.0
+    affected_credentials: list = dataclass_field(default_factory=list)
+    reason: str = ""
+
+    def __str__(self) -> str:
+        return (
+            f"ThrottleAction(action={self.action_type.value}, "
+            f"cooldown={self.cooldown_seconds}s, "
+            f"circuit_breaker={self.open_circuit_breaker}, "
+            f"scope={self.throttle_scope.value})"
+        )
+
+
+async def handle_429_error(
+    provider: str,
+    credential: str,
+    error: Exception,
+    error_body: Optional[str] = None,
+    retry_after: Optional[int] = None,
+    ip_throttle_detector: Optional["IPThrottleDetector"] = None,
+    circuit_breaker: Optional["ProviderCircuitBreaker"] = None,
+    cooldown_manager: Optional["CooldownManager"] = None,
+) -> ThrottleAction:
+    """
+    Unified handler for 429 rate limit errors.
+
+    This function consolidates all 429 processing logic:
+    1. Detects IP-level vs credential-level throttle
+    2. Determines appropriate cooldown duration
+    3. Decides whether to open circuit breaker
+    4. Returns a ThrottleAction with all decisions
+
+    If circuit_breaker and cooldown_manager are provided, actions are applied
+    automatically. Otherwise, the caller must apply them based on the returned
+    ThrottleAction.
+
+    This replaces the duplicated logic across client.py with ~22 calls
+    to open_immediately() for provider-level throttling.
+
+    Args:
+        provider: Provider name (e.g., "openai", "anthropic")
+        credential: Credential identifier (for correlation and cooldown)
+        error: The original exception
+        error_body: Optional error response body for pattern analysis
+        retry_after: Optional retry-after value from headers
+        ip_throttle_detector: Optional IP throttle detector instance
+                             (uses global singleton if not provided)
+        circuit_breaker: Optional circuit breaker for provider-level cooldown
+        cooldown_manager: Optional cooldown manager for credential-level cooldown
+
+    Returns:
+        ThrottleAction with action type, cooldown, and circuit breaker decision
+
+    Usage:
+        # With automatic action application:
+        action = await handle_429_error(
+            provider="openai",
+            credential="sk-xxx",
+            error=exc,
+            error_body=response_text,
+            retry_after=60,
+            circuit_breaker=self.circuit_breaker,
+            cooldown_manager=self.cooldown_manager,
+        )
+        # Actions are already applied - just check result
+        if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+            # Provider blocked, stop rotation
+            pass
+
+        # Without automatic application (manual):
+        action = await handle_429_error(...)
+        if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+            await circuit_breaker.open_immediately(
+                provider, reason=action.reason, duration=action.cooldown_seconds
+            )
+        elif action.action_type == ThrottleActionType.CREDENTIAL_COOLDOWN:
+            await cooldown_manager.start_cooldown(credential, action.cooldown_seconds)
+    """
+    # Get or create detector
+    if ip_throttle_detector is None:
+        ip_throttle_detector = get_ip_throttle_detector()
+
+    # Step 1: Check for explicit IP throttle indicators in error body
+    ip_throttle_from_body = _detect_ip_throttle(error_body, provider=provider)
+
+    if ip_throttle_from_body is not None:
+        # Error body explicitly indicates IP-level throttle
+        cooldown = retry_after or ip_throttle_from_body
+        lib_logger.warning(
+            f"IP-level throttle detected for provider '{provider}' from error body. "
+            f"Blocking provider for {cooldown}s."
+        )
+        action = ThrottleAction(
+            action_type=ThrottleActionType.PROVIDER_COOLDOWN,
+            cooldown_seconds=cooldown,
+            open_circuit_breaker=True,
+            throttle_scope=ThrottleScope.IP,
+            confidence=1.0,  # High confidence from explicit error body
+            reason="IP-level throttle detected from error body",
+        )
+        # Auto-apply if managers provided
+        if circuit_breaker is not None:
+            await circuit_breaker.open_immediately(
+                provider, reason=action.reason, duration=action.cooldown_seconds
+            )
+        return action
+
+    # Step 2: Record 429 and correlate with other credentials
+    assessment = ip_throttle_detector.record_429(
+        provider=provider,
+        credential=mask_credential(credential),
+        error_body=error_body,
+        retry_after=retry_after,
+    )
+
+    # Step 3: Determine action based on assessment scope
+    cooldown = max(retry_after or 0, assessment.suggested_cooldown)
+    if cooldown == 0:
+        cooldown = RATE_LIMIT_DEFAULT_COOLDOWN
+
+    if assessment.scope == ThrottleScope.IP:
+        # Multiple credentials throttled - IP-level
+        lib_logger.warning(
+            f"IP-level throttle detected for provider '{provider}' via correlation: "
+            f"{len(assessment.affected_credentials)} credentials affected, "
+            f"confidence={assessment.confidence:.2f}. "
+            f"Blocking provider for {cooldown}s."
+        )
+        action = ThrottleAction(
+            action_type=ThrottleActionType.PROVIDER_COOLDOWN,
+            cooldown_seconds=cooldown,
+            open_circuit_breaker=True,
+            throttle_scope=ThrottleScope.IP,
+            confidence=assessment.confidence,
+            affected_credentials=assessment.affected_credentials,
+            reason="IP-level throttle detected via correlation",
+        )
+        # Auto-apply if managers provided
+        if circuit_breaker is not None:
+            await circuit_breaker.open_immediately(
+                provider, reason=action.reason, duration=action.cooldown_seconds
+            )
+        return action
+
+    # Step 4: Single credential throttle
+    lib_logger.debug(
+        f"Credential-level throttle for {mask_credential(credential)} "
+        f"on provider '{provider}'. Cooldown: {cooldown}s."
+    )
+    action = ThrottleAction(
+        action_type=ThrottleActionType.CREDENTIAL_COOLDOWN,
+        cooldown_seconds=cooldown,
+        open_circuit_breaker=False,
+        throttle_scope=ThrottleScope.CREDENTIAL,
+        confidence=assessment.confidence,
+        reason="Credential-level rate limit",
+    )
+    # Auto-apply if managers provided
+    if cooldown_manager is not None:
+        await cooldown_manager.start_cooldown(credential, action.cooldown_seconds)
+    return action
 
 
 def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedError:
@@ -749,6 +1335,21 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
             )
             # Fall through to generic classification
 
+    # Check for provider abort from streaming (finish_reason='error' or native_finish_reason='abort')
+    # This handles StreamedAPIError.data which is a dict
+    if isinstance(e, dict):
+        if is_provider_abort(e):
+            lib_logger.warning(
+                f"Provider abort detected in stream: finish_reason={e.get('finish_reason')}, "
+                f"native_finish_reason={e.get('native_finish_reason')}"
+            )
+            return classify_stream_error(e)
+        # Also check for nested error dict
+        if "error" in e and isinstance(e.get("error"), dict):
+            error_obj = e.get("error", {})
+            if is_provider_abort(error_obj):
+                return classify_stream_error(error_obj)
+
     # Generic classification logic
     status_code = getattr(e, "status_code", None)
 
@@ -784,6 +1385,15 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                     original_exception=e,
                     status_code=status_code,
                     retry_after=retry_after,
+                )
+            # Check for IP-based rate limiting (affects all credentials)
+            ip_throttle_cooldown = _detect_ip_throttle(error_body, provider=provider)
+            if ip_throttle_cooldown is not None:
+                return ClassifiedError(
+                    error_type="ip_rate_limit",
+                    original_exception=e,
+                    status_code=status_code,
+                    retry_after=retry_after or ip_throttle_cooldown,
                 )
             return ClassifiedError(
                 error_type="rate_limit",
@@ -910,6 +1520,15 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                 status_code=status_code or 429,
                 retry_after=retry_after,
             )
+        # Check for IP-based rate limiting (affects all credentials)
+        ip_throttle_cooldown = _detect_ip_throttle(error_msg, provider=provider)
+        if ip_throttle_cooldown is not None:
+            return ClassifiedError(
+                error_type="ip_rate_limit",
+                original_exception=e,
+                status_code=status_code or 429,
+                retry_after=retry_after or ip_throttle_cooldown,
+            )
         return ClassifiedError(
             error_type="rate_limit",
             original_exception=e,
@@ -1015,10 +1634,11 @@ def should_rotate_on_error(classified_error: ClassifiedError) -> bool:
     - api_connection: Network issues (might be transient)
     - unknown: Safer to try another key
 
-    Errors that should NOT rotate (fail immediately):
+    Errors that should NOT rotate:
     - invalid_request: Client error in request payload (won't help to retry)
     - context_window_exceeded: Request too large (won't help to retry)
     - pre_request_callback_error: Internal proxy error
+    - ip_rate_limit: IP-based throttle (rotation won't help, all keys share IP)
 
     Returns:
         True if should rotate to next key, False if should fail immediately
@@ -1027,6 +1647,7 @@ def should_rotate_on_error(classified_error: ClassifiedError) -> bool:
         "invalid_request",
         "context_window_exceeded",
         "pre_request_callback_error",
+        "ip_rate_limit",
     }
     return classified_error.error_type not in non_rotatable_errors
 
@@ -1035,8 +1656,8 @@ def should_retry_same_key(classified_error: ClassifiedError) -> bool:
     """
     Determines if an error should retry with the same key (with backoff).
 
-    Only server errors and connection issues should retry the same key,
-    as these are often transient.
+    Server errors, connection issues, and IP-based rate limits should retry
+    the same key, as these are often transient or affect all credentials.
 
     Returns:
         True if should retry same key, False if should rotate immediately
@@ -1044,5 +1665,71 @@ def should_retry_same_key(classified_error: ClassifiedError) -> bool:
     retryable_errors = {
         "server_error",
         "api_connection",
+        "ip_rate_limit",
     }
     return classified_error.error_type in retryable_errors
+
+
+def classify_429_with_throttle_detection(
+    e: Exception,
+    provider: str,
+    credential: str,
+    error_body: Optional[str] = None,
+) -> ClassifiedError:
+    """
+    Classify a 429 error with IP throttle detection via correlation analysis.
+
+    This function records the 429 event in the IP throttle detector and
+    returns a ClassifiedError with throttle assessment if IP-level throttling
+    is detected.
+
+    Use this function instead of classify_error() when you have access to
+    the credential identifier and want IP throttle correlation.
+
+    Args:
+        e: The exception (should be a 429 error)
+        provider: Provider name (e.g., "openai", "anthropic")
+        credential: Credential identifier for correlation
+        error_body: Optional error response body
+
+    Returns:
+        ClassifiedError with throttle_assessment populated if IP throttle detected
+    """
+    retry_after = get_retry_after(e)
+    detector = get_ip_throttle_detector()
+
+    # Record the 429 and get throttle assessment
+    assessment = detector.record_429(
+        provider=provider,
+        credential=credential,
+        error_body=error_body,
+        retry_after=retry_after,
+    )
+
+    # Determine error type based on assessment
+    if assessment.scope == ThrottleScope.IP:
+        error_type = "ip_rate_limit"
+        lib_logger.warning(
+            f"IP-level throttle detected for {provider}: "
+            f"{len(assessment.affected_credentials)} credentials affected, "
+            f"confidence={assessment.confidence:.2f}, "
+            f"cooldown={assessment.suggested_cooldown}s"
+        )
+    else:
+        # Check if it's a quota error
+        error_body_lower = (error_body or "").lower()
+        if "quota" in error_body_lower or "resource_exhausted" in error_body_lower:
+            error_type = "quota_exceeded"
+        else:
+            error_type = "rate_limit"
+
+    # Use the larger of retry_after or suggested_cooldown
+    final_cooldown = max(retry_after or 0, assessment.suggested_cooldown)
+
+    return ClassifiedError(
+        error_type=error_type,
+        original_exception=e,
+        status_code=429,
+        retry_after=final_cooldown if final_cooldown > 0 else None,
+        throttle_assessment=assessment,
+    )

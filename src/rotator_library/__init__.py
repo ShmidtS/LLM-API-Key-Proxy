@@ -15,6 +15,9 @@ if TYPE_CHECKING:
     from .http_client_pool import HttpClientPool, get_http_pool, close_http_pool
     from .credential_weight_cache import CredentialWeightCache, get_weight_cache
     from .batched_persistence import BatchedPersistence, UsagePersistenceManager
+    from .circuit_breaker import ProviderCircuitBreaker, CircuitState
+    from .ip_throttle_detector import IPThrottleDetector, ThrottleScope
+    from .error_handler import get_retry_backoff
 
 __all__ = [
     "RotatingClient",
@@ -31,6 +34,17 @@ __all__ = [
     "get_weight_cache",
     "BatchedPersistence",
     "UsagePersistenceManager",
+    # Resilience modules
+    "ProviderCircuitBreaker",
+    "CircuitState",
+    "IPThrottleDetector",
+    "ThrottleScope",
+    "get_retry_backoff",
+    # Custom provider support
+    "AllProviders",
+    "get_all_providers",
+    "is_provider_abort",
+    "classify_stream_error",
 ]
 
 
@@ -78,4 +92,34 @@ def __getattr__(name):
     if name == "UsagePersistenceManager":
         from .batched_persistence import UsagePersistenceManager
         return UsagePersistenceManager
+    # Resilience modules
+    if name == "ProviderCircuitBreaker":
+        from .circuit_breaker import ProviderCircuitBreaker
+        return ProviderCircuitBreaker
+    if name == "CircuitState":
+        from .circuit_breaker import CircuitState
+        return CircuitState
+    # IP throttle detection
+    if name == "IPThrottleDetector":
+        from .ip_throttle_detector import IPThrottleDetector
+        return IPThrottleDetector
+    if name == "ThrottleScope":
+        from .ip_throttle_detector import ThrottleScope
+        return ThrottleScope
+    if name == "get_retry_backoff":
+        from .error_handler import get_retry_backoff
+        return get_retry_backoff
+    # Custom provider support
+    if name == "AllProviders":
+        from .error_handler import AllProviders
+        return AllProviders
+    if name == "get_all_providers":
+        from .error_handler import get_all_providers
+        return get_all_providers
+    if name == "is_provider_abort":
+        from .error_handler import is_provider_abort
+        return is_provider_abort
+    if name == "classify_stream_error":
+        from .error_handler import classify_stream_error
+        return classify_stream_error
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

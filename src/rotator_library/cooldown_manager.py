@@ -2,8 +2,12 @@
 # Copyright (c) 2026 Mirrowel
 
 import asyncio
+import logging
 import time
 from typing import Dict
+
+lib_logger = logging.getLogger("rotator_library")
+
 
 class CooldownManager:
     """

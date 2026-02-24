@@ -40,6 +40,12 @@ from .error_handler import (
     RequestErrorAccumulator,
     mask_credential,
     ContextOverflowError,
+    get_retry_backoff,
+    handle_429_error,
+    ThrottleActionType,
+    get_all_providers,
+    is_provider_abort,
+    classify_stream_error,
 )
 from .provider_config import ProviderConfig
 from .http_client_pool import HttpClientPool, get_http_pool, close_http_pool
@@ -48,6 +54,8 @@ from .providers.openai_compatible_provider import OpenAICompatibleProvider
 from .request_sanitizer import sanitize_request_payload
 from .model_info_service import get_model_info_service
 from .cooldown_manager import CooldownManager
+from .circuit_breaker import ProviderCircuitBreaker, CircuitState
+from .ip_throttle_detector import IPThrottleDetector, ThrottleScope
 from .credential_manager import CredentialManager
 from .background_refresher import BackgroundRefresher
 from .model_definitions import ModelDefinitions
@@ -62,6 +70,10 @@ from .config import (
     DEFAULT_FAIR_CYCLE_DURATION,
     DEFAULT_EXHAUSTION_COOLDOWN_THRESHOLD,
     DEFAULT_SEQUENTIAL_FALLBACK_MULTIPLIER,
+    CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+    CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+    CIRCUIT_BREAKER_HALF_OPEN_REQUESTS,
+    CIRCUIT_BREAKER_PROVIDER_OVERRIDES,
 )
 
 
@@ -543,6 +555,13 @@ class RotatingClient:
 
         self.provider_config = ProviderConfig()
         self.cooldown_manager = CooldownManager()
+        self.ip_throttle_detector = IPThrottleDetector()
+        self.circuit_breaker = ProviderCircuitBreaker(
+            failure_threshold=CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+            recovery_timeout=CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+            half_open_requests=CIRCUIT_BREAKER_HALF_OPEN_REQUESTS,
+            provider_overrides=CIRCUIT_BREAKER_PROVIDER_OVERRIDES,
+        )
         self.litellm_provider_params = litellm_provider_params or {}
         self.ignore_models = ignore_models or {}
         self.whitelist_models = whitelist_models or {}
@@ -1364,6 +1383,25 @@ class RotatingClient:
                             has_tool_calls = True
                             accumulated_finish_reason = "tool_calls"
 
+                        # === STREAM ABORT DETECTION ===
+                        # Check for provider abort (finish_reason='error' or native_finish_reason='abort')
+                        raw_finish_reason = choice.get("finish_reason")
+                        native_finish_reason = chunk_dict.get("native_finish_reason")
+                        if raw_finish_reason == "error" or native_finish_reason == "abort":
+                            lib_logger.warning(
+                                f"Stream abort detected for model {model} at chunk {chunk_index}. "
+                                f"finish_reason={raw_finish_reason}, native_finish_reason={native_finish_reason}, "
+                                f"partial content: {accumulated_content_length} chars"
+                            )
+                            raise StreamedAPIError(
+                                "Provider aborted stream mid-generation",
+                                data={
+                                    "finish_reason": raw_finish_reason,
+                                    "native_finish_reason": native_finish_reason,
+                                    "partial_content_length": accumulated_content_length,
+                                }
+                            )
+
                         # Detect final chunk: has usage with completion_tokens > 0
                         has_completion_tokens = (
                             usage
@@ -1746,8 +1784,22 @@ class RotatingClient:
         error_accumulator.model = model
         error_accumulator.provider = provider
 
+        # Check circuit breaker state (handles IP-level throttling)
+        if not await self.circuit_breaker.can_attempt(provider):
+            lib_logger.warning(
+                f"Circuit breaker OPEN for provider '{provider}', skipping"
+            )
+            raise NoAvailableKeysError(
+                f"Circuit breaker open for provider '{provider}'"
+            )
+
+        # Flag to stop rotation when IP-level throttle is detected
+        ip_throttle_detected = False
+
         while (
-            len(tried_creds) < len(credentials_for_provider) and time.time() < deadline
+            len(tried_creds) < len(credentials_for_provider)
+            and time.time() < deadline
+            and not ip_throttle_detected
         ):
             current_cred = None
             key_acquired = False
@@ -1888,6 +1940,8 @@ class RotatingClient:
                             await self.usage_manager.record_success(
                                 current_cred, model, response
                             )
+                            # Record success for circuit breaker
+                            await self.circuit_breaker.record_success(provider)
 
                             await self.usage_manager.release_key(current_cred, model)
                             key_acquired = False
@@ -1928,17 +1982,39 @@ class RotatingClient:
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
+                                # Handle 429 errors through unified handler
+                                if classified_error.error_type in ("ip_rate_limit", "rate_limit", "quota_exceeded"):
+                                    action = await handle_429_error(
+                                        provider=provider,
+                                        credential=current_cred,
+                                        error=e,
+                                        error_body=str(e) if e else None,
+                                        retry_after=classified_error.retry_after,
+                                        ip_throttle_detector=self.ip_throttle_detector,
+                                        circuit_breaker=self.circuit_breaker,
+                                        cooldown_manager=self.cooldown_manager,
+                                    )
+                                    if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+                                        ip_throttle_detected = True
                                 lib_logger.error(
                                     f"Non-recoverable error ({classified_error.error_type}) during custom provider call. Failing."
                                 )
                                 raise last_exception
 
-                            # Handle rate limits with cooldown (exclude quota_exceeded)
-                            if classified_error.error_type == "rate_limit":
-                                cooldown_duration = classified_error.retry_after or 60
-                                await self.cooldown_manager.start_cooldown(
-                                    current_cred, cooldown_duration
+                            # Handle 429 errors through unified handler
+                            if classified_error.error_type in ("ip_rate_limit", "rate_limit", "quota_exceeded"):
+                                action = await handle_429_error(
+                                    provider=provider,
+                                    credential=current_cred,
+                                    error=e,
+                                    error_body=str(e) if e else None,
+                                    retry_after=classified_error.retry_after,
+                                    ip_throttle_detector=self.ip_throttle_detector,
+                                    circuit_breaker=self.circuit_breaker,
+                                    cooldown_manager=self.cooldown_manager,
                                 )
+                                if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+                                    ip_throttle_detected = True
 
                             await self.usage_manager.record_failure(
                                 current_cred, model, classified_error
@@ -2010,23 +2086,6 @@ class RotatingClient:
                             # Connection errors can leave the client in a closed state
                             await self._get_http_client_async(streaming=False)
                             continue
-
-                            # Check if this error should trigger rotation
-                            if not should_rotate_on_error(classified_error):
-                                lib_logger.error(
-                                    f"Non-recoverable error ({classified_error.error_type}). Failing."
-                                )
-                                raise last_exception
-
-                            # Handle rate limits with cooldown (exclude quota_exceeded)
-                            if (
-                                classified_error.status_code == 429
-                                and classified_error.error_type != "quota_exceeded"
-                            ) or classified_error.error_type == "rate_limit":
-                                cooldown_duration = classified_error.retry_after or 60
-                                await self.cooldown_manager.start_cooldown(
-                                    current_cred, cooldown_duration
-                                )
 
                             await self.usage_manager.record_failure(
                                 current_cred, model, classified_error
@@ -2134,6 +2193,21 @@ class RotatingClient:
                                 **litellm_kwargs
                             )
 
+                            # Inject custom provider settings (e.g., KILOCODE_API_BASE)
+                            all_providers = get_all_providers()
+                            if all_providers.is_custom_provider(model):
+                                final_kwargs = all_providers.get_provider_kwargs(**final_kwargs)
+                                # Force OpenAI-compatible mode for custom providers
+                                if "api_base" in final_kwargs:
+                                    # LiteLLM routing: use openai/ prefix for custom OpenAI-compatible APIs
+                                    current_model = final_kwargs.get("model", model)
+                                    if not current_model.startswith("openai/"):
+                                        final_kwargs["model"] = f"openai/{current_model}"
+                                        lib_logger.info(
+                                            f"Routing custom provider {model.split('/')[0]} through openai: "
+                                            f"model={final_kwargs['model']}, api_base={final_kwargs['api_base']}"
+                                        )
+
                             response = await api_call(
                                 **final_kwargs,
                                 logger_fn=self._litellm_logger_callback,
@@ -2142,6 +2216,8 @@ class RotatingClient:
                             await self.usage_manager.record_success(
                                 current_cred, model, response
                             )
+                            # Record success for circuit breaker
+                            await self.circuit_breaker.record_success(provider)
 
                             await self.usage_manager.release_key(current_cred, model)
                             key_acquired = False
@@ -2187,10 +2263,19 @@ class RotatingClient:
                                 classified_error.status_code == 429
                                 and classified_error.error_type != "quota_exceeded"
                             ):
-                                cooldown_duration = classified_error.retry_after or 60
-                                await self.cooldown_manager.start_cooldown(
-                                    current_cred, cooldown_duration
+                                # Handle 429 errors through unified handler
+                                action = await handle_429_error(
+                                    provider=provider,
+                                    credential=current_cred,
+                                    error=e,
+                                    error_body=str(e) if e else None,
+                                    retry_after=classified_error.retry_after,
+                                    ip_throttle_detector=self.ip_throttle_detector,
+                                    circuit_breaker=self.circuit_breaker,
+                                    cooldown_manager=self.cooldown_manager,
                                 )
+                                if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+                                    ip_throttle_detected = True
 
                             await self.usage_manager.record_failure(
                                 current_cred, model, classified_error
@@ -2286,6 +2371,20 @@ class RotatingClient:
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
+                                # Handle 429 errors through unified handler
+                                if classified_error.error_type in ("ip_rate_limit", "rate_limit", "quota_exceeded"):
+                                    action = await handle_429_error(
+                                        provider=provider,
+                                        credential=current_cred,
+                                        error=e,
+                                        error_body=str(e) if e else None,
+                                        retry_after=classified_error.retry_after,
+                                        ip_throttle_detector=self.ip_throttle_detector,
+                                        circuit_breaker=self.circuit_breaker,
+                                        cooldown_manager=self.cooldown_manager,
+                                    )
+                                    if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+                                        ip_throttle_detected = True
                                 lib_logger.error(
                                     f"Non-recoverable error ({classified_error.error_type}). Failing request."
                                 )
@@ -2296,12 +2395,20 @@ class RotatingClient:
                                 current_cred, classified_error, error_message
                             )
 
-                            # Handle rate limits with cooldown (exclude quota_exceeded from provider-wide cooldown)
-                            if classified_error.error_type == "rate_limit":
-                                cooldown_duration = classified_error.retry_after or 60
-                                await self.cooldown_manager.start_cooldown(
-                                    current_cred, cooldown_duration
+                            # Handle 429 errors through unified handler
+                            if classified_error.error_type in ("ip_rate_limit", "rate_limit", "quota_exceeded"):
+                                action = await handle_429_error(
+                                    provider=provider,
+                                    credential=current_cred,
+                                    error=e,
+                                    error_body=str(e) if e else None,
+                                    retry_after=classified_error.retry_after,
+                                    ip_throttle_detector=self.ip_throttle_detector,
+                                    circuit_breaker=self.circuit_breaker,
+                                    cooldown_manager=self.cooldown_manager,
                                 )
+                                if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+                                    ip_throttle_detected = True
 
                             # Check if we should retry same key (server errors with retries left)
                             if (
@@ -2357,15 +2464,20 @@ class RotatingClient:
                                 f"Key {mask_credential(current_cred)} {classified_error.error_type} (HTTP {classified_error.status_code})."
                             )
 
-                            # Handle rate limits with cooldown (exclude quota_exceeded from provider-wide cooldown)
-                            if (
-                                classified_error.status_code == 429
-                                and classified_error.error_type != "quota_exceeded"
-                            ) or classified_error.error_type == "rate_limit":
-                                cooldown_duration = classified_error.retry_after or 60
-                                await self.cooldown_manager.start_cooldown(
-                                    current_cred, cooldown_duration
+                            # Handle 429 errors through unified handler
+                            if classified_error.error_type in ("ip_rate_limit", "rate_limit", "quota_exceeded"):
+                                action = await handle_429_error(
+                                    provider=provider,
+                                    credential=current_cred,
+                                    error=e,
+                                    error_body=str(e) if e else None,
+                                    retry_after=classified_error.retry_after,
+                                    ip_throttle_detector=self.ip_throttle_detector,
+                                    circuit_breaker=self.circuit_breaker,
+                                    cooldown_manager=self.cooldown_manager,
                                 )
+                                if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+                                    ip_throttle_detected = True
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
@@ -2537,10 +2649,23 @@ class RotatingClient:
         error_accumulator.model = model
         error_accumulator.provider = provider
 
+        # Check circuit breaker state (handles IP-level throttling)
+        if not await self.circuit_breaker.can_attempt(provider):
+            lib_logger.warning(
+                f"Circuit breaker OPEN for provider '{provider}', skipping"
+            )
+            raise NoAvailableKeysError(
+                f"Circuit breaker open for provider '{provider}'"
+            )
+
+        # Flag to stop rotation when IP-level throttle is detected
+        ip_throttle_detected = False
+
         try:
             while (
                 len(tried_creds) < len(credentials_for_provider)
                 and time.time() < deadline
+                and not ip_throttle_detected
             ):
                 current_cred = None
                 key_acquired = False
@@ -2741,19 +2866,39 @@ class RotatingClient:
 
                                 # Check if this error should trigger rotation
                                 if not should_rotate_on_error(classified_error):
+                                    # Handle 429 errors through unified handler
+                                    if classified_error.error_type in ("ip_rate_limit", "rate_limit", "quota_exceeded"):
+                                        action = await handle_429_error(
+                                            provider=provider,
+                                            credential=current_cred,
+                                            error=e,
+                                            error_body=str(e) if e else None,
+                                            retry_after=classified_error.retry_after,
+                                            ip_throttle_detector=self.ip_throttle_detector,
+                                            circuit_breaker=self.circuit_breaker,
+                                            cooldown_manager=self.cooldown_manager,
+                                        )
+                                        if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+                                            ip_throttle_detected = True
                                     lib_logger.error(
                                         f"Non-recoverable error ({classified_error.error_type}) during custom stream. Failing."
                                     )
                                     raise last_exception
 
-                                # Handle rate limits with cooldown (exclude quota_exceeded)
-                                if classified_error.error_type == "rate_limit":
-                                    cooldown_duration = (
-                                        classified_error.retry_after or 60
+                                # Handle 429 errors through unified handler
+                                if classified_error.error_type in ("ip_rate_limit", "rate_limit", "quota_exceeded"):
+                                    action = await handle_429_error(
+                                        provider=provider,
+                                        credential=current_cred,
+                                        error=e,
+                                        error_body=str(e) if e else None,
+                                        retry_after=classified_error.retry_after,
+                                        ip_throttle_detector=self.ip_throttle_detector,
+                                        circuit_breaker=self.circuit_breaker,
+                                        cooldown_manager=self.cooldown_manager,
                                     )
-                                    await self.cooldown_manager.start_cooldown(
-                                        current_cred, cooldown_duration
-                                    )
+                                    if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+                                        ip_throttle_detected = True
 
                                 await self.usage_manager.record_failure(
                                     current_cred, model, classified_error
@@ -2851,10 +2996,39 @@ class RotatingClient:
 
                                 # Check if this error should trigger rotation
                                 if not should_rotate_on_error(classified_error):
+                                    # Handle 429 errors through unified handler
+                                    if classified_error.error_type in ("ip_rate_limit", "rate_limit", "quota_exceeded"):
+                                        action = await handle_429_error(
+                                            provider=provider,
+                                            credential=current_cred,
+                                            error=e,
+                                            error_body=str(e) if e else None,
+                                            retry_after=classified_error.retry_after,
+                                            ip_throttle_detector=self.ip_throttle_detector,
+                                            circuit_breaker=self.circuit_breaker,
+                                            cooldown_manager=self.cooldown_manager,
+                                        )
+                                        if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+                                            ip_throttle_detected = True
                                     lib_logger.error(
                                         f"Non-recoverable error ({classified_error.error_type}). Failing."
                                     )
                                     raise last_exception
+
+                                # Handle 429 errors through unified handler
+                                if classified_error.error_type in ("ip_rate_limit", "rate_limit", "quota_exceeded"):
+                                    action = await handle_429_error(
+                                        provider=provider,
+                                        credential=current_cred,
+                                        error=e,
+                                        error_body=str(e) if e else None,
+                                        retry_after=classified_error.retry_after,
+                                        ip_throttle_detector=self.ip_throttle_detector,
+                                        circuit_breaker=self.circuit_breaker,
+                                        cooldown_manager=self.cooldown_manager,
+                                    )
+                                    if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+                                        ip_throttle_detected = True
 
                                 await self.usage_manager.record_failure(
                                     current_cred, model, classified_error
@@ -2962,6 +3136,21 @@ class RotatingClient:
                                 **litellm_kwargs
                             )
 
+                            # Inject custom provider settings (e.g., KILOCODE_API_BASE)
+                            all_providers = get_all_providers()
+                            if all_providers.is_custom_provider(model):
+                                final_kwargs = all_providers.get_provider_kwargs(**final_kwargs)
+                                # Force OpenAI-compatible mode for custom providers
+                                if "api_base" in final_kwargs:
+                                    # LiteLLM routing: use openai/ prefix for custom OpenAI-compatible APIs
+                                    current_model = final_kwargs.get("model", model)
+                                    if not current_model.startswith("openai/"):
+                                        final_kwargs["model"] = f"openai/{current_model}"
+                                        lib_logger.info(
+                                            f"Routing custom provider {model.split('/')[0]} through openai: "
+                                            f"model={final_kwargs['model']}, api_base={final_kwargs['api_base']}"
+                                        )
+
                             response = await litellm.acompletion(
                                 **final_kwargs,
                                 logger_fn=self._litellm_logger_callback,
@@ -3009,6 +3198,20 @@ class RotatingClient:
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
+                                # Handle 429 errors through unified handler
+                                if classified_error.error_type in ("ip_rate_limit", "rate_limit", "quota_exceeded"):
+                                    action = await handle_429_error(
+                                        provider=provider,
+                                        credential=current_cred,
+                                        error=original_exc,
+                                        error_body=str(original_exc) if original_exc else None,
+                                        retry_after=classified_error.retry_after,
+                                        ip_throttle_detector=self.ip_throttle_detector,
+                                        circuit_breaker=self.circuit_breaker,
+                                        cooldown_manager=self.cooldown_manager,
+                                    )
+                                    if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+                                        ip_throttle_detected = True
                                 lib_logger.error(
                                     f"Non-recoverable error ({classified_error.error_type}) during litellm stream. Failing."
                                 )
@@ -3103,13 +3306,20 @@ class RotatingClient:
                                     f"Cred {mask_credential(current_cred)} {classified_error.error_type}. Rotating."
                                 )
 
-                                if classified_error.error_type == "rate_limit":
-                                    cooldown_duration = (
-                                        classified_error.retry_after or 60
+                                # Handle 429 errors through unified handler
+                                if classified_error.error_type in ("ip_rate_limit", "rate_limit", "quota_exceeded"):
+                                    action = await handle_429_error(
+                                        provider=provider,
+                                        credential=current_cred,
+                                        error=original_exc,
+                                        error_body=str(original_exc) if original_exc else None,
+                                        retry_after=classified_error.retry_after,
+                                        ip_throttle_detector=self.ip_throttle_detector,
+                                        circuit_breaker=self.circuit_breaker,
+                                        cooldown_manager=self.cooldown_manager,
                                     )
-                                    await self.cooldown_manager.start_cooldown(
-                                        current_cred, cooldown_duration
-                                    )
+                                    if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+                                        ip_throttle_detected = True
 
                                 await self.usage_manager.record_failure(
                                     current_cred, model, classified_error
@@ -3205,22 +3415,23 @@ class RotatingClient:
                                 f"Credential {mask_credential(current_cred)} failed with {classified_error.error_type} (Status: {classified_error.status_code}). Error: {error_message_text}."
                             )
 
-                            # Handle rate limits with cooldown (exclude quota_exceeded)
-                            if (
-                                classified_error.status_code == 429
-                                and classified_error.error_type != "quota_exceeded"
-                            ) or classified_error.error_type == "rate_limit":
-                                cooldown_duration = classified_error.retry_after or 60
-                                await self.cooldown_manager.start_cooldown(
-                                    current_cred, cooldown_duration
+                            # Handle 429 errors through unified handler
+                            if classified_error.error_type in ("ip_rate_limit", "rate_limit", "quota_exceeded"):
+                                action = await handle_429_error(
+                                    provider=provider,
+                                    credential=current_cred,
+                                    error=e,
+                                    error_body=str(e) if e else None,
+                                    retry_after=classified_error.retry_after,
+                                    ip_throttle_detector=self.ip_throttle_detector,
+                                    circuit_breaker=self.circuit_breaker,
+                                    cooldown_manager=self.cooldown_manager,
                                 )
-                                lib_logger.warning(
-                                    f"Rate limit detected for {provider}. Starting {cooldown_duration}s cooldown."
-                                )
+                                if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
+                                    ip_throttle_detected = True
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
-                                # Non-rotatable errors - fail immediately
                                 lib_logger.error(
                                     f"Non-recoverable error ({classified_error.error_type}). Failing request."
                                 )

@@ -196,7 +196,7 @@ class BackgroundRefresher:
 
             config = provider_plugin.get_background_job_config()
             if not config:
-                lib_logger.debug(f"Skipping {provider} background job: config is None")
+                # No background job configured for this provider - this is normal
                 continue
 
             # Start the provider's background job task
