@@ -135,4 +135,5 @@ oauth_creds/
 .omc/
 .memorious/
 .vscode/
+.serena/
 AGENTS.md
