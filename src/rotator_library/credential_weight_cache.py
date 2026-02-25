@@ -22,11 +22,14 @@ lib_logger = logging.getLogger("rotator_library")
 @dataclass
 class CachedWeights:
     """Cached weight calculation for a provider/model combination."""
+
     weights: Dict[str, float]  # credential -> weight
     total_weight: float
     credentials: List[str]  # Ordered list of available credentials
     calculated_at: float = field(default_factory=time.time)
-    usage_snapshot: Dict[str, int] = field(default_factory=dict)  # credential -> usage at calc time
+    usage_snapshot: Dict[str, int] = field(
+        default_factory=dict
+    )  # credential -> usage at calc time
     invalidated: bool = False
 
 
@@ -175,7 +178,11 @@ class CredentialWeightCache:
                     continue
 
                 # If model specified, only invalidate that model's entries
-                if model is not None and f":{model}:" not in key and not key.endswith(f":{model}"):
+                if (
+                    model is not None
+                    and f":{model}:" not in key
+                    and not key.endswith(f":{model}")
+                ):
                     continue
 
                 keys_to_invalidate.append(key)
@@ -196,8 +203,7 @@ class CredentialWeightCache:
                 self._cache.clear()
             else:
                 keys_to_remove = [
-                    k for k in self._cache.keys()
-                    if k.startswith(f"{provider}:")
+                    k for k in self._cache.keys() if k.startswith(f"{provider}:")
                 ]
                 for key in keys_to_remove:
                     del self._cache[key]
@@ -264,7 +270,8 @@ class CredentialWeightCache:
 
         async with self._lock:
             keys_to_remove = [
-                k for k, v in self._cache.items()
+                k
+                for k, v in self._cache.items()
                 if now - v.calculated_at > self._ttl or v.invalidated
             ]
             for key in keys_to_remove:
@@ -272,6 +279,54 @@ class CredentialWeightCache:
                 removed += 1
 
         return removed
+
+    async def warmup_weights(
+        self,
+        providers: List[str],
+        models: List[str],
+        weight_calculator: Any = None,
+    ) -> int:
+        """
+        Pre-populate weight cache for common provider/model combinations.
+
+        This method triggers weight calculation for specified combinations,
+        ensuring the cache is warm before the first request arrives.
+
+        Args:
+            providers: List of provider names to warmup
+            models: List of model names to warmup
+            weight_calculator: Optional callable to calculate weights
+                              (provider, model) -> (weights, credentials, usage)
+
+        Returns:
+            Number of cache entries warmed up
+        """
+        warmed = 0
+
+        for provider in providers:
+            for model in models:
+                key = self._make_key(provider, model)
+                async with self._lock:
+                    if key in self._cache:
+                        continue  # Already cached
+
+                # If a weight calculator is provided, use it
+                if weight_calculator:
+                    try:
+                        result = await weight_calculator(provider, model)
+                        if result:
+                            weights, credentials, usage_snapshot = result
+                            await self.set(
+                                provider, model, weights, credentials, usage_snapshot
+                            )
+                            warmed += 1
+                    except Exception as e:
+                        lib_logger.debug(f"Warmup failed for {provider}/{model}: {e}")
+
+        if warmed > 0:
+            lib_logger.info(f"Weight cache warmed up: {warmed} entries")
+
+        return warmed
 
 
 # Singleton instance

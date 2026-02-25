@@ -5,7 +5,7 @@ import re
 import json
 import os
 import logging
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING
 import httpx
 
 from litellm.exceptions import (
@@ -86,14 +86,16 @@ KEY_SPECIFIC_PATTERNS = frozenset(
 # These providers aggregate multiple upstream APIs, so rate limits may vary per backend
 PROXY_PROVIDERS = frozenset(
     {
-        "kilocode",    # Routes to multiple providers (minimax, moonshot, z-ai, etc.)
+        "kilocode",  # Routes to multiple providers (minimax, moonshot, z-ai, etc.)
         "openrouter",  # Routes to 100+ providers
-        "requesty",    # Router/aggregator
+        "requesty",  # Router/aggregator
     }
 )
 
 
-def _detect_ip_throttle(error_body: Optional[str], provider: Optional[str] = None) -> Optional[int]:
+def _detect_ip_throttle(
+    error_body: Optional[str], provider: Optional[str] = None
+) -> Optional[int]:
     """
     Detect IP-based rate limiting from error response body.
 
@@ -357,7 +359,9 @@ class ContextOverflowError(Exception):
 
     def __init__(self, model: str, message: str = ""):
         self.model = model
-        self.message = message or f"Input tokens exceed context window for model {model}"
+        self.message = (
+            message or f"Input tokens exceed context window for model {model}"
+        )
         super().__init__(self.message)
 
 
@@ -632,10 +636,19 @@ class AllProviders:
         openai, anthropic, google, gemini, nvidia, mistral, cohere, groq, openrouter
     """
 
-    KNOWN_PROVIDERS = frozenset({
-        "openai", "anthropic", "google", "gemini", "nvidia",
-        "mistral", "cohere", "groq", "openrouter"
-    })
+    KNOWN_PROVIDERS = frozenset(
+        {
+            "openai",
+            "anthropic",
+            "google",
+            "gemini",
+            "nvidia",
+            "mistral",
+            "cohere",
+            "groq",
+            "openrouter",
+        }
+    )
 
     def __init__(self):
         self.providers: Dict[str, Dict[str, Any]] = {}
@@ -890,14 +903,16 @@ def get_retry_after(error: Exception) -> Optional[int]:
 
 
 # SSE Stream Error Patterns
-STREAM_ABORT_INDICATORS = frozenset({
-    "finish_reason",  # When value is "error"
-    "native_finish_reason",  # When value is "abort"
-    "stream error",
-    "stream aborted",
-    "connection reset",
-    "mid-stream error",
-})
+STREAM_ABORT_INDICATORS = frozenset(
+    {
+        "finish_reason",  # When value is "error"
+        "native_finish_reason",  # When value is "abort"
+        "stream error",
+        "stream aborted",
+        "connection reset",
+        "mid-stream error",
+    }
+)
 
 
 def is_provider_abort(raw_response: Optional[Dict]) -> bool:
@@ -912,25 +927,25 @@ def is_provider_abort(raw_response: Optional[Dict]) -> bool:
     if not raw_response:
         return False
 
-    finish_reason = raw_response.get('finish_reason')
-    native_reason = raw_response.get('native_finish_reason')
+    finish_reason = raw_response.get("finish_reason")
+    native_reason = raw_response.get("native_finish_reason")
 
-    if finish_reason == 'error':
+    if finish_reason == "error":
         return True
-    if native_reason == 'abort':
+    if native_reason == "abort":
         return True
 
     # Check for empty content with error
-    choices = raw_response.get('choices', [])
+    choices = raw_response.get("choices", [])
     if choices:
         for choice in choices:
-            if choice.get('finish_reason') == 'error':
+            if choice.get("finish_reason") == "error":
                 return True
-            message = choice.get('message', {})
-            delta = choice.get('delta', {})
+            message = choice.get("message", {})
+            delta = choice.get("delta", {})
             # Empty content with error indication
-            if not message.get('content') and not delta.get('content'):
-                if choice.get('finish_reason') == 'error':
+            if not message.get("content") and not delta.get("content"):
+                if choice.get("finish_reason") == "error":
                     return True
 
     return False
@@ -1011,9 +1026,7 @@ def _get_provider_backoff_config(provider: Optional[str]) -> Dict[str, float]:
 
 
 def get_retry_backoff(
-    classified_error: "ClassifiedError",
-    attempt: int,
-    provider: Optional[str] = None
+    classified_error: "ClassifiedError", attempt: int, provider: Optional[str] = None
 ) -> float:
     """
     Calculate retry backoff time based on error type and attempt number.
@@ -1048,13 +1061,13 @@ def get_retry_backoff(
         # More aggressive retry for network errors - they're usually transient
         # 0.5s, 0.75s, 1.1s, 1.7s, 2.5s...
         base = config.get("connection_base", 0.5)
-        backoff = base * (1.5 ** attempt) + random.uniform(0, 0.5)
+        backoff = base * (1.5**attempt) + random.uniform(0, 0.5)
     elif error_type == "server_error":
         # Standard exponential backoff with provider-specific base
         # Default: 1s, 2s, 4s, 8s... (base=2)
         # Kilocode: 1s, 1s, 1s, 1s... (base=1.0, slower growth)
         base = config.get("server_error_base", 2.0)
-        backoff = (base ** attempt) + random.uniform(0, 1)
+        backoff = (base**attempt) + random.uniform(0, 1)
     elif error_type == "rate_limit":
         # Short default for transient rate limits without retry_after
         backoff = 5 + random.uniform(0, 2)
@@ -1063,7 +1076,7 @@ def get_retry_backoff(
         backoff = RATE_LIMIT_DEFAULT_COOLDOWN + random.uniform(0, 2)
     else:
         # Default backoff
-        backoff = (2 ** attempt) + random.uniform(0, 1)
+        backoff = (2**attempt) + random.uniform(0, 1)
 
     return min(backoff, max_backoff)
 
@@ -1078,9 +1091,10 @@ from enum import Enum
 
 class ThrottleActionType(Enum):
     """Actions to take after processing a 429 error."""
+
     CREDENTIAL_COOLDOWN = "credential_cooldown"  # Single credential throttled
-    PROVIDER_COOLDOWN = "provider_cooldown"      # IP-level throttle detected
-    FAIL_IMMEDIATELY = "fail_immediately"        # Non-recoverable (should not happen for 429)
+    PROVIDER_COOLDOWN = "provider_cooldown"  # IP-level throttle detected
+    FAIL_IMMEDIATELY = "fail_immediately"  # Non-recoverable (should not happen for 429)
 
 
 @dataclass
@@ -1094,6 +1108,7 @@ class ThrottleAction:
     - Whether to open the circuit breaker
     - Related metadata for logging/debugging
     """
+
     action_type: ThrottleActionType
     cooldown_seconds: int = 0
     open_circuit_breaker: bool = False

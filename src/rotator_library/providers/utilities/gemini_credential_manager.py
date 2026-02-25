@@ -165,6 +165,7 @@ class GeminiCredentialManager:
     ) -> Dict[str, str]:
         """
         Load persisted tier information from credential files into memory cache.
+        Uses parallel file reading for better performance.
 
         Args:
             credential_paths: List of credential file paths
@@ -172,36 +173,61 @@ class GeminiCredentialManager:
         Returns:
             Dict mapping credential path to tier name for logging purposes
         """
+        import asyncio
+
         loaded = {}
+
+        # Filter paths that need loading
+        paths_to_load = []
         for path in credential_paths:
             # Skip env:// paths (environment-based credentials)
             if self._parse_env_credential_path(path) is not None:
                 continue
-
             # Skip if already in cache
             if path in self.project_tier_cache:
                 continue
+            paths_to_load.append(path)
 
+        if not paths_to_load:
+            return loaded
+
+        # Read all files in parallel
+        def _read_credential_file(path: str):
+            """Synchronous file read for use with asyncio.to_thread."""
             try:
                 with open(path, "r") as f:
-                    creds = json.load(f)
-
-                metadata = creds.get("_proxy_metadata", {})
-                tier = metadata.get("tier")
-                project_id = metadata.get("project_id")
-
-                if tier:
-                    self.project_tier_cache[path] = tier
-                    loaded[path] = tier
-                    lib_logger.debug(
-                        f"Loaded persisted tier '{tier}' for credential: {Path(path).name}"
-                    )
-
-                if project_id:
-                    self.project_id_cache[path] = project_id
-
+                    return path, json.load(f)
             except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
-                lib_logger.debug(f"Could not load persisted tier from {path}: {e}")
+                return path, e
+
+        # Use asyncio.to_thread for parallel I/O
+        tasks = [
+            asyncio.to_thread(_read_credential_file, path) for path in paths_to_load
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results
+        for result in results:
+            if isinstance(result, Exception):
+                continue
+            path, data = result
+            if isinstance(data, Exception):
+                lib_logger.debug(f"Could not load persisted tier from {path}: {data}")
+                continue
+
+            metadata = data.get("_proxy_metadata", {})
+            tier = metadata.get("tier")
+            project_id = metadata.get("project_id")
+
+            if tier:
+                self.project_tier_cache[path] = tier
+                loaded[path] = tier
+                lib_logger.debug(
+                    f"Loaded persisted tier '{tier}' for credential: {Path(path).name}"
+                )
+
+            if project_id:
+                self.project_id_cache[path] = project_id
 
         if loaded:
             # Log summary at debug level

@@ -93,6 +93,8 @@ class BackgroundRefresher:
         """
         Initialize all providers by loading credentials and persisted tier data.
         Called once before the main refresh loop starts.
+
+        Uses parallel initialization for better startup performance.
         """
         if self._initialized:
             return
@@ -103,22 +105,17 @@ class BackgroundRefresher:
         all_credentials = self._client.all_credentials
         oauth_providers = self._client.oauth_providers
 
+        # Collect initialization tasks for parallel execution
+        init_tasks = []
+        init_providers = []
+
         for provider, credentials in all_credentials.items():
             if not credentials:
                 continue
 
             provider_plugin = self._client._get_provider_instance(provider)
 
-            # Call initialize_credentials if provider supports it
-            if provider_plugin and hasattr(provider_plugin, "initialize_credentials"):
-                try:
-                    await provider_plugin.initialize_credentials(credentials)
-                except Exception as e:
-                    lib_logger.error(
-                        f"Error initializing credentials for provider '{provider}': {e}"
-                    )
-
-            # Build summary based on provider type
+            # Build summary based on provider type (do this before async init)
             if provider in oauth_providers:
                 tier_breakdown = {}
                 if provider_plugin and hasattr(
@@ -134,6 +131,20 @@ class BackgroundRefresher:
                 }
             else:
                 api_summary[provider] = len(credentials)
+
+            # Collect initialize_credentials tasks
+            if provider_plugin and hasattr(provider_plugin, "initialize_credentials"):
+                init_tasks.append(provider_plugin.initialize_credentials(credentials))
+                init_providers.append(provider)
+
+        # Execute all initializations in parallel
+        if init_tasks:
+            results = await asyncio.gather(*init_tasks, return_exceptions=True)
+            for provider, result in zip(init_providers, results):
+                if isinstance(result, Exception):
+                    lib_logger.error(
+                        f"Error initializing credentials for provider '{provider}': {result}"
+                    )
 
         # Log 3-line summary
         total_providers = len(api_summary) + len(oauth_summary)

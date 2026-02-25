@@ -101,6 +101,7 @@ class IPThrottleDetector:
     DEFAULT_MIN_CREDENTIALS = 2
     DEFAULT_IP_COOLDOWN = 30
     DEFAULT_CREDENTIAL_COOLDOWN = 10
+    MAX_RECORDS_PER_PROVIDER = 100  # Memory limit per provider
 
     def __init__(
         self,
@@ -143,11 +144,16 @@ class IPThrottleDetector:
         return hashlib.md5(normalized.encode(), usedforsecurity=False).hexdigest()
 
     def _cleanup_old_records(self, provider: str) -> None:
-        """Remove records older than the detection window."""
+        """Remove records older than the detection window and enforce memory limit."""
         cutoff = time.time() - self.window_seconds
         self._records[provider] = [
             r for r in self._records[provider] if r.timestamp > cutoff
         ]
+        # FIFO eviction if records exceed memory limit
+        if len(self._records[provider]) > self.MAX_RECORDS_PER_PROVIDER:
+            self._records[provider] = self._records[provider][
+                -self.MAX_RECORDS_PER_PROVIDER :
+            ]
 
     def record_429(
         self,

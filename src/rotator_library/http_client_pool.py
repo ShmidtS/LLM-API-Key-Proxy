@@ -27,7 +27,7 @@ lib_logger = logging.getLogger("rotator_library")
 # Configuration defaults (overridable via environment)
 DEFAULT_MAX_KEEPALIVE_CONNECTIONS = 50  # Increased from 20 for high-throughput
 DEFAULT_MAX_CONNECTIONS = 200  # Increased from 100 for multiple providers
-DEFAULT_KEEPALIVE_EXPIRY = 30.0  # Seconds to keep idle connections alive
+DEFAULT_KEEPALIVE_EXPIRY = 60.0  # Seconds to keep idle connections alive
 DEFAULT_WARMUP_CONNECTIONS = 3  # Connections to pre-warm per provider
 DEFAULT_WARMUP_TIMEOUT = 10.0  # Max seconds for warmup
 
@@ -140,7 +140,9 @@ class HttpClientPool:
         Returns:
             Configured httpx.AsyncClient
         """
-        timeout = TimeoutConfig.streaming() if streaming else TimeoutConfig.non_streaming()
+        timeout = (
+            TimeoutConfig.streaming() if streaming else TimeoutConfig.non_streaming()
+        )
 
         client = httpx.AsyncClient(
             timeout=timeout,
@@ -172,9 +174,9 @@ class HttpClientPool:
 
             self._warmup_hosts = warmup_hosts or []
 
-            # Pre-warm connections if hosts provided
+            # Pre-warm connections if hosts provided (background task)
             if self._warmup_hosts:
-                await self._warmup_connections()
+                asyncio.create_task(self._warmup_connections())
 
             lib_logger.info(
                 f"HTTP client pool initialized "
@@ -200,19 +202,21 @@ class HttpClientPool:
             return
 
         for host in self._warmup_hosts[:5]:  # Limit to 5 hosts for warmup
-            try:
-                # Make a lightweight HEAD request to establish connection
-                # Most APIs will respond quickly to HEAD /
-                await asyncio.wait_for(
-                    client.head(host, follow_redirects=True),
-                    timeout=DEFAULT_WARMUP_TIMEOUT
-                )
-                warmed += 1
-            except asyncio.TimeoutError:
-                lib_logger.debug(f"Warmup timeout for {host}")
-            except Exception as e:
-                # Connection errors during warmup are not critical
-                lib_logger.debug(f"Warmup error for {host}: {type(e).__name__}")
+            # Use _warmup_count connections per host for proper pool priming
+            for _ in range(self._warmup_count):
+                try:
+                    # Make a lightweight HEAD request to establish connection
+                    # Most APIs will respond quickly to HEAD /
+                    await asyncio.wait_for(
+                        client.head(host, follow_redirects=True),
+                        timeout=DEFAULT_WARMUP_TIMEOUT,
+                    )
+                    warmed += 1
+                except asyncio.TimeoutError:
+                    lib_logger.debug(f"Warmup timeout for {host}")
+                except Exception as e:
+                    # Connection errors during warmup are not critical
+                    lib_logger.debug(f"Warmup error for {host}: {type(e).__name__}")
 
         self._warmed_up = True
         elapsed = time.time() - start_time
@@ -234,7 +238,7 @@ class HttpClientPool:
             return True
         # httpx.AsyncClient sets _client to None when closed
         # We check the internal _client attribute which is the actual transport
-        return getattr(client, '_client', None) is None
+        return getattr(client, "_client", None) is None
 
     async def _ensure_client(self, streaming: bool) -> httpx.AsyncClient:
         """
@@ -251,9 +255,7 @@ class HttpClientPool:
         if streaming:
             client = self._streaming_client
             if self._is_client_closed(client):
-                lib_logger.warning(
-                    "Streaming HTTP client was closed, recreating..."
-                )
+                lib_logger.warning("Streaming HTTP client was closed, recreating...")
                 self._streaming_client = await self._create_client(streaming=True)
                 self._stats["reconnects"] += 1
             return self._streaming_client
@@ -326,7 +328,9 @@ class HttpClientPool:
         )
 
         # Create synchronously (blocking, but better than nothing)
-        timeout = TimeoutConfig.streaming() if streaming else TimeoutConfig.non_streaming()
+        timeout = (
+            TimeoutConfig.streaming() if streaming else TimeoutConfig.non_streaming()
+        )
         return httpx.AsyncClient(
             timeout=timeout,
             limits=self._create_limits(),
@@ -456,7 +460,10 @@ class HttpClientPool:
             lib_logger.info(f"HTTP client pool recovered: {', '.join(recovered)}")
             self._healthy = True
 
-        return len(recovered) > 0 or (self._streaming_client is not None and self._non_streaming_client is not None)
+        return len(recovered) > 0 or (
+            self._streaming_client is not None
+            and self._non_streaming_client is not None
+        )
 
     @property
     def is_healthy(self) -> bool:
@@ -471,7 +478,9 @@ class HttpClientPool:
     @property
     def is_initialized(self) -> bool:
         """Check if the pool has been initialized."""
-        return self._streaming_client is not None or self._non_streaming_client is not None
+        return (
+            self._streaming_client is not None or self._non_streaming_client is not None
+        )
 
 
 # Singleton instance for application-wide use

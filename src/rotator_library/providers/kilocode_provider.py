@@ -8,38 +8,44 @@ from typing import List, Dict, Any, Optional
 from .provider_interface import ProviderInterface
 from ..error_handler import extract_retry_after_from_body
 
-lib_logger = logging.getLogger('rotator_library')
-lib_logger.propagate = False # Ensure this logger doesn't propagate to root
+lib_logger = logging.getLogger("rotator_library")
+lib_logger.propagate = False  # Ensure this logger doesn't propagate to root
 if not lib_logger.handlers:
     lib_logger.addHandler(logging.NullHandler())
+
 
 class KilocodeProvider(ProviderInterface):
     """
     Provider implementation for the Kilocode API.
-    
+
     Kilocode routes requests to various providers through model prefixes:
     - minimax/minimax-m2.1:free
     - moonshotai/kimi-k2.5:free
     - z-ai/glm-4.7:free
     - And other provider/model combinations
     """
+
     async def get_models(self, api_key: str, client: httpx.AsyncClient) -> List[str]:
         """
         Fetches the list of available models from the Kilocode API.
         """
         try:
             response = await client.get(
-                "https://kilocode.ai/api/openrouter/models",
-                headers={"Authorization": f"Bearer {api_key}"}
+                "https://kilo.ai/api/openrouter/models",
+                headers={"Authorization": f"Bearer {api_key}"},
             )
             response.raise_for_status()
-            return [f"kilocode/{model['id']}" for model in response.json().get("data", [])]
+            return [
+                f"kilocode/{model['id']}" for model in response.json().get("data", [])
+            ]
         except httpx.RequestError as e:
             lib_logger.error(f"Failed to fetch Kilocode models: {e}")
             return []
 
     @staticmethod
-    def parse_quota_error(error: Exception, error_body: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def parse_quota_error(
+        error: Exception, error_body: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Parse Kilocode/OpenRouter rate limit errors.
 
@@ -54,12 +60,12 @@ class KilocodeProvider(ProviderInterface):
         """
         body = error_body
         if not body:
-            if hasattr(error, 'response') and hasattr(error.response, 'text'):
+            if hasattr(error, "response") and hasattr(error.response, "text"):
                 try:
                     body = error.response.text
                 except Exception:
                     pass
-            if not body and hasattr(error, 'body'):
+            if not body and hasattr(error, "body"):
                 body = str(error.body) if error.body else None
 
         if not body:
