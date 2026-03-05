@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.token_counter import token_counter
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, AsyncGenerator, Optional, Union, Tuple
+from urllib.parse import urlparse
 
 lib_logger = logging.getLogger("rotator_library")
 # Ensure the logger is configured to propagate to the root logger
@@ -63,7 +64,6 @@ from .model_definitions import ModelDefinitions
 from .transaction_logger import TransactionLogger
 from .utils.paths import get_default_root, get_logs_dir, get_oauth_dir, get_data_file
 from .utils.suppress_litellm_warnings import suppress_litellm_serialization_warnings
-from .utils.patch_litellm_finish_reason import patch_litellm_finish_reason
 from .config import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_GLOBAL_TIMEOUT,
@@ -84,12 +84,6 @@ class StreamedAPIError(Exception):
     def __init__(self, message, data=None):
         super().__init__(message)
         self.data = data
-
-
-class ContextOverflowError(Exception):
-    """Custom exception to signal that input tokens exceed the model's context window."""
-
-    pass
 
 
 class RotatingClient:
@@ -155,11 +149,6 @@ class RotatingClient:
         # See: https://github.com/BerriAI/litellm/issues/11759
         # TODO: Remove this workaround once litellm patches the issue
         suppress_litellm_serialization_warnings()
-
-        # Patch LiteLLM to normalize invalid finish_reason values from providers
-        # Some providers (e.g., Z.AI) return 'error', 'unknown', 'abort' which
-        # don't match LiteLLM's Pydantic schema and cause ValidationError
-        patch_litellm_finish_reason()
 
         if configure_logging:
             # When True, this allows logs from this library to be handled
@@ -792,8 +781,6 @@ class RotatingClient:
                 api_base = self.provider_config.api_bases[provider]
                 if api_base:
                     # Extract just the origin for warmup
-                    from urllib.parse import urlparse
-
                     parsed = urlparse(api_base)
                     if parsed.scheme and parsed.netloc:
                         endpoints.append(f"{parsed.scheme}://{parsed.netloc}")
@@ -808,8 +795,6 @@ class RotatingClient:
             if provider in self.provider_config.api_bases:
                 api_base = self.provider_config.api_bases[provider]
                 if api_base:
-                    from urllib.parse import urlparse
-
                     parsed = urlparse(api_base)
                     if parsed.scheme and parsed.netloc:
                         self._provider_endpoints[provider] = (
@@ -1144,6 +1129,40 @@ class RotatingClient:
         ):
             litellm_kwargs["safety_settings"] = default_generic.copy()
 
+    def _strip_client_headers(self, litellm_kwargs: Dict[str, Any]) -> None:
+        """
+        Remove client-provided headers/api_key from top-level litellm_kwargs
+        that could override provider credentials.
+
+        Args:
+            litellm_kwargs: The kwargs dict to clean in-place
+        """
+        headers_to_remove = [
+            "authorization",
+            "x-api-key",
+            "api-key",
+            "api_key",
+            # Anthropic-specific headers that should not be sent to OpenAI-compatible providers
+            "anthropic-version",
+            "anthropic-dangerous-direct-browser-access",
+            "anthropic-beta",
+            "x-anthropic-",
+        ]
+        for key in list(litellm_kwargs.keys()):
+            if not isinstance(key, str):
+                continue
+            key_lower = key.lower()
+            should_remove = False
+            for header in headers_to_remove:
+                if header.endswith("-") and key_lower.startswith(header):
+                    should_remove = True
+                    break
+                elif key_lower == header.lower():
+                    should_remove = True
+                    break
+            if should_remove:
+                litellm_kwargs.pop(key, None)
+
     def _apply_provider_headers(
         self, litellm_kwargs: Dict[str, Any], provider: str, credential: str
     ):
@@ -1225,8 +1244,6 @@ class RotatingClient:
         if provider_headers:
             try:
                 # Parse headers from JSON format
-                import json
-
                 headers_dict = json.loads(provider_headers)
                 if isinstance(headers_dict, dict):
                     # Use headers parameter if available, otherwise create it
@@ -1974,32 +1991,7 @@ class RotatingClient:
                 litellm_kwargs = kwargs.copy()
 
                 # [FIX] Remove client-provided headers/api_key that could override provider credentials
-                # Clean case-insensitive headers and api_key from top-level kwargs
-                headers_to_remove = [
-                    "authorization",
-                    "x-api-key",
-                    "api-key",
-                    "api_key",
-                    # Anthropic-specific headers that should not be sent to OpenAI-compatible providers
-                    "anthropic-version",
-                    "anthropic-dangerous-direct-browser-access",
-                    "anthropic-beta",
-                    "x-anthropic-",
-                ]
-                for key in list(litellm_kwargs.keys()):
-                    if not isinstance(key, str):
-                        continue
-                    key_lower = key.lower()
-                    should_remove = False
-                    for header in headers_to_remove:
-                        if header.endswith("-") and key_lower.startswith(header):
-                            should_remove = True
-                            break
-                        elif key_lower == header.lower():
-                            should_remove = True
-                            break
-                    if should_remove:
-                        litellm_kwargs.pop(key, None)
+                self._strip_client_headers(litellm_kwargs)
 
                 # Also clean nested headers in extra_body and headers params
                 self._apply_provider_headers(litellm_kwargs, provider, current_cred)
@@ -2929,31 +2921,7 @@ class RotatingClient:
                     litellm_kwargs = kwargs.copy()
 
                     # [FIX] Remove client-provided headers/api_key that could override provider credentials
-                    headers_to_remove = [
-                        "authorization",
-                        "x-api-key",
-                        "api-key",
-                        "api_key",
-                        # Anthropic-specific headers that should not be sent to OpenAI-compatible providers
-                        "anthropic-version",
-                        "anthropic-dangerous-direct-browser-access",
-                        "anthropic-beta",
-                        "x-anthropic-",
-                    ]
-                    for key in list(litellm_kwargs.keys()):
-                        if not isinstance(key, str):
-                            continue
-                        key_lower = key.lower()
-                        should_remove = False
-                        for header in headers_to_remove:
-                            if header.endswith("-") and key_lower.startswith(header):
-                                should_remove = True
-                                break
-                            elif key_lower == header.lower():
-                                should_remove = True
-                                break
-                        if should_remove:
-                            litellm_kwargs.pop(key, None)
+                    self._strip_client_headers(litellm_kwargs)
 
                     if "reasoning_effort" in kwargs:
                         litellm_kwargs["reasoning_effort"] = kwargs["reasoning_effort"]
@@ -3463,10 +3431,30 @@ class RotatingClient:
                                         == ThrottleActionType.PROVIDER_COOLDOWN
                                     ):
                                         ip_throttle_detected = True
-                                lib_logger.error(
-                                    f"Non-recoverable error ({classified_error.error_type}) during litellm stream. Failing."
-                                )
-                                raise last_exception
+
+                                    # Add exponential backoff delay before retry
+                                    wait_time = 2 ** attempt
+                                    lib_logger.warning(
+                                        f"Rate limit ({classified_error.error_type}) during litellm stream. "
+                                        f"Waiting {wait_time}s before retry."
+                                    )
+                                    await asyncio.sleep(wait_time)
+
+                                    # Record failure and rotate to next credential
+                                    await self.usage_manager.record_failure(
+                                        current_cred, model, classified_error
+                                    )
+                                    lib_logger.warning(
+                                        f"Cred {mask_credential(current_cred)} {classified_error.error_type} "
+                                        f"(HTTP {classified_error.status_code}). Rotating."
+                                    )
+                                    break  # Break inner try to rotate to next credential
+                                else:
+                                    # Truly non-recoverable error
+                                    lib_logger.error(
+                                        f"Non-recoverable error ({classified_error.error_type}) during litellm stream. Failing."
+                                    )
+                                    raise last_exception
 
                             try:
                                 # The full error JSON is in the string representation of the exception.
@@ -4576,7 +4564,6 @@ class RotatingClient:
             anthropic_to_openai_messages,
             anthropic_to_openai_tools,
         )
-        import json
 
         anthropic_request = request.model_dump(exclude_none=True)
 

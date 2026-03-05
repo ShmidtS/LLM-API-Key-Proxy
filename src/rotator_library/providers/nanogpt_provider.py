@@ -32,9 +32,6 @@ from .utilities.nanogpt_quota_tracker import NanoGptQuotaTracker
 from ..model_definitions import ModelDefinitions
 
 lib_logger = logging.getLogger("rotator_library")
-lib_logger.propagate = False
-if not lib_logger.handlers:
-    lib_logger.addHandler(logging.NullHandler())
 
 # NanoGPT API base URL
 NANOGPT_API_BASE = "https://nano-gpt.com"

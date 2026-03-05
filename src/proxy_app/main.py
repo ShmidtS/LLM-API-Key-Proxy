@@ -83,7 +83,7 @@ load_dotenv(_root_dir / ".env")
 
 # Load any additional .env files (e.g., antigravity_all_combined.env, gemini_cli_all_combined.env)
 _env_files_found = list(_root_dir.glob("*.env"))
-for _env_file in sorted(_root_dir.glob("*.env")):
+for _env_file in sorted(_env_files_found):  # reuse already-computed list
     if _env_file.name != ".env":  # Skip main .env (already loaded)
         load_dotenv(_env_file, override=False)  # Don't override existing values
 
@@ -247,9 +247,7 @@ print(
 
 # Clear screen and reprint header for clean startup view
 # This pushes loading messages up (still in scroll history) but shows a clean final screen
-import os as _os_module
-
-_os_module.system("cls" if _os_module.name == "nt" else "clear")
+os.system("cls" if os.name == "nt" else "clear")
 
 # Reprint header
 print("━" * 70)
@@ -269,21 +267,6 @@ print(
 from rotator_library.utils.paths import get_logs_dir, get_data_file
 
 LOG_DIR = get_logs_dir(_root_dir)
-
-# Configure a console handler with color (INFO and above only, no DEBUG)
-console_handler = colorlog.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.INFO)
-formatter = colorlog.ColoredFormatter(
-    "%(log_color)s%(message)s",
-    log_colors={
-        "DEBUG": "cyan",
-        "INFO": "green",
-        "WARNING": "yellow",
-        "ERROR": "red",
-        "CRITICAL": "red,bg_white",
-    },
-)
-console_handler.setFormatter(formatter)
 
 # Configure a file handler for INFO-level logs and higher
 info_file_handler = logging.FileHandler(LOG_DIR / "proxy.log", encoding="utf-8")
@@ -356,8 +339,6 @@ litellm_logger.propagate = False
 # Now that logging is configured, log the module load time to debug file only
 logging.debug(f"Modules loaded in {_elapsed:.2f}s")
 
-# Load environment variables from .env file
-load_dotenv(_root_dir / ".env")
 
 # --- Configuration ---
 USE_EMBEDDING_BATCHER = False

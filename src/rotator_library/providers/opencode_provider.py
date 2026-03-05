@@ -9,9 +9,6 @@ from .provider_interface import ProviderInterface
 from ..error_handler import extract_retry_after_from_body
 
 lib_logger = logging.getLogger("rotator_library")
-lib_logger.propagate = False  # Ensure this logger doesn't propagate to root
-if not lib_logger.handlers:
-    lib_logger.addHandler(logging.NullHandler())
 
 
 class OpencodeProvider(ProviderInterface):

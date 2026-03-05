@@ -132,8 +132,9 @@ COOLDOWN_RATE_LIMIT_DEFAULT: int = 60
 # Circuit breaker prevents cascade exhaustion during IP-level throttling.
 
 # Number of consecutive failures before opening circuit
+# Increased from 3 to 5 for transient rate limit tolerance
 # Override: CIRCUIT_BREAKER_FAILURE_THRESHOLD=<count>
-CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = 3
+CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = 5
 
 # Seconds to wait before attempting recovery
 # Override: CIRCUIT_BREAKER_RECOVERY_TIMEOUT=<seconds>

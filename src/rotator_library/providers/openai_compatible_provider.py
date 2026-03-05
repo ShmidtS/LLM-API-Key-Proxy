@@ -9,9 +9,6 @@ from .provider_interface import ProviderInterface
 from ..model_definitions import ModelDefinitions
 
 lib_logger = logging.getLogger("rotator_library")
-lib_logger.propagate = False
-if not lib_logger.handlers:
-    lib_logger.addHandler(logging.NullHandler())
 
 
 class OpenAICompatibleProvider(ProviderInterface):

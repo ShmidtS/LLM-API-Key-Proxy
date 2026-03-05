@@ -90,6 +90,7 @@ PROXY_PROVIDERS = frozenset(
         "openrouter",  # Routes to 100+ providers
         "requesty",  # Router/aggregator
         "opencode",  # OpenCode AI provider with quota-based rate limits
+        "inception",  # Inception Labs - 429 errors should trigger rotation, not IP throttle
     }
 )
 

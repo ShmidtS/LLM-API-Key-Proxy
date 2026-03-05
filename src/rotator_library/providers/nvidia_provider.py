@@ -8,9 +8,6 @@ import litellm
 from .provider_interface import ProviderInterface
 
 lib_logger = logging.getLogger('rotator_library')
-lib_logger.propagate = False # Ensure this logger doesn't propagate to root
-if not lib_logger.handlers:
-    lib_logger.addHandler(logging.NullHandler())
 
 class NvidiaProvider(ProviderInterface):
     skip_cost_calculation = True

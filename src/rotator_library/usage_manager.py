@@ -32,9 +32,6 @@ from .config import (
 )
 
 lib_logger = logging.getLogger("rotator_library")
-lib_logger.propagate = False
-if not lib_logger.handlers:
-    lib_logger.addHandler(logging.NullHandler())
 
 
 class UsageManager:
@@ -210,32 +207,6 @@ class UsageManager:
             if provider not in self._provider_locks:
                 self._provider_locks[provider] = asyncio.Lock()
             return self._provider_locks[provider]
-
-    def _get_provider_from_credential(self, credential: str) -> Optional[str]:
-        """
-        Extract provider name from a credential string.
-
-        Credentials are typically stored as "provider:credential_id" or
-        we can infer from the key format.
-
-        Args:
-            credential: Credential identifier
-
-        Returns:
-            Provider name or None if not determinable
-        """
-        # Check for provider prefix format (e.g., "openai:sk-xxx")
-        if ":" in credential:
-            provider = credential.split(":")[0]
-            if (
-                provider in self.provider_rotation_modes
-                or provider in self.fair_cycle_enabled
-            ):
-                return provider
-
-        # Fallback: try to extract from known credential patterns
-        # This is a best-effort approach
-        return None
 
     def _get_rotation_mode(self, provider: str) -> str:
         """

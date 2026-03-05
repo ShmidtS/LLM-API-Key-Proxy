@@ -7,9 +7,6 @@ import logging
 from typing import Dict, Any, Optional
 
 lib_logger = logging.getLogger("rotator_library")
-lib_logger.propagate = False
-if not lib_logger.handlers:
-    lib_logger.addHandler(logging.NullHandler())
 
 
 class ModelDefinitions:
