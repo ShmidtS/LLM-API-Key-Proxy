@@ -2267,19 +2267,14 @@ class UsageManager:
             key = available_keys[0]
             state = self.key_states[key]
             async with state["lock"]:
-                if not state["models_in_use"]:
-                    state["models_in_use"][model] = 1
-                    lib_logger.info(
-                        f"Acquired key {mask_credential(key)} for model {model} (fast path: single credential)"
-                    )
-                    return key
-                elif state["models_in_use"].get(model, 0) < max_concurrent:
+                total_in_use = sum(state["models_in_use"].values())
+                if total_in_use < max_concurrent:
                     state["models_in_use"][model] = (
                         state["models_in_use"].get(model, 0) + 1
                     )
                     lib_logger.info(
                         f"Acquired key {mask_credential(key)} for model {model} "
-                        f"(fast path: concurrent {state['models_in_use'][model]}/{max_concurrent})"
+                        f"(fast path: concurrent {total_in_use + 1}/{max_concurrent})"
                     )
                     return key
             # If we get here, the single key is at capacity - fall through to waiting logic
@@ -2387,14 +2382,15 @@ class UsageManager:
                     for key, usage_count in keys_in_priority:
                         key_state = self.key_states[key]
 
-                        # Tier 1: Completely idle keys (preferred)
-                        if not key_state["models_in_use"]:
-                            tier1_keys.append((key, usage_count))
-                        # Tier 2: Keys that can accept more concurrent requests
-                        elif (
+                        # Tier 1: Keys already active for this model that can accept more concurrent requests.
+                        if (
                             key_state["models_in_use"].get(model, 0)
                             < effective_max_concurrent
+                            and key_state["models_in_use"]
                         ):
+                            tier1_keys.append((key, usage_count))
+                        # Tier 2: Completely idle keys.
+                        elif not key_state["models_in_use"]:
                             tier2_keys.append((key, usage_count))
 
                     if rotation_mode == "sequential":
@@ -2432,7 +2428,7 @@ class UsageManager:
                         tier1_keys.sort(key=lambda x: x[1])
                         tier2_keys.sort(key=lambda x: x[1])
 
-                    # Try to acquire from Tier 1 first
+                    # Try to reuse an active key for the same model before taking an idle key.
                     for key, usage in tier1_keys:
                         state = self.key_states[key]
                         async with state["lock"]:
@@ -2569,14 +2565,15 @@ class UsageManager:
                         usage_count = self._get_grouped_usage_count(key, model)
                         key_state = self.key_states[key]
 
-                        # Tier 1: Completely idle keys (preferred).
-                        if not key_state["models_in_use"]:
-                            tier1_keys.append((key, usage_count))
-                        # Tier 2: Keys that can accept more concurrent requests for this model.
-                        elif (
+                        # Tier 1: Keys already active for this model that can accept more concurrent requests.
+                        if (
                             key_state["models_in_use"].get(model, 0)
                             < effective_max_concurrent
+                            and key_state["models_in_use"]
                         ):
+                            tier1_keys.append((key, usage_count))
+                        # Tier 2: Completely idle keys.
+                        elif not key_state["models_in_use"]:
                             tier2_keys.append((key, usage_count))
 
                 # Fair cycle filtering (non-priority case)

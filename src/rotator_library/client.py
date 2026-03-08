@@ -30,6 +30,8 @@ lib_logger = logging.getLogger("rotator_library")
 # log levels and handlers centrally.
 lib_logger.propagate = False
 
+DEFAULT_API_KEY_MAX_CONCURRENT_REQUESTS = 40
+
 from .usage_manager import UsageManager
 from .failure_logger import log_failure, configure_failure_logger
 from .error_handler import (
@@ -564,7 +566,15 @@ class RotatingClient:
         self._model_registry = get_model_info_service()
 
         # Store and validate max concurrent requests per key
-        self.max_concurrent_requests_per_key = max_concurrent_requests_per_key or {}
+        self.max_concurrent_requests_per_key = dict(
+            max_concurrent_requests_per_key or {}
+        )
+
+        for provider in self.api_keys:
+            self.max_concurrent_requests_per_key.setdefault(
+                provider, DEFAULT_API_KEY_MAX_CONCURRENT_REQUESTS
+            )
+
         # Validate all values are >= 1
         for provider, max_val in self.max_concurrent_requests_per_key.items():
             if max_val < 1:
@@ -2089,7 +2099,9 @@ class RotatingClient:
                                             f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
                                         )
 
-                            http_client = await self._get_http_client_async(streaming=False)
+                            http_client = await self._get_http_client_async(
+                                streaming=False
+                            )
                             response = await provider_plugin.acompletion(
                                 http_client, **litellm_kwargs
                             )
@@ -2944,7 +2956,9 @@ class RotatingClient:
                                                 f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
                                             )
 
-                                http_client = await self._get_http_client_async(streaming=True)
+                                http_client = await self._get_http_client_async(
+                                    streaming=True
+                                )
                                 response = await provider_plugin.acompletion(
                                     http_client, **litellm_kwargs
                                 )
@@ -3396,7 +3410,7 @@ class RotatingClient:
                                         ip_throttle_detected = True
 
                                     # Add exponential backoff delay before retry
-                                    wait_time = 2 ** attempt
+                                    wait_time = 2**attempt
                                     lib_logger.warning(
                                         f"Rate limit ({classified_error.error_type}) during litellm stream. "
                                         f"Waiting {wait_time}s before retry."
@@ -3506,8 +3520,13 @@ class RotatingClient:
                                 consecutive_quota_failures = 0
 
                                 # For transient server errors (mid-stream), retry same key with backoff before rotating
-                                if should_retry_same_key(classified_error) and attempt < self.max_retries - 1:
-                                    backoff = get_retry_backoff(classified_error, attempt, provider)
+                                if (
+                                    should_retry_same_key(classified_error)
+                                    and attempt < self.max_retries - 1
+                                ):
+                                    backoff = get_retry_backoff(
+                                        classified_error, attempt, provider
+                                    )
                                     remaining_budget = deadline - time.time()
                                     if backoff <= remaining_budget:
                                         lib_logger.warning(
@@ -3515,7 +3534,9 @@ class RotatingClient:
                                             f"(attempt {attempt + 1}/{self.max_retries}). Retrying same key in {backoff:.2f}s."
                                         )
                                         await asyncio.sleep(backoff)
-                                        await self._get_http_client_async(streaming=True)
+                                        await self._get_http_client_async(
+                                            streaming=True
+                                        )
                                         continue  # Retry same key instead of rotating
 
                                 lib_logger.warning(
