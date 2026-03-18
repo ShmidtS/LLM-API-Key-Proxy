@@ -87,6 +87,15 @@ def _cache_ips(hostname: str, ips: List[str]) -> None:
         _dns_cache[hostname] = (ips, time.time() + ttl)
 
 
+def get_dns_query_timeout() -> int:
+    """Get DNS query timeout from config."""
+    try:
+        from .config.defaults import DNS_QUERY_TIMEOUT
+        return DNS_QUERY_TIMEOUT
+    except ImportError:
+        return 10  # 10 seconds fallback
+
+
 async def resolve_dns_async(hostname: str) -> List[str]:
     """
     Async DNS resolution with caching.
@@ -107,10 +116,11 @@ async def resolve_dns_async(hostname: str) -> List[str]:
     
     # Use asyncio executor for blocking getaddrinfo
     loop = asyncio.get_event_loop()
+    timeout = get_dns_query_timeout()
     try:
         result = await asyncio.wait_for(
             loop.run_in_executor(None, lambda: socket.getaddrinfo(hostname, None)),
-            timeout=10.0
+            timeout=timeout
         )
         ips = list(set(r[4][0] for r in result if r[0] == socket.AF_INET))
         if ips:
@@ -150,6 +160,15 @@ CUSTOM_DNS_HOSTS = {
 }
 
 
+def _get_doh_timeout() -> int:
+    """Get DoH query timeout from config."""
+    try:
+        from .config.defaults import HTTP_DOH_TIMEOUT
+        return HTTP_DOH_TIMEOUT
+    except ImportError:
+        return 5  # 5 seconds fallback
+
+
 def _doh_query(host: str, doh_url: str) -> Optional[str]:
     """
     Query DNS over HTTPS (DoH) for A record.
@@ -166,13 +185,13 @@ def _doh_query(host: str, doh_url: str) -> Optional[str]:
         headers = {"Accept": "application/dns-json"}
         
         if _HAS_HTTPX:
-            with _httpx.Client(verify=True, timeout=5) as client:
+            with _httpx.Client(verify=True, timeout=_get_doh_timeout()) as client:
                 response = client.get(url, headers=headers)
                 data = response.json()
         else:
             req = urllib.request.Request(url, headers=headers)
             ctx = ssl.create_default_context()
-            with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
+            with urllib.request.urlopen(req, timeout=_get_doh_timeout(), context=ctx) as resp:
                 data = json.loads(resp.read().decode())
         
         if data.get("Status") == 0 and "Answer" in data:

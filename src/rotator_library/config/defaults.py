@@ -188,6 +188,46 @@ DNS_CACHE_TTL: int = int(os.getenv("DNS_CACHE_TTL", "300"))
 # Override: DNS_QUERY_TIMEOUT=<seconds>
 DNS_QUERY_TIMEOUT: int = int(os.getenv("DNS_QUERY_TIMEOUT", "10"))
 
+# DNS over HTTPS (DoH) query timeout in seconds
+# Override: HTTP_DOH_TIMEOUT=<seconds>
+HTTP_DOH_TIMEOUT: int = int(os.getenv("HTTP_DOH_TIMEOUT", "5"))
+
+# =============================================================================
+# OAUTH USER FLOW TIMEOUT DEFAULTS
+# =============================================================================
+
+# OAuth user flow timeout in seconds (time for user to complete OAuth)
+# Override: OAUTH_USER_TIMEOUT=<seconds>
+OAUTH_USER_TIMEOUT: int = int(os.getenv("OAUTH_USER_TIMEOUT", "300"))
+
+# OAuth callback wait timeout in seconds
+# Override: OAUTH_CALLBACK_TIMEOUT=<seconds>
+OAUTH_CALLBACK_TIMEOUT: int = int(os.getenv("OAUTH_CALLBACK_TIMEOUT", "310"))
+
+# =============================================================================
+# UI DELAY DEFAULTS
+# =============================================================================
+
+# UI refresh delay in seconds (for TUI consistency)
+# Override: UI_REFRESH_DELAY=<seconds>
+UI_REFRESH_DELAY: float = float(os.getenv("UI_REFRESH_DELAY", "0.3"))
+
+# UI brief pause delay in seconds
+# Override: UI_BRIEF_PAUSE=<seconds>
+UI_BRIEF_PAUSE: float = float(os.getenv("UI_BRIEF_PAUSE", "0.1"))
+
+# =============================================================================
+# RETRY DELAY DEFAULTS
+# =============================================================================
+
+# Brief retry delay in seconds (for quick retries)
+# Override: RETRY_BRIEF_DELAY=<seconds>
+RETRY_BRIEF_DELAY: float = float(os.getenv("RETRY_BRIEF_DELAY", "1.0"))
+
+# OAuth token refresh delay in seconds
+# Override: OAUTH_REFRESH_DELAY=<seconds>
+OAUTH_REFRESH_DELAY: float = float(os.getenv("OAUTH_REFRESH_DELAY", "2.0"))
+
 # =============================================================================
 # CIRCUIT BREAKER DEFAULTS
 # =============================================================================
