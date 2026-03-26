@@ -2420,15 +2420,19 @@ class UsageManager:
                         tier1_keys.sort(key=lambda x: x[1])
                         tier2_keys.sort(key=lambda x: x[1])
 
-                    # Try to reuse an active key for the same model before taking an idle key.
-                    for key, usage in tier1_keys:
+                    # Combine Tier 1 (active) and Tier 2 (idle) keys, sort by usage.
+                    # This ensures proper load balancing by selecting the least-used key
+                    # regardless of whether it's currently active or idle.
+                    all_available_keys = tier1_keys + tier2_keys
+                    all_available_keys.sort(key=lambda x: x[1])
+
+                    for key, usage in all_available_keys:
                         state = self.key_states[key]
                         async with state["lock"]:
                             current_count = state["models_in_use"].get(model, 0)
-                            if (
-                                state["models_in_use"]
-                                and current_count < effective_max_concurrent
-                            ):
+                            if current_count < effective_max_concurrent:
+                                # Track whether this is a reused-active or idle key
+                                is_active = bool(state["models_in_use"])
                                 state["models_in_use"][model] = current_count + 1
                                 tier_name = (
                                     credential_tier_names.get(key, "unknown")
@@ -2436,27 +2440,10 @@ class UsageManager:
                                     else "unknown"
                                 )
                                 quota_display = self._get_quota_display(key, model)
+                                selection_source = "reused-active" if is_active else "idle"
                                 lib_logger.info(
                                     f"Acquired key {mask_credential(key)} for model {model} "
-                                    f"(tier: {tier_name}, priority: {priority_level}, selection: {selection_method}, selection_source: reused-active, concurrent: {state['models_in_use'][model]}/{effective_max_concurrent}, {quota_display})"
-                                )
-                                return key
-
-                    # Then try Tier 2
-                    for key, usage in tier2_keys:
-                        state = self.key_states[key]
-                        async with state["lock"]:
-                            if not state["models_in_use"]:
-                                state["models_in_use"][model] = 1
-                                tier_name = (
-                                    credential_tier_names.get(key, "unknown")
-                                    if credential_tier_names
-                                    else "unknown"
-                                )
-                                quota_display = self._get_quota_display(key, model)
-                                lib_logger.info(
-                                    f"Acquired key {mask_credential(key)} for model {model} "
-                                    f"(tier: {tier_name}, priority: {priority_level}, selection: {selection_method}, selection_source: idle, concurrent: {state['models_in_use'][model]}/{effective_max_concurrent}, {quota_display})"
+                                    f"(tier: {tier_name}, priority: {priority_level}, selection: {selection_method}, selection_source: {selection_source}, concurrent: {state['models_in_use'][model]}/{effective_max_concurrent}, {quota_display})"
                                 )
                                 return key
 
