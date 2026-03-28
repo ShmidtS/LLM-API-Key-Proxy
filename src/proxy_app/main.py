@@ -1575,7 +1575,7 @@ async def token_count(
                 status_code=400, detail="'model' and 'messages' are required."
             )
 
-        count = client.token_count(**data)
+        count = await asyncio.to_thread(client.token_count, **data)
         return {"token_count": count}
 
     except Exception as e:

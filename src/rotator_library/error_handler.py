@@ -30,10 +30,13 @@ from .ip_throttle_detector import (
 from .circuit_breaker import ProviderCircuitBreaker
 from .cooldown_manager import CooldownManager
 
+from .config.defaults import COOLDOWN_RATE_LIMIT_DEFAULT
+
 lib_logger = logging.getLogger("rotator_library")
 
-# Default cooldown for rate limits without retry_after (reduced from 60s)
-RATE_LIMIT_DEFAULT_COOLDOWN = 10  # seconds
+# Default cooldown for rate limits without retry_after
+# Uses centralized value from config/defaults.py
+RATE_LIMIT_DEFAULT_COOLDOWN = COOLDOWN_RATE_LIMIT_DEFAULT  # 60 seconds
 
 # IP-based throttle detection patterns
 # These patterns indicate rate limiting at IP level rather than API key level
@@ -93,6 +96,7 @@ PROXY_PROVIDERS = frozenset(
         "requesty",  # Router/aggregator
         "opencode",  # OpenCode AI provider with quota-based rate limits
         "inception",  # Inception Labs - 429 errors should trigger rotation, not IP throttle
+        "nvidia",  # NVIDIA NIM routes to multiple backends, 429 should rotate keys
     }
 )
 
