@@ -124,6 +124,13 @@ LITELLM_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "synthetic": {
         "category": "popular",
     },
+    "colin": {
+        "category": "popular",
+        "note": "OpenAI Responses API format. Models: gpt-5.3-codex, gpt-4o.",
+        "extra_vars": [
+            ("COLIN_API_BASE", "API Base URL", "https://claude.colin1112.tech/v1"),
+        ],
+    },
     # =========================================================================
     # CLOUD PLATFORMS - Aggregators & cloud inference platforms
     # =========================================================================
@@ -628,6 +635,7 @@ KNOWN_PROVIDERS: Set[str] = _build_known_providers_set()
 
 # Manually add providers with custom plugins that aren't in scraped LiteLLM data
 KNOWN_PROVIDERS.add("trybons")
+KNOWN_PROVIDERS.add("colin")  # COLIN uses OpenAI Responses API format
 
 
 def get_provider_ui_config(provider_key: str) -> Dict[str, Any]:
