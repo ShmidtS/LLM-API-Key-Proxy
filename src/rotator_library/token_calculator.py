@@ -10,6 +10,7 @@ This module calculates balanced max_tokens values based on:
 3. Safety buffer to avoid edge cases
 """
 
+import json
 import logging
 import re
 from typing import Dict, Any, Optional, Tuple
@@ -199,8 +200,6 @@ def count_input_tokens(
     # Count tool definition tokens
     if tools:
         try:
-            import json
-
             tools_json = json.dumps(tools)
             total += token_counter(model=model, text=tools_json)
         except Exception as e:

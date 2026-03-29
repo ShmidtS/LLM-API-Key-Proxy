@@ -166,12 +166,11 @@ class BatchedPersistence:
                 # Ensure directory exists
                 self._file_path.parent.mkdir(parents=True, exist_ok=True)
 
-                # Serialize and write
-                content = self._serializer(self._state)
-
+                # Serialize and write (single serialization path via safe_write_json)
+                data = self._state if isinstance(self._state, dict) else {"data": self._state}
                 success = safe_write_json(
                     self._file_path,
-                    self._state if isinstance(self._state, dict) else {"data": self._state},
+                    data,
                     lib_logger,
                     atomic=True,
                     indent=2,
@@ -181,7 +180,10 @@ class BatchedPersistence:
                     self._dirty = False
                     self._last_write = time.time()
                     self._stats["writes"] += 1
-                    self._stats["bytes_written"] += len(content)
+                    try:
+                        self._stats["bytes_written"] += self._file_path.stat().st_size
+                    except OSError:
+                        pass
                     return True
                 else:
                     self._stats["write_errors"] += 1

@@ -383,6 +383,8 @@ if ENABLE_RAW_LOGGING:
     logging.info("Raw I/O logging is enabled (proxy boundary, unmodified HTTP data).")
 PROXY_API_KEY = os.getenv("PROXY_API_KEY")
 # Note: PROXY_API_KEY validation moved to server startup to allow credential tool to run first
+# Pre-build Bearer string once to avoid f-string on every request
+_BEARER_PROXY_API_KEY = f"Bearer {PROXY_API_KEY}" if PROXY_API_KEY else None
 
 # Cache OVERRIDE_TEMPERATURE_ZERO at module load time (called on every request otherwise)
 OVERRIDE_TEMP_ZERO = os.getenv("OVERRIDE_TEMPERATURE_ZERO", "false").lower()
@@ -748,7 +750,7 @@ async def verify_api_key(auth: str = Depends(api_key_header)):
     # If PROXY_API_KEY is not set or empty, skip verification (open access)
     if not PROXY_API_KEY:
         return auth
-    if not auth or auth != f"Bearer {PROXY_API_KEY}":
+    if not auth or auth != _BEARER_PROXY_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API Key")
     return auth
 
@@ -765,11 +767,14 @@ async def verify_anthropic_api_key(
     Dependency to verify API key for Anthropic endpoints.
     Accepts either x-api-key header (Anthropic style) or Authorization Bearer (OpenAI style).
     """
+    # If PROXY_API_KEY is not set or empty, skip verification (open access)
+    if not PROXY_API_KEY:
+        return x_api_key or auth
     # Check x-api-key first (Anthropic style)
     if x_api_key and x_api_key == PROXY_API_KEY:
         return x_api_key
     # Fall back to Bearer token (OpenAI style)
-    if auth and auth == f"Bearer {PROXY_API_KEY}":
+    if auth and auth == _BEARER_PROXY_API_KEY:
         return auth
     raise HTTPException(status_code=401, detail="Invalid or missing API Key")
 
@@ -968,6 +973,7 @@ async def chat_completions(
     """
     # Raw I/O logger captures unmodified HTTP data at proxy boundary (disabled by default)
     raw_logger = RawIOLogger() if ENABLE_RAW_LOGGING else None
+    request_data: dict = {}
     try:
         # Read and parse the request body only once at the beginning.
         try:
@@ -1071,12 +1077,8 @@ async def chat_completions(
         raise HTTPException(status_code=502, detail=f"Bad Gateway: {str(e)}")
     except Exception as e:
         logging.error(f"Request failed after all retries: {e}")
-        # Optionally log the failed request
+        # Optionally log the failed request (request_data already parsed above)
         if ENABLE_REQUEST_LOGGING:
-            try:
-                request_data = await request.json()
-            except json.JSONDecodeError:
-                request_data = {"error": "Could not parse request body"}
             if raw_logger:
                 raw_logger.log_final_response(
                     status_code=500, headers=None, body={"error": str(e)}

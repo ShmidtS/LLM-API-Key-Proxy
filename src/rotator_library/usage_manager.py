@@ -174,7 +174,7 @@ class UsageManager:
         # Enabled via USAGE_PERSISTENCE_ENABLE=true environment variable
         self._batch_persistence: Optional[UsagePersistenceManager] = None
         self._use_batch_persistence = os.getenv(
-            "USAGE_BATCH_PERSISTENCE", "false"
+            "USAGE_BATCH_PERSISTENCE", "true"
         ).lower() in ("true", "1", "yes")
 
         if daily_reset_time_utc:
