@@ -6,6 +6,7 @@ import os
 # Load .env file BEFORE reading any environment variables
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass  # python-dotenv not installed
@@ -13,6 +14,7 @@ except ImportError:
 # CRITICAL: Apply DNS fix BEFORE importing litellm/aiohttp
 # This fixes DNS hijacking by VPN/proxy/antivirus that returns wrong IPs
 from .dns_fix import apply_dns_fix
+
 apply_dns_fix()
 
 # CRITICAL: Apply finish_reason patch BEFORE importing litellm/openai
@@ -24,14 +26,15 @@ patch_litellm_finish_reason()
 # CRITICAL: Patch aiohttp.TCPConnector to use TLS 1.2 and disable SSL verification
 # This fixes ConnectionResetError and SSLCertVerificationError with servers like noobrouterproduction.azurewebsites.net
 import ssl as _ssl_module
+
 # Azure-compatible cipher suites to fix SSLV3_ALERT_HANDSHAKE_FAILURE
 _AZURE_COMPATIBLE_CIPHERS = (
- "ECDHE-RSA-AES256-GCM-SHA384:"
- "ECDHE-RSA-AES128-GCM-SHA256:"
- "ECDHE-ECDSA-AES256-GCM-SHA384:"
- "ECDHE-ECDSA-AES128-GCM-SHA256:"
- "AES256-GCM-SHA384:"
- "AES128-GCM-SHA256"
+    "ECDHE-RSA-AES256-GCM-SHA384:"
+    "ECDHE-RSA-AES128-GCM-SHA256:"
+    "ECDHE-ECDSA-AES256-GCM-SHA384:"
+    "ECDHE-ECDSA-AES128-GCM-SHA256:"
+    "AES256-GCM-SHA384:"
+    "AES128-GCM-SHA256"
 )
 
 
@@ -39,11 +42,11 @@ def _patch_aiohttp_connector():
     """Patch ssl module and aiohttp.TCPConnector to disable SSL verification."""
     try:
         _ssl_verify = os.environ.get("HTTP_SSL_VERIFY", "true").lower() != "false"
-        
+
         if not _ssl_verify:
             # Global patch: make ssl.create_default_context() return unverified context
             _original_create_default = _ssl_module.create_default_context
-            
+
             def _patched_create_default(*args, **kwargs):
                 ctx = _ssl_module._create_unverified_context()
                 ctx.maximum_version = _ssl_module.TLSVersion.TLSv1_2
@@ -52,21 +55,23 @@ def _patch_aiohttp_connector():
                 except _ssl_module.SSLError:
                     pass
                 return ctx
-            
+
             _ssl_module.create_default_context = _patched_create_default
-            
+
             # Also patch _create_default_context if it exists
-            if hasattr(_ssl_module, '_create_default_context'):
+            if hasattr(_ssl_module, "_create_default_context"):
                 _ssl_module._create_default_context = _patched_create_default
-            
-            print(f"[SSL-FIX] Global ssl.create_default_context patched to return unverified TLS 1.2 context")
-        
+
+            print(
+                f"[SSL-FIX] Global ssl.create_default_context patched to return unverified TLS 1.2 context"
+            )
+
         # Patch aiohttp.TCPConnector
         import aiohttp
         from aiohttp import TCPConnector as _OriginalTCPConnector
-        
+
         _original_init = _OriginalTCPConnector.__init__
-        
+
         def _patched_init(self, *args, **kwargs):
             if not _ssl_verify:
                 ssl_context = _ssl_module._create_unverified_context()
@@ -75,30 +80,31 @@ def _patch_aiohttp_connector():
                     ssl_context.set_ciphers(_AZURE_COMPATIBLE_CIPHERS)
                 except _ssl_module.SSLError:
                     pass
-                kwargs['ssl'] = ssl_context
+                kwargs["ssl"] = ssl_context
             _original_init(self, *args, **kwargs)
-        
+
         _OriginalTCPConnector.__init__ = _patched_init
         print(f"[SSL-FIX] Patched aiohttp.TCPConnector: SSL_VERIFY={_ssl_verify}")
-        
+
         # Patch aiohttp.ClientSession to disable SSL verification
         try:
             _original_request = aiohttp.ClientSession._request
-            
+
             async def _patched_request(self, *args, **kwargs):
                 # Force ssl=False to disable SSL verification
-                kwargs['ssl'] = False
+                kwargs["ssl"] = False
                 return await _original_request(self, *args, **kwargs)
-            
+
             aiohttp.ClientSession._request = _patched_request
             print(f"[SSL-FIX] Patched aiohttp.ClientSession._request to use ssl=False")
         except Exception as e:
             print(f"[SSL-FIX] Failed to patch ClientSession: {e}")
-        
+
     except ImportError:
         pass
     except Exception as e:
         print(f"[SSL-FIX] Failed to patch: {e}")
+
 
 _patch_aiohttp_connector()
 
@@ -162,7 +168,10 @@ from .circuit_breaker import ProviderCircuitBreaker, CircuitState
 from .ip_throttle_detector import IPThrottleDetector, ThrottleScope
 from .credential_manager import CredentialManager
 from .background_refresher import BackgroundRefresher
-from .anthropic_compat.models import AnthropicMessagesRequest, AnthropicCountTokensRequest
+from .anthropic_compat.models import (
+    AnthropicMessagesRequest,
+    AnthropicCountTokensRequest,
+)
 from .model_definitions import ModelDefinitions
 from .transaction_logger import TransactionLogger
 from .utils.paths import get_default_root, get_logs_dir, get_oauth_dir, get_data_file
@@ -1979,14 +1988,8 @@ class RotatingClient:
         error_accumulator.model = model
         error_accumulator.provider = provider
 
-        # Check circuit breaker state (handles IP-level throttling)
-        if not await self.circuit_breaker.can_attempt(provider):
-            lib_logger.warning(
-                f"Circuit breaker OPEN for provider '{provider}', skipping"
-            )
-            raise NoAvailableKeysError(
-                f"Circuit breaker open for provider '{provider}'"
-            )
+        # Circuit breaker check moved to retry loop - allows rotation to other keys
+        # when circuit is OPEN instead of failing immediately on all provider requests
 
         return {
             "model": model,
@@ -2085,6 +2088,14 @@ class RotatingClient:
                 if not creds_to_try:
                     break
 
+                # Check circuit breaker before acquiring key
+                # Skip this iteration if circuit is OPEN, allowing rotation to other keys
+                if not await self.circuit_breaker.can_attempt(provider):
+                    lib_logger.warning(
+                        f"Circuit breaker OPEN for provider '{provider}', skipping"
+                    )
+                    continue
+
                 # Get count of credentials not on cooldown for this model
                 availability_stats = (
                     await self.usage_manager.get_credential_availability_stats(
@@ -2110,6 +2121,7 @@ class RotatingClient:
                     f"Acquiring key for model {model}. Tried keys: {len(tried_creds)}/{available_count}({total_count}{exclusion_str})"
                 )
                 max_concurrent = self.max_concurrent_requests_per_key.get(provider, 1)
+
                 current_cred = await self.usage_manager.acquire_key(
                     available_keys=creds_to_try,
                     model=model,
