@@ -81,6 +81,7 @@ class ColinProvider(ProviderInterface):
         # These are known working models on COLIN
         return [
             "colin/gpt-5.3-codex",
+            "colin/gpt-5.4",
         ]
 
     def has_custom_logic(self) -> bool:
@@ -145,7 +146,9 @@ class ColinProvider(ProviderInterface):
         # Handle tools (function calling)
         if kwargs.get("tools"):
             payload["tools"] = kwargs["tools"]
-            lib_logger.info(f"COLIN: tools parameter present, count={len(kwargs['tools'])}")
+            lib_logger.info(
+                f"COLIN: tools parameter present, count={len(kwargs['tools'])}"
+            )
 
         lib_logger.debug(f"COLIN request: model={model}, stream={stream}")
 
@@ -261,11 +264,15 @@ class ColinProvider(ProviderInterface):
                             if output_item.get("type") == "function_call":
                                 tool_calls.append(
                                     ChatCompletionMessageToolCall(
-                                        id=output_item.get("id", f"call_{len(tool_calls)}"),
+                                        id=output_item.get(
+                                            "id", f"call_{len(tool_calls)}"
+                                        ),
                                         type="function",
                                         function={
                                             "name": output_item.get("name", ""),
-                                            "arguments": output_item.get("arguments", "{}"),
+                                            "arguments": output_item.get(
+                                                "arguments", "{}"
+                                            ),
                                         },
                                     )
                                 )
@@ -381,11 +388,17 @@ class ColinProvider(ProviderInterface):
                                                 content=None,
                                                 tool_calls=[
                                                     {
-                                                        "id": output_item.get("id", f"call_0"),
+                                                        "id": output_item.get(
+                                                            "id", f"call_0"
+                                                        ),
                                                         "type": "function",
                                                         "function": {
-                                                            "name": output_item.get("name", ""),
-                                                            "arguments": output_item.get("arguments", "{}"),
+                                                            "name": output_item.get(
+                                                                "name", ""
+                                                            ),
+                                                            "arguments": output_item.get(
+                                                                "arguments", "{}"
+                                                            ),
                                                         },
                                                     }
                                                 ],

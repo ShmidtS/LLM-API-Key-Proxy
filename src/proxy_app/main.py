@@ -148,21 +148,23 @@ with _console.status("[dim]Loading LiteLLM library...", spinner="dots"):
 
     # CRITICAL: Apply SSL patches IMMEDIATELY after litellm import
     # This must happen BEFORE rotator_library import and BEFORE any API calls
-    # Fixes: Cannot connect to host noobrouterproduction.azurewebsites.net:443 ssl:False
+
     _ssl_verify_env = os.environ.get("HTTP_SSL_VERIFY", "true").lower()
     if _ssl_verify_env == "false":
         print("[SSL-FIX-MAIN] HTTP_SSL_VERIFY=false - Applying SSL patches in main.py")
-        
+
         # 1. Set litellm's SSL verification to False
         litellm.ssl_verify = False
         print(f"[SSL-FIX-MAIN] Set litellm.ssl_verify = False")
-        
+
         # 2. Create pre-configured httpx clients with SSL verification disabled
         # This is the MOST RELIABLE way to disable SSL in litellm
         litellm.client_session = httpx.Client(verify=False)
         litellm.aclient_session = httpx.AsyncClient(verify=False)
-        print(f"[SSL-FIX-MAIN] Created litellm.client_session and aclient_session with verify=False")
-        
+        print(
+            f"[SSL-FIX-MAIN] Created litellm.client_session and aclient_session with verify=False"
+        )
+
         # 3. Set environment variable for litellm
         os.environ["SSL_VERIFY"] = "False"
         print(f"[SSL-FIX-MAIN] Set SSL_VERIFY=False environment variable")
@@ -836,7 +838,9 @@ async def streaming_response_wrapper(
             # Use lists for O(n) string building instead of O(n²) repeated concatenation
             _content_parts: list = []
             _generic_str_parts: dict = {}  # key -> list of str parts
-            aggregated_tool_calls = {}  # index -> {type, id, function: {name_parts, args_parts}}
+            aggregated_tool_calls = (
+                {}
+            )  # index -> {type, id, function: {name_parts, args_parts}}
             usage_data = None
             finish_reason = None
 
@@ -860,7 +864,10 @@ async def streaming_response_wrapper(
                                 if index not in aggregated_tool_calls:
                                     aggregated_tool_calls[index] = {
                                         "type": "function",
-                                        "function": {"name_parts": [], "args_parts": []},
+                                        "function": {
+                                            "name_parts": [],
+                                            "args_parts": [],
+                                        },
                                     }
                                 tc = aggregated_tool_calls[index]
                                 if tc_chunk.get("id"):
@@ -870,7 +877,9 @@ async def streaming_response_wrapper(
                                     if fn.get("name") is not None:
                                         tc["function"]["name_parts"].append(fn["name"])
                                     if fn.get("arguments") is not None:
-                                        tc["function"]["args_parts"].append(fn["arguments"])
+                                        tc["function"]["args_parts"].append(
+                                            fn["arguments"]
+                                        )
 
                         elif key == "function_call":
                             if "function_call" not in final_message:
@@ -879,9 +888,13 @@ async def streaming_response_wrapper(
                                     "_args_parts": [],
                                 }
                             if value.get("name") is not None:
-                                final_message["function_call"]["_name_parts"].append(value["name"])
+                                final_message["function_call"]["_name_parts"].append(
+                                    value["name"]
+                                )
                             if value.get("arguments") is not None:
-                                final_message["function_call"]["_args_parts"].append(value["arguments"])
+                                final_message["function_call"]["_args_parts"].append(
+                                    value["arguments"]
+                                )
 
                         else:  # Generic key handling for other data like 'reasoning'
                             # FIX: Role should always replace, never concatenate
@@ -912,14 +925,16 @@ async def streaming_response_wrapper(
                 tool_calls_list = []
                 for tc in aggregated_tool_calls.values():
                     fn = tc["function"]
-                    tool_calls_list.append({
-                        "id": tc.get("id"),
-                        "type": tc["type"],
-                        "function": {
-                            "name": "".join(fn["name_parts"]),
-                            "arguments": "".join(fn["args_parts"]),
-                        },
-                    })
+                    tool_calls_list.append(
+                        {
+                            "id": tc.get("id"),
+                            "type": tc["type"],
+                            "function": {
+                                "name": "".join(fn["name_parts"]),
+                                "arguments": "".join(fn["args_parts"]),
+                            },
+                        }
+                    )
                 final_message["tool_calls"] = tool_calls_list
                 # CRITICAL FIX: Override finish_reason when tool_calls exist
                 # This ensures OpenCode and other agentic systems continue the conversation loop

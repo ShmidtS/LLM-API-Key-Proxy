@@ -37,7 +37,9 @@ lib_logger = logging.getLogger("rotator_library")
 
 
 # Configuration defaults (overridable via environment)
-DEFAULT_MAX_KEEPALIVE_CONNECTIONS = 100  # Increased for high-throughput NVIDIA/OpenAI workloads
+DEFAULT_MAX_KEEPALIVE_CONNECTIONS = (
+    100  # Increased for high-throughput NVIDIA/OpenAI workloads
+)
 DEFAULT_MAX_CONNECTIONS = 500  # Supports 100+ parallel NVIDIA requests
 DEFAULT_KEEPALIVE_EXPIRY = 60.0  # Seconds to keep idle connections alive
 DEFAULT_WARMUP_CONNECTIONS = 3  # Connections to pre-warm per provider
@@ -54,10 +56,11 @@ AZURE_COMPATIBLE_CIPHERS = (
     "ECDH+3DES:DH+3DES:RSA+AESGCM:RSA+AES:RSA+3DES:!aNULL:!MD5:!DSS"
 )
 
+
 def _env_ssl_verify() -> Union[bool, List[str]]:
     """
     Parse SSL verification configuration from environment.
-    
+
     Returns:
         True: Standard SSL verification (default)
         False: Disable SSL verification globally
@@ -70,13 +73,13 @@ def _env_ssl_verify() -> Union[bool, List[str]]:
             "This is insecure and should only be used for testing."
         )
         return False
-    
+
     # Check per-host SSL verification overrides
     hosts_str = os.getenv("HTTP_SSL_VERIFY_HOSTS", "").strip()
 
     # Default hosts that need SSL bypass due to Azure SSLV3_ALERT_HANDSHAKE_FAILURE
     DEFAULT_SSL_BYPASS_HOSTS = [
-        "noobrouterproduction.azurewebsites.net",
+        "chatgpt.com",
     ]
 
     hosts = []
@@ -98,14 +101,12 @@ def _env_ssl_verify() -> Union[bool, List[str]]:
     return True
 
 
-
-
 def should_skip_ssl_for_host(host: str, ssl_verify: Union[bool, List[str]]) -> bool:
     """
     Check if SSL verification should be skipped for a specific host.
 
     Args:
-        host: Hostname to check (e.g., "noobrouterproduction.azurewebsites.net")
+        host: Hostname to check (e.g., "chatgpt.com")
         ssl_verify: SSL verification setting from _env_ssl_verify()
 
     Returns:
@@ -122,21 +123,23 @@ def should_skip_ssl_for_host(host: str, ssl_verify: Union[bool, List[str]]) -> b
                 return True
     return False
 
+
 def _create_custom_dns_resolver(dns_host: str, dns_port: int = DEFAULT_DNS_PORT):
     """
     Create a custom DNS resolver for httpx.
-    
+
     This allows bypassing system DNS which may be hijacked by VPN/proxy/antivirus.
-    
+
     Args:
         dns_host: DNS server IP (e.g., "8.8.8.8", "1.1.1.1")
         dns_port: DNS server port (default: 53)
-    
+
     Returns:
         httpx.AsyncDNSResolver instance
     """
     try:
         import httpx
+
         # httpx.AsyncDNSResolver uses aiodns by default
         # We need to create a custom resolver that uses the specified DNS server
         resolver = httpx.AsyncDNSResolver(
@@ -207,10 +210,10 @@ class HttpClientPool:
         self._warmup_count = warmup_connections or _env_int(
             "HTTP_WARMUP_CONNECTIONS", DEFAULT_WARMUP_CONNECTIONS
         )
-        
+
         # SSL configuration
         self._ssl_verify = ssl_verify if ssl_verify is not None else _env_ssl_verify()
-        
+
         # Log SSL configuration
         if isinstance(self._ssl_verify, bool):
             if not self._ssl_verify:
@@ -221,21 +224,21 @@ class HttpClientPool:
             lib_logger.info(
                 f"HTTP client pool: SSL verification disabled for hosts: {self._ssl_verify}"
             )
-        
+
         # HTTP/2 configuration (can be disabled for problematic providers)
         self._http2_enabled = _env_bool("HTTP2_ENABLED", DEFAULT_HTTP2_ENABLED)
         if not self._http2_enabled:
             lib_logger.warning(
                 "HTTP/2 is DISABLED via HTTP2_ENABLED. Using HTTP/1.1 only."
             )
-        
+
         # Custom DNS resolver (for DNS resolution issues)
         self._dns_resolver = os.getenv("HTTP_DNS_RESOLVER", DEFAULT_DNS_RESOLVER)
         if self._dns_resolver:
             lib_logger.info(
                 f"HTTP client pool: Using custom DNS resolver: {self._dns_resolver}"
             )
-        
+
         # Client instances (lazy initialization)
         self._streaming_client: Optional[httpx.AsyncClient] = None
         self._non_streaming_client: Optional[httpx.AsyncClient] = None
@@ -284,7 +287,9 @@ class HttpClientPool:
 
         # Create SSL context with TLS 1.2 for compatibility with servers that don't support TLS 1.3
         ssl_context = ssl.create_default_context()
-        ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2  # Allow TLS 1.2 and 1.3 for Azure compatibility
+        ssl_context.minimum_version = (
+            ssl.TLSVersion.TLSv1_2
+        )  # Allow TLS 1.2 and 1.3 for Azure compatibility
 
         # Set Azure-compatible cipher suites to fix SSLV3_ALERT_HANDSHAKE_FAILURE
         try:
@@ -305,7 +310,7 @@ class HttpClientPool:
             "http1": True,
             "verify": ssl_context,
         }
-        
+
         # Configure custom DNS resolver if specified
         # This allows bypassing system DNS which may be hijacked by VPN/proxy/antivirus
         if self._dns_resolver:
@@ -313,7 +318,7 @@ class HttpClientPool:
                 # Parse DNS resolver (format: "host" or "host:port")
                 dns_host = self._dns_resolver
                 dns_port = DEFAULT_DNS_PORT
-                
+
                 if ":" in self._dns_resolver:
                     parts = self._dns_resolver.rsplit(":", 1)
                     dns_host = parts[0]
@@ -321,7 +326,7 @@ class HttpClientPool:
                         dns_port = int(parts[1])
                     except ValueError:
                         pass
-                
+
                 # Create custom transport with DNS resolver
                 transport = httpx.AsyncHTTPTransport(
                     verify=ssl_context,
@@ -331,18 +336,18 @@ class HttpClientPool:
                     # We'll use a workaround by setting the resolver in the environment
                     # and letting aiohttp handle it
                 )
-                
+
                 lib_logger.info(
                     f"Using custom DNS resolver: {dns_host}:{dns_port} "
                     f"(Note: DNS resolution will be handled by aiohttp)"
                 )
-                
+
             except Exception as e:
                 lib_logger.warning(
                     f"Failed to configure custom DNS resolver {self._dns_resolver}: {e}. "
                     f"Falling back to system DNS."
                 )
-        
+
         client = httpx.AsyncClient(**client_kwargs)
 
         lib_logger.debug(
@@ -413,14 +418,20 @@ class HttpClientPool:
                 except httpx.ConnectError as e:
                     # Check if it's an SSL-related error
                     error_str = str(e).lower()
-                    if "ssl" in error_str or "certificate" in error_str or "tls" in error_str:
+                    if (
+                        "ssl" in error_str
+                        or "certificate" in error_str
+                        or "tls" in error_str
+                    ):
                         ssl_errors.append((host, str(e)))
                         lib_logger.warning(
                             f"SSL/TLS connection error during warmup for {host}: {e}. "
                             f"Consider adding '{host}' to HTTP_SSL_VERIFY_HOSTS environment variable."
                         )
                     else:
-                        lib_logger.debug(f"Warmup connection error for {host}: {type(e).__name__}: {e}")
+                        lib_logger.debug(
+                            f"Warmup connection error for {host}: {type(e).__name__}: {e}"
+                        )
                 except Exception as e:
                     # Connection errors during warmup are not critical
                     lib_logger.debug(f"Warmup error for {host}: {type(e).__name__}")
@@ -430,7 +441,7 @@ class HttpClientPool:
 
         if warmed > 0:
             lib_logger.info(f"Pre-warmed {warmed} connection(s) in {elapsed:.2f}s")
-        
+
         # Log summary of SSL errors if any occurred
         if ssl_errors:
             lib_logger.warning(
