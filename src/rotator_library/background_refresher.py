@@ -68,20 +68,15 @@ class BackgroundRefresher:
 
     async def stop(self):
         """Stops all background tasks (main loop + provider jobs)."""
-        # Cancel provider job tasks first (parallel cancel)
-        tasks_to_cancel = [
-            (provider, task)
-            for provider, task in self._provider_job_tasks.items()
-            if task and not task.done()
-        ]
-        for provider, task in tasks_to_cancel:
-            task.cancel()
-        results = await asyncio.gather(
-            *[task for _, task in tasks_to_cancel],
-            return_exceptions=True
-        )
-        for (provider, _), result in zip(tasks_to_cancel, results):
-            lib_logger.debug(f"Stopped background job for '{provider}'")
+        # Cancel provider job tasks first
+        for provider, task in self._provider_job_tasks.items():
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                lib_logger.debug(f"Stopped background job for '{provider}'")
 
         self._provider_job_tasks.clear()
 
@@ -290,15 +285,13 @@ class BackgroundRefresher:
                     if provider_plugin and hasattr(
                         provider_plugin, "proactively_refresh"
                     ):
-                    refresh_tasks = [
-                        provider_plugin.proactively_refresh(path) for path in paths
-                    ]
-                    results = await asyncio.gather(*refresh_tasks, return_exceptions=True)
-                    for path, result in zip(paths, results):
-                        if isinstance(result, Exception):
-                            lib_logger.error(
-                                f"Error during proactive refresh for '{path}': {result}"
-                            )
+                        for path in paths:
+                            try:
+                                await provider_plugin.proactively_refresh(path)
+                            except Exception as e:
+                                lib_logger.error(
+                                    f"Error during proactive refresh for '{path}': {e}"
+                                )
 
                 await asyncio.sleep(self._interval)
             except asyncio.CancelledError:
