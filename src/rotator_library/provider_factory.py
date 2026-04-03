@@ -1,21 +1,12 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 Mirrowel
 
-# src/rotator_library/provider_factory.py
+"""Compatibility shim for credential/auth provider lookup."""
 
-from .providers.gemini_auth_base import GeminiAuthBase
-from .providers.qwen_auth_base import QwenAuthBase
-from .providers.iflow_auth_base import IFlowAuthBase
-from .providers.antigravity_auth_base import AntigravityAuthBase
-from .providers.colin_provider import ColinProvider
+from .providers import PROVIDER_AUTH_MAP
 
-PROVIDER_MAP = {
-    "gemini_cli": GeminiAuthBase,
-    "qwen_code": QwenAuthBase,
-    "iflow": IFlowAuthBase,
-    "antigravity": AntigravityAuthBase,
-    "colin": ColinProvider,
-}
+PROVIDER_MAP = PROVIDER_AUTH_MAP
+
 
 def get_provider_auth_class(provider_name: str):
     """
@@ -25,6 +16,7 @@ def get_provider_auth_class(provider_name: str):
     if not provider_class:
         raise ValueError(f"Unknown provider: {provider_name}")
     return provider_class
+
 
 def get_available_providers():
     """

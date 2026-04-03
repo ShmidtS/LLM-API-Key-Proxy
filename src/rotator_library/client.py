@@ -721,6 +721,65 @@ class RotatingClient:
         # Track consecutive quota failures per credential for intelligent rotation
         self._consecutive_quota_failures: Dict[str, int] = {}
 
+    def _build_request_headers(self, request: Optional[Any]) -> Dict[str, Any]:
+        """Build a stable request headers dict for failure logging."""
+        if request is None:
+            return {}
+        headers = getattr(request, "headers", None)
+        return dict(headers) if headers else {}
+
+    def _prepare_request_kwargs(
+        self,
+        base_kwargs: Dict[str, Any],
+        provider: str,
+        credential: str,
+        model: str,
+        *,
+        include_reasoning_effort: bool = False,
+    ) -> Dict[str, Any]:
+        """Clone and normalize per-attempt request kwargs before provider execution."""
+        litellm_kwargs = base_kwargs.copy()
+
+        self._strip_client_headers(litellm_kwargs)
+        self._apply_provider_headers(litellm_kwargs, provider, credential)
+
+        if include_reasoning_effort and "reasoning_effort" in base_kwargs:
+            litellm_kwargs["reasoning_effort"] = base_kwargs["reasoning_effort"]
+
+        if provider in self.litellm_provider_params:
+            litellm_kwargs["litellm_params"] = {
+                **self.litellm_provider_params[provider],
+                **litellm_kwargs.get("litellm_params", {}),
+            }
+
+        provider_plugin = self._get_provider_instance(provider)
+        if provider_plugin and hasattr(provider_plugin, "get_model_options"):
+            model_options = provider_plugin.get_model_options(model)
+            if model_options:
+                for key, value in model_options.items():
+                    if key == "reasoning_effort":
+                        litellm_kwargs["reasoning_effort"] = value
+                    elif key not in litellm_kwargs:
+                        litellm_kwargs[key] = value
+
+        return litellm_kwargs
+
+    async def _sleep_within_budget(
+        self, attempt: int, deadline: float, classified_error: "ClassifiedError"
+    ) -> bool:
+        """Sleep using shared retry policy when remaining budget allows it."""
+        base_wait = classified_error.retry_after or (2**attempt)
+        wait_time = base_wait
+        if classified_error.retry_after is None:
+            wait_time += random.uniform(0, base_wait * 0.1)
+
+        remaining_budget = deadline - time.time()
+        if wait_time > remaining_budget:
+            return False
+
+        await asyncio.sleep(wait_time)
+        return True
+
     async def _process_rate_limit(
         self,
         provider: str,
@@ -2186,36 +2245,9 @@ class RotatingClient:
                 key_acquired = True
                 tried_creds.add(current_cred)
 
-                litellm_kwargs = kwargs.copy()
-
-                # [FIX] Remove client-provided headers/api_key that could override provider credentials
-                self._strip_client_headers(litellm_kwargs)
-
-                # Also clean nested headers in extra_body and headers params
-                self._apply_provider_headers(litellm_kwargs, provider, current_cred)
-
-                # [NEW] Merge provider-specific params
-                if provider in self.litellm_provider_params:
-                    litellm_kwargs["litellm_params"] = {
-                        **self.litellm_provider_params[provider],
-                        **litellm_kwargs.get("litellm_params", {}),
-                    }
-
-                provider_plugin = self._get_provider_instance(provider)
-
-                # Model ID is already resolved before the loop, and kwargs['model'] is updated.
-                # No further resolution needed here.
-
-                # Apply model-specific options for custom providers
-                if provider_plugin and hasattr(provider_plugin, "get_model_options"):
-                    model_options = provider_plugin.get_model_options(model)
-                    if model_options:
-                        # Merge model options into litellm_kwargs
-                        for key, value in model_options.items():
-                            if key == "reasoning_effort":
-                                litellm_kwargs["reasoning_effort"] = value
-                            elif key not in litellm_kwargs:
-                                litellm_kwargs[key] = value
+                litellm_kwargs = self._prepare_request_kwargs(
+                    kwargs, provider, current_cred, model
+                )
 
                 if provider_plugin and provider_plugin.has_custom_logic():
                     lib_logger.debug(
@@ -2290,9 +2322,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=(
-                                    dict(request.headers) if request else {}
-                                ),
+                                request_headers=self._build_request_headers(request),
                             )
 
                             # Record in accumulator for client reporting
@@ -2345,9 +2375,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=(
-                                    dict(request.headers) if request else {}
-                                ),
+                                request_headers=self._build_request_headers(request),
                             )
                             classified_error = classify_error(e, provider=provider)
                             error_message = str(e).split("\n")[0]
@@ -2369,23 +2397,20 @@ class RotatingClient:
                                 )
                                 break
 
-                            base_wait = classified_error.retry_after or (2**attempt)
-                            jitter = random.uniform(0, base_wait * 0.1)
-                            wait_time = base_wait + jitter
-                            remaining_budget = deadline - time.time()
-                            if wait_time > remaining_budget:
+                            if not await self._sleep_within_budget(
+                                attempt, deadline, classified_error
+                            ):
                                 error_accumulator.record_error(
                                     current_cred, classified_error, error_message
                                 )
                                 lib_logger.warning(
-                                    f"Retry wait ({wait_time:.2f}s) exceeds budget. Rotating."
+                                    f"Retry wait exceeds budget. Rotating."
                                 )
                                 break
 
                             lib_logger.warning(
-                                f"Cred {mask_credential(current_cred)} server error. Retrying in {wait_time:.2f}s."
+                                f"Cred {mask_credential(current_cred)} server error. Retrying within remaining budget."
                             )
-                            await asyncio.sleep(wait_time)
 
                             # Reset LiteLLM internal HTTP client cache on connection errors
                             if isinstance(
@@ -2560,9 +2585,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=(
-                                    dict(request.headers) if request else {}
-                                ),
+                                request_headers=self._build_request_headers(request),
                             )
                             classified_error = classify_error(e, provider=provider)
 
@@ -2610,9 +2633,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=(
-                                    dict(request.headers) if request else {}
-                                ),
+                                request_headers=self._build_request_headers(request),
                             )
                             classified_error = classify_error(e, provider=provider)
                             error_message = str(e).split("\n")[0]
@@ -2678,9 +2699,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=(
-                                    dict(request.headers) if request else {}
-                                ),
+                                request_headers=self._build_request_headers(request),
                             )
 
                             classified_error = classify_error(e, provider=provider)
@@ -2745,9 +2764,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=(
-                                    dict(request.headers) if request else {}
-                                ),
+                                request_headers=self._build_request_headers(request),
                             )
 
                             if request and await request.is_disconnected():
@@ -3393,9 +3410,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=(
-                                    dict(request.headers) if request else {}
-                                ),
+                                request_headers=self._build_request_headers(request),
                                 raw_response_text=cleaned_str,
                             )
 
@@ -3508,9 +3523,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=(
-                                    dict(request.headers) if request else {}
-                                ),
+                                request_headers=self._build_request_headers(request),
                             )
                             classified_error = classify_error(e, provider=provider)
                             error_message_text = str(e).split("\n")[0]
@@ -3542,20 +3555,17 @@ class RotatingClient:
                             ) and "client has been closed" in str(e):
                                 self._reset_litellm_client_cache()
 
-                            base_wait = classified_error.retry_after or (2**attempt)
-                            jitter = random.uniform(0, base_wait * 0.1)
-                            wait_time = base_wait + jitter
-                            remaining_budget = deadline - time.time()
-                            if wait_time > remaining_budget:
+                            if not await self._sleep_within_budget(
+                                attempt, deadline, classified_error
+                            ):
                                 lib_logger.warning(
-                                    f"Required retry wait time ({wait_time:.2f}s) exceeds remaining budget ({remaining_budget:.2f}s). Rotating key early."
+                                    f"Required retry wait exceeds remaining budget. Rotating key early."
                                 )
                                 break
 
                             lib_logger.warning(
-                                f"Credential {mask_credential(current_cred)} encountered a server error for model {model}. Reason: '{error_message_text}'. Retrying in {wait_time:.2f}s."
+                                f"Credential {mask_credential(current_cred)} encountered a server error for model {model}. Reason: '{error_message_text}'. Retrying within remaining budget."
                             )
-                            await asyncio.sleep(wait_time)
 
                             # CRITICAL: Ensure HTTP client is usable before retry
                             # Connection errors can leave the client in a closed state
@@ -3570,9 +3580,7 @@ class RotatingClient:
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=(
-                                    dict(request.headers) if request else {}
-                                ),
+                                request_headers=self._build_request_headers(request),
                             )
                             classified_error = classify_error(e, provider=provider)
                             error_message_text = str(e).split("\n")[0]

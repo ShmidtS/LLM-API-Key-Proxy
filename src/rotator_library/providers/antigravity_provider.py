@@ -52,6 +52,9 @@ from .utilities.antigravity_quota_tracker import AntigravityQuotaTracker
 from .utilities.gemini_shared_utils import (
     env_bool,
     env_int,
+    alias_to_internal_model,
+    internal_to_alias_model,
+    map_finish_reason,
     inline_schema_refs,
     normalize_type_arrays,
     recursively_parse_json_strings,
@@ -1464,13 +1467,11 @@ class AntigravityProvider(
 
     def _alias_to_internal(self, alias: str) -> str:
         """Convert public alias to internal model name."""
-        return MODEL_ALIAS_REVERSE.get(alias, alias)
+        return alias_to_internal_model(alias, MODEL_ALIAS_REVERSE)
 
     def _internal_to_alias(self, internal: str) -> str:
         """Convert internal model name to public alias."""
-        if internal in EXCLUDED_MODELS:
-            return ""
-        return MODEL_ALIAS_MAP.get(internal, internal)
+        return internal_to_alias_model(internal, MODEL_ALIAS_MAP, EXCLUDED_MODELS)
 
     def _is_gemini_3(self, model: str) -> bool:
         """Check if model is Gemini 3 (requires special handling)."""
@@ -3761,10 +3762,7 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
         self, gemini_reason: Optional[str], has_tool_calls: bool
     ) -> Optional[str]:
         """Map Gemini finish reason to OpenAI format."""
-        if not gemini_reason:
-            return None
-        reason = FINISH_REASON_MAP.get(gemini_reason, "stop")
-        return "tool_calls" if has_tool_calls else reason
+        return map_finish_reason(gemini_reason, has_tool_calls)
 
     def _build_usage(self, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Build usage dict from Gemini usage metadata.

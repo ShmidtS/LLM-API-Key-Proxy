@@ -6,11 +6,25 @@ import pkgutil
 import os
 from typing import Dict, Type
 from .provider_interface import ProviderInterface
+from .gemini_auth_base import GeminiAuthBase
+from .qwen_auth_base import QwenAuthBase
+from .iflow_auth_base import IFlowAuthBase
+from .antigravity_auth_base import AntigravityAuthBase
+from .colin_provider import ColinProvider
 
 # --- Provider Plugin System ---
 
 # Dictionary to hold discovered provider classes, mapping provider name to class
 PROVIDER_PLUGINS: Dict[str, Type[ProviderInterface]] = {}
+
+# Compatibility registry for auth/credential tooling imports.
+PROVIDER_AUTH_MAP: Dict[str, type] = {
+    "gemini_cli": GeminiAuthBase,
+    "qwen_code": QwenAuthBase,
+    "iflow": IFlowAuthBase,
+    "antigravity": AntigravityAuthBase,
+    "colin": ColinProvider,
+}
 
 
 class DynamicOpenAICompatibleProvider:

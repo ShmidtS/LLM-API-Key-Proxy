@@ -108,6 +108,41 @@ DEFAULT_GEMINI_SAFETY_SETTINGS_MAP: Dict[str, str] = {
     item["category"]: item["threshold"] for item in DEFAULT_SAFETY_SETTINGS
 }
 
+# Shared model alias mappings for Gemini-family public/internal names
+GEMINI_MODEL_ALIAS_MAP: Dict[str, str] = {
+    "gemini-3-pro-low": "gemini-3-pro-preview",
+    "gemini-3-pro-high": "gemini-3-pro-preview",
+}
+GEMINI_MODEL_ALIAS_REVERSE: Dict[str, str] = {
+    v: k for k, v in GEMINI_MODEL_ALIAS_MAP.items()
+}
+
+
+def alias_to_internal_model(alias: str, reverse_alias_map: Dict[str, str]) -> str:
+    """Convert a public model alias to its internal model name."""
+    return reverse_alias_map.get(alias, alias)
+
+
+def internal_to_alias_model(
+    internal: str,
+    alias_map: Dict[str, str],
+    excluded_models: Optional[set[str]] = None,
+) -> str:
+    """Convert an internal model name to its public alias."""
+    if excluded_models and internal in excluded_models:
+        return ""
+    return alias_map.get(internal, internal)
+
+
+def map_finish_reason(
+    gemini_reason: Optional[str], has_tool_calls: bool
+) -> Optional[str]:
+    """Map Gemini finish reason to OpenAI format."""
+    if not gemini_reason:
+        return None
+    reason = FINISH_REASON_MAP.get(gemini_reason, "stop")
+    return "tool_calls" if has_tool_calls else reason
+
 
 # =============================================================================
 # SCHEMA TRANSFORMATION FUNCTIONS

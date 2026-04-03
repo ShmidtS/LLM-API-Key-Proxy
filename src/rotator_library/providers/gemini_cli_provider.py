@@ -18,6 +18,7 @@ from .utilities.gemini_shared_utils import (
     env_bool,
     env_int,
     inline_schema_refs,
+    clean_gemini_schema,
     recursively_parse_json_strings,
     GEMINI3_TOOL_RENAMES,
     GEMINI3_TOOL_RENAMES_REVERSE,
@@ -1184,38 +1185,7 @@ class GeminiCliProvider(
         - Removes unsupported properties like `strict`.
         - Preserves `additionalProperties` for _enforce_strict_schema to handle.
         """
-        if not isinstance(schema, dict):
-            return schema
-
-        # Handle nullable types
-        if "type" in schema and isinstance(schema["type"], list):
-            types = schema["type"]
-            if "null" in types:
-                schema["nullable"] = True
-                remaining_types = [t for t in types if t != "null"]
-                if len(remaining_types) == 1:
-                    schema["type"] = remaining_types[0]
-                elif len(remaining_types) > 1:
-                    schema["type"] = (
-                        remaining_types  # Let's see if Gemini supports this
-                    )
-                else:
-                    del schema["type"]
-
-        # Recurse into properties
-        if "properties" in schema and isinstance(schema["properties"], dict):
-            for prop_schema in schema["properties"].values():
-                self._gemini_cli_transform_schema(prop_schema)
-
-        # Recurse into items (for arrays)
-        if "items" in schema and isinstance(schema["items"], dict):
-            self._gemini_cli_transform_schema(schema["items"])
-
-        # Clean up unsupported properties
-        schema.pop("strict", None)
-        # Note: additionalProperties is preserved for _enforce_strict_schema to handle
-
-        return schema
+        return clean_gemini_schema(schema)
 
     def _transform_tool_schemas(
         self, tools: List[Dict[str, Any]], model: str = ""
