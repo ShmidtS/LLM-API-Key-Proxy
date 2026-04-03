@@ -449,39 +449,44 @@ class HttpClientPool:
         if not client:
             return
 
+        # Build list of all warmup tasks (parallel execution)
+        warmup_tasks = []
         for host in self._warmup_hosts[:5]:  # Limit to 5 hosts for warmup
-            # Use _warmup_count connections per host for proper pool priming
             for _ in range(self._warmup_count):
-                try:
-                    # Make a lightweight HEAD request to establish connection
-                    # Most APIs will respond quickly to HEAD /
-                    await asyncio.wait_for(
-                        client.head(host, follow_redirects=True),
-                        timeout=DEFAULT_WARMUP_TIMEOUT,
-                    )
-                    warmed += 1
-                except asyncio.TimeoutError:
-                    lib_logger.debug(f"Warmup timeout for {host}")
-                except httpx.ConnectError as e:
-                    # Check if it's an SSL-related error
-                    error_str = str(e).lower()
-                    if (
-                        "ssl" in error_str
-                        or "certificate" in error_str
-                        or "tls" in error_str
-                    ):
-                        ssl_errors.append((host, str(e)))
-                        lib_logger.warning(
-                            f"SSL/TLS connection error during warmup for {host}: {e}. "
-                            f"Consider adding '{host}' to HTTP_SSL_VERIFY_HOSTS environment variable."
-                        )
+                warmup_tasks.append(client.head(host, follow_redirects=True))
+
+        # Execute all warmup requests in parallel with graceful error handling
+        results = await asyncio.gather(*warmup_tasks, return_exceptions=True)
+
+        # Process results and track errors
+        task_idx = 0
+        for host in self._warmup_hosts[:5]:
+            for _ in range(self._warmup_count):
+                result = results[task_idx]
+                task_idx += 1
+                if isinstance(result, Exception):
+                    if isinstance(result, asyncio.TimeoutError):
+                        lib_logger.debug(f"Warmup timeout for {host}")
+                    elif isinstance(result, httpx.ConnectError):
+                        error_str = str(result).lower()
+                        if (
+                            "ssl" in error_str
+                            or "certificate" in error_str
+                            or "tls" in error_str
+                        ):
+                            ssl_errors.append((host, str(result)))
+                            lib_logger.warning(
+                                f"SSL/TLS connection error during warmup for {host}: {result}. "
+                                f"Consider adding '{host}' to HTTP_SSL_VERIFY_HOSTS environment variable."
+                            )
+                        else:
+                            lib_logger.debug(
+                                f"Warmup connection error for {host}: {type(result).__name__}: {result}"
+                            )
                     else:
-                        lib_logger.debug(
-                            f"Warmup connection error for {host}: {type(e).__name__}: {e}"
-                        )
-                except Exception as e:
-                    # Connection errors during warmup are not critical
-                    lib_logger.debug(f"Warmup error for {host}: {type(e).__name__}")
+                        lib_logger.debug(f"Warmup error for {host}: {type(result).__name__}")
+                else:
+                    warmed += 1
 
         self._warmed_up = True
         elapsed = time.time() - start_time
