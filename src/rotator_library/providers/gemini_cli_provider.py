@@ -497,32 +497,8 @@ class GeminiCliProvider(
         # Native format: GeminiCLI/${version}/${model} (${platform}; ${arch})
         user_agent = f"GeminiCLI/0.26.0/{model_name} (win32; x64)"
 
-        # =========================================================================
-        # COMMENTED OUT HEADERS - Not sent by native gemini-cli for Code Assist path
-        # Keeping these for reference as they worked well for SDK mimicry.
-        # Uncomment if rate limiting issues arise and you want to try SDK fingerprinting.
-        # =========================================================================
-
-        # X-Goog-Api-Client: Mimics @google/genai SDK but native CLI doesn't send this
-        # for OAuth/Code Assist path (only set when using API key authentication)
-        # x_goog_api_client = "gl-node/22.17.0 gdcl/1.30.0"
-
-        # Client-Metadata: Native CLI sends this in REQUEST BODY for management endpoints
-        # (loadCodeAssist, onboardUser, listExperiments, recordCodeAssistMetrics)
-        # but NOT as an HTTP header for generateContent requests.
-        # client_metadata = (
-        #     "ideType=IDE_UNSPECIFIED,"
-        #     "pluginType=GEMINI,"
-        #     "ideVersion=0.26.0,"
-        #     "platform=WINDOWS_AMD64,"
-        #     "updateChannel=stable"
-        # )
-
         return {
             "User-Agent": user_agent,
-            # "X-Goog-Api-Client": x_goog_api_client,  # Not sent by native CLI
-            # "Client-Metadata": client_metadata,      # Not sent as header by native CLI
-            # "Accept": "application/json",            # Not explicitly sent by native CLI
         }
 
     def _get_available_models(self) -> List[str]:

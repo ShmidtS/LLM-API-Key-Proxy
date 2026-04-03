@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ..async_locks import ReadWriteLock
 from ..config import env_bool as _env_bool, env_int as _env_int
 from ..utils.resilient_io import safe_write_json
 
@@ -86,7 +87,7 @@ class ProviderCache:
         self._cache: Dict[str, Dict[str, float | str]] = {}
         self._memory_ttl = memory_ttl_seconds
         self._disk_ttl = disk_ttl_seconds
-        self._lock = asyncio.Lock()
+        self._rw_lock = ReadWriteLock()
         self._disk_lock = asyncio.RLock()
         self._max_entries = max_entries
         self._evicted_count = 0
@@ -324,7 +325,7 @@ class ProviderCache:
         Only cleans memory - disk entries are preserved and cleaned during
         _save_to_disk() based on their own disk_ttl.
         """
-        async with self._lock:
+        async with self._rw_lock.write():
             now = time.time()
             # Enforce LRU bound before TTL cleanup
             while len(self._cache) >= self._max_entries:
@@ -363,7 +364,7 @@ class ProviderCache:
     async def _async_store(self, key: str, value: str) -> None:
         """Async implementation of store."""
         now = time.time()
-        async with self._lock:
+        async with self._rw_lock.write():
             self._cache[key] = {"value": value, "timestamp": now, "accessed": now}
             self._dirty = True
 
@@ -418,7 +419,7 @@ class ProviderCache:
             else:
                 # Entry expired from memory - remove from memory only
                 # Don't set dirty flag: disk copy should persist until disk_ttl
-                async with self._lock:
+                async with self._rw_lock.write():
                     if key in self._cache:
                         del self._cache[key]
 
@@ -446,7 +447,7 @@ class ProviderCache:
                     if time.time() - ts <= self._disk_ttl:
                         value = entry.get("value", entry.get("signature", ""))
                         if value:
-                            async with self._lock:
+                            async with self._rw_lock.write():
                                 now = time.time()
                                 self._cache[key] = {"value": value, "timestamp": ts, "accessed": now}
                                 self._stats["disk_hits"] += 1
@@ -476,7 +477,7 @@ class ProviderCache:
                     if time.time() - ts <= self._disk_ttl:
                         value = entry.get("value", entry.get("signature", ""))
                         if value:
-                            async with self._lock:
+                            async with self._rw_lock.write():
                                 now = time.time()
                                 self._cache[key] = {"value": value, "timestamp": ts, "accessed": now}
                                 self._stats["disk_hits"] += 1
@@ -514,7 +515,7 @@ class ProviderCache:
 
     async def clear(self) -> None:
         """Clear all cached data."""
-        async with self._lock:
+        async with self._rw_lock.write():
             self._cache.clear()
             self._dirty = True
             if self._enable_disk:

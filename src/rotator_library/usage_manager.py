@@ -2283,6 +2283,18 @@ class UsageManager:
 
         return selected_credential
 
+
+    async def _get_key_cooldown_async(
+        self, key: str, normalized_model: str
+    ) -> Tuple[str, Tuple[float, float]]:
+        """Helper for parallel cooldown lookup."""
+        async with self._data_lock.read():
+            key_data = self._usage_data.get(key, {})
+            return key, (
+                key_data.get("key_cooldown_until") or 0,
+                key_data.get("model_cooldowns", {}).get(normalized_model) or 0,
+            )
+
     async def acquire_key(
         self,
         available_keys: List[str],
@@ -2355,18 +2367,16 @@ class UsageManager:
 
             # Group credentials by priority level (if priorities provided)
             if credential_priorities:
-                # Snapshot cooldown data inside the lock, then release immediately
-                cooldown_snapshot: Dict[str, Tuple[float, float]] = {}
-                async with self._data_lock.read():
-                    for key in available_keys:
-                        key_data = self._usage_data.get(key, {})
-                        cooldown_snapshot[key] = (
-                            key_data.get("key_cooldown_until") or 0,
-                            key_data.get("model_cooldowns", {}).get(normalized_model)
-                            or 0,
-                        )
-
-                # Group keys by priority level — OUTSIDE the read lock
+                # Snapshot cooldown data in parallel, then release immediately
+                cooldown_snapshot = dict(
+                await asyncio.gather(
+                *[
+                self._get_key_cooldown_async(key, normalized_model)
+                for key in available_keys
+                ]
+                )
+                )
+                                # Group keys by priority level — OUTSIDE the read lock
                 priority_groups = {}
                 for key in available_keys:
                     key_cd, model_cd = cooldown_snapshot.get(key, (0, 0))
@@ -2605,16 +2615,15 @@ class UsageManager:
 
                 tier1_keys, tier2_keys = [], []
 
-                # First, snapshot cooldown data inside the lock, then release immediately
-                cooldown_snapshot: Dict[str, Tuple[float, float]] = {}
-                async with self._data_lock.read():
-                    for key in available_keys:
-                        key_data = self._usage_data.get(key, {})
-                        cooldown_snapshot[key] = (
-                            key_data.get("key_cooldown_until") or 0,
-                            key_data.get("model_cooldowns", {}).get(normalized_model)
-                            or 0,
-                        )
+                # Snapshot cooldown data in parallel, then release immediately
+                cooldown_snapshot = dict(
+                await asyncio.gather(
+                *[
+                self._get_key_cooldown_async(key, normalized_model)
+                for key in available_keys
+                ]
+                )
+                )
 
                 # Filter and tier keys — OUTSIDE the read lock
                 for key in available_keys:

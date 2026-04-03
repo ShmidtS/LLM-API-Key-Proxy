@@ -6,6 +6,7 @@ Contains only the __init__ state initialization that is identical across all.
 """
 
 import asyncio
+import threading
 from typing import Any, Dict, Optional
 
 
@@ -20,7 +21,7 @@ class BaseTokenManager:
         # Cache and lock management
         self._credentials_cache: Dict[str, Dict[str, Any]] = {}
         self._refresh_locks: Dict[str, asyncio.Lock] = {}
-        self._locks_lock = asyncio.Lock()
+        self._locks_lock = threading.Lock()  # Thread-safe, non-async for dict access
 
         # Refresh failure tracking
         self._refresh_failures: Dict[str, int] = {}

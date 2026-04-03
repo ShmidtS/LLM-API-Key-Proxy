@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
-import json
+import orjson
 import logging
 import os
 import random
@@ -314,8 +314,6 @@ DEFAULT_PARALLEL_TOOL_INSTRUCTION = """When multiple independent operations are 
 
 # Interleaved thinking support for Claude models
 # Allows Claude to think between tool calls and after receiving tool results
-# Header is not needed - commented for reference
-# ANTHROPIC_BETA_INTERLEAVED_THINKING = "interleaved-thinking-2025-05-14"
 
 # Strong system prompt for interleaved thinking (injected into system_instruction)
 CLAUDE_INTERLEAVED_THINKING_HINT = """# Interleaved Thinking - MANDATORY
@@ -1085,34 +1083,6 @@ class AntigravityProvider(
     # For balanced mode, this doesn't apply (falls back to 1x)
     default_sequential_fallback_multiplier = 2
 
-    # Custom caps examples (commented - uncomment and modify as needed)
-    # default_custom_caps = {
-    #     # Tier 2 (standard-tier / paid)
-    #     2: {
-    #         "claude": {
-    #             "max_requests": 100,  # Cap at 100 instead of 150
-    #             "cooldown_mode": "quota_reset",
-    #             "cooldown_value": 0,
-    #         },
-    #     },
-    #     # Tiers 2 and 3 together
-    #     (2, 3): {
-    #         "g25-flash": {
-    #             "max_requests": "80%",  # 80% of actual max
-    #             "cooldown_mode": "offset",
-    #             "cooldown_value": 1800,  # +30 min buffer
-    #         },
-    #     },
-    #     # Default for unknown tiers
-    #     "default": {
-    #         "claude": {
-    #             "max_requests": "50%",
-    #             "cooldown_mode": "quota_reset",
-    #         },
-    #     },
-    # }
-
-    @staticmethod
     def parse_quota_error(
         error: Exception, error_body: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
@@ -1225,8 +1195,8 @@ class AntigravityProvider(
             if not json_match:
                 return None
 
-            data = json.loads(json_match.group(0))
-        except (json.JSONDecodeError, AttributeError, TypeError):
+            data = orjson.loads(json_match.group(0))
+        except (orjson.JSONDecodeError, AttributeError, TypeError):
             return None
 
         # Navigate to error.details
@@ -2079,7 +2049,7 @@ class AntigravityProvider(
                             "type": "function",
                             "function": {
                                 "name": fc.get("name", ""),
-                                "arguments": json.dumps(fc.get("args", {})),
+                                "arguments": orjson.dumps(fc.get("args", {})).decode(),
                             },
                         }
                     )
@@ -2097,7 +2067,7 @@ class AntigravityProvider(
             return False
 
         try:
-            thinking_data = json.loads(cached_json)
+            thinking_data = orjson.loads(cached_json)
             thinking_text = thinking_data.get("thinking_text", "")
             signature = thinking_data.get("thought_signature", "")
 
@@ -2121,7 +2091,7 @@ class AntigravityProvider(
             )
             return True
 
-        except json.JSONDecodeError:
+        except orjson.JSONDecodeError:
             lib_logger.warning(
                 f"[Thinking Sanitization] Failed to parse cached thinking"
             )
@@ -2178,7 +2148,7 @@ class AntigravityProvider(
                                 "type": "function",
                                 "function": {
                                     "name": fc.get("name", ""),
-                                    "arguments": json.dumps(fc.get("args", {})),
+                                    "arguments": orjson.dumps(fc.get("args", {})).decode(),
                                 },
                             }
                         )
@@ -2196,7 +2166,7 @@ class AntigravityProvider(
                 continue
 
             try:
-                thinking_data = json.loads(cached_json)
+                thinking_data = orjson.loads(cached_json)
                 thinking_text = thinking_data.get("thinking_text", "")
                 signature = thinking_data.get("thought_signature", "")
 
@@ -2213,7 +2183,7 @@ class AntigravityProvider(
                         f"[Thinking Recovery] Recovered thinking for msg {i}: "
                         f"{len(thinking_text)} chars"
                     )
-            except json.JSONDecodeError:
+            except orjson.JSONDecodeError:
                 pass
 
         return recovered_count
@@ -2451,7 +2421,6 @@ class AntigravityProvider(
                         tc_id = tc["id"]
                         tc_name = tc["function"]["name"]
                         tool_id_to_name[tc_id] = tc_name
-                        # lib_logger.debug(f"[ID Mapping] Registered tool_call: id={tc_id}, name={tc_name}")
 
         # Convert each message, consolidating consecutive tool responses
         # Per Gemini docs: parallel function responses must be in a single user message
@@ -2552,9 +2521,9 @@ class AntigravityProvider(
                 cached_json = self._thinking_cache.retrieve(cache_key)
                 if cached_json:
                     try:
-                        cached_data = json.loads(cached_json)
+                        cached_data = orjson.loads(cached_json)
                         cached_sig = cached_data.get("thought_signature", "")
-                    except json.JSONDecodeError:
+                    except orjson.JSONDecodeError:
                         pass
 
             if cached_sig:
@@ -2592,8 +2561,8 @@ class AntigravityProvider(
                 continue
 
             try:
-                args = json.loads(tc["function"]["arguments"])
-            except (json.JSONDecodeError, TypeError):
+                args = orjson.loads(tc["function"]["arguments"])
+            except (orjson.JSONDecodeError, TypeError):
                 args = {}
 
             tool_id = tc.get("id", "")
@@ -2663,7 +2632,7 @@ class AntigravityProvider(
             return parts
 
         try:
-            thinking_data = json.loads(cached_json)
+            thinking_data = orjson.loads(cached_json)
             thinking_text = thinking_data.get("thinking_text", "")
             sig = thinking_data.get("thought_signature", "")
 
@@ -2675,7 +2644,7 @@ class AntigravityProvider(
                 }
                 parts.append(thinking_part)
                 lib_logger.debug(f"Injected {len(thinking_text)} chars of thinking")
-        except json.JSONDecodeError:
+        except orjson.JSONDecodeError:
             lib_logger.warning(f"Failed to parse cached thinking: {cache_key}")
 
         return parts
@@ -2699,8 +2668,8 @@ class AntigravityProvider(
             func_name = f"{self._gemini3_tool_prefix}{func_name}"
 
         try:
-            parsed_content = json.loads(content)
-        except (json.JSONDecodeError, TypeError):
+            parsed_content = orjson.loads(content)
+        except (orjson.JSONDecodeError, TypeError):
             parsed_content = content
 
         return [
@@ -2875,7 +2844,7 @@ class AntigravityProvider(
         """
         Analyze malformed JSON to detect specific errors and attempt to fix it.
 
-        Combines json.JSONDecodeError with heuristic pattern detection
+        Combines orjson.JSONDecodeError with heuristic pattern detection
         to provide actionable error information.
 
         Returns:
@@ -2897,11 +2866,11 @@ class AntigravityProvider(
             "fixed_json": None,
         }
 
-        # Option 1: Try json.loads to get exact error
+        # Option 1: Try orjson.loads to get exact error
         try:
-            json.loads(raw_args)
+            orjson.loads(raw_args)
             return result  # Valid JSON, no errors
-        except json.JSONDecodeError as e:
+        except orjson.JSONDecodeError as e:
             result["json_error"] = e.msg
             result["json_position"] = e.pos
 
@@ -2941,10 +2910,10 @@ class AntigravityProvider(
 
         try:
             # Validate the fix works
-            parsed = json.loads(fixed)
+            parsed = orjson.loads(fixed)
             # Use compact JSON format (matches what model should produce)
-            result["fixed_json"] = json.dumps(parsed, separators=(",", ":"))
-        except json.JSONDecodeError:
+            result["fixed_json"] = orjson.dumps(parsed).decode()
+        except orjson.JSONDecodeError:
             # First fix didn't work - try more aggressive cleanup
             pass
 
@@ -2954,12 +2923,12 @@ class AntigravityProvider(
                 # Normalize all whitespace (collapse newlines/multiple spaces)
                 aggressive_fix = re_module.sub(r"\s+", " ", fixed)
                 # Try parsing again
-                parsed = json.loads(aggressive_fix)
-                result["fixed_json"] = json.dumps(parsed, separators=(",", ":"))
+                parsed = orjson.loads(aggressive_fix)
+                result["fixed_json"] = orjson.dumps(parsed).decode()
                 lib_logger.debug(
                     "[Antigravity] Fixed malformed JSON with aggressive whitespace normalization"
                 )
-            except json.JSONDecodeError:
+            except orjson.JSONDecodeError:
                 pass
 
         # Option 5: If still failing, try fixing unquoted string values
@@ -2973,12 +2942,12 @@ class AntigravityProvider(
                     r': "\1"\2',
                     fixed,
                 )
-                parsed = json.loads(aggressive_fix)
-                result["fixed_json"] = json.dumps(parsed, separators=(",", ":"))
+                parsed = orjson.loads(aggressive_fix)
+                result["fixed_json"] = orjson.dumps(parsed).decode()
                 lib_logger.debug(
                     "[Antigravity] Fixed malformed JSON by quoting unquoted string values"
                 )
-            except json.JSONDecodeError:
+            except orjson.JSONDecodeError:
                 # All fixes failed, leave as None
                 pass
 
@@ -3033,7 +3002,7 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
         # Add schema if available (strip $schema reference)
         if tool_schema:
             clean_schema = {k: v for k, v in tool_schema.items() if k != "$schema"}
-            schema_str = json.dumps(clean_schema, separators=(",", ":"))
+            schema_str = orjson.dumps(clean_schema).decode()
             error_text += f"\n\nSchema: {schema_str}"
 
         user_msg = {"role": "user", "parts": [{"text": error_text}]}
@@ -3143,8 +3112,8 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
 
         # Validate the fixed JSON is actually valid
         try:
-            json.loads(fixed_json)
-        except json.JSONDecodeError:
+            orjson.loads(fixed_json)
+        except orjson.JSONDecodeError:
             return None
 
         tool_name = parsed_call["tool_name"]
@@ -3208,8 +3177,8 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
 
         # Validate the fixed JSON is actually valid
         try:
-            json.loads(fixed_json)
-        except json.JSONDecodeError:
+            orjson.loads(fixed_json)
+        except orjson.JSONDecodeError:
             return None
 
         tool_name = parsed_call["tool_name"]
@@ -3769,7 +3738,7 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
             "id": tool_id,
             "type": "function",
             "index": index,
-            "function": {"name": tool_name, "arguments": json.dumps(parsed_args)},
+            "function": {"name": tool_name, "arguments": orjson.dumps(parsed_args).decode()},
         }
 
         if accumulator is not None:
@@ -3846,7 +3815,7 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
             "timestamp": time.time(),
         }
 
-        self._thinking_cache.store(cache_key, json.dumps(data))
+        self._thinking_cache.store(cache_key, orjson.dumps(data).decode())
         lib_logger.debug(f"Cached thinking: {cache_key[:50]}...")
 
     # =========================================================================
@@ -4444,7 +4413,7 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
                         break
 
                     try:
-                        chunk = json.loads(data_str)
+                        chunk = orjson.loads(data_str)
                         gemini_chunk = self._unwrap_response(chunk)
 
                         # Capture response ID from first chunk for synthetic responses
@@ -4464,7 +4433,7 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
 
                         yield litellm.ModelResponse(**openai_chunk)
                         accumulator["yielded_any"] = True
-                    except json.JSONDecodeError:
+                    except orjson.JSONDecodeError:
                         if file_logger:
                             file_logger.log_error(f"Parse error: {data_str[:100]}")
                         continue

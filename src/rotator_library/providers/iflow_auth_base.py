@@ -304,7 +304,7 @@ class IFlowAuthBase(AuthQueueMixin, BaseTokenManager):
         if path in self._credentials_cache:
             return self._credentials_cache[path]
 
-        async with await self._get_lock(path):
+        async with self._get_lock(path):
             # Re-check cache after acquiring lock
             if path in self._credentials_cache:
                 return self._credentials_cache[path]
@@ -530,7 +530,7 @@ class IFlowAuthBase(AuthQueueMixin, BaseTokenManager):
         Refreshes the OAuth tokens and re-fetches the API key.
         CRITICAL: Must re-fetch user info to get potentially updated API key.
         """
-        async with await self._get_lock(path):
+        async with self._get_lock(path):
             cached_creds = self._credentials_cache.get(path)
             if not force and cached_creds and not self._is_token_expired(cached_creds):
                 return cached_creds
@@ -852,10 +852,18 @@ class IFlowAuthBase(AuthQueueMixin, BaseTokenManager):
                 credential_identifier, force=False, needs_reauth=False
             )
 
-    async def _get_lock(self, path: str) -> asyncio.Lock:
-        """Gets or creates a lock for the given credential path."""
-        # [FIX RACE CONDITION] Protect lock creation with a master lock
-        async with self._locks_lock:
+    def _get_lock(self, path: str) -> asyncio.Lock:
+        """Gets or creates a lock for the given credential path.
+
+        Uses a thread-safe master lock to prevent TOCTOU race conditions during lock creation.
+        This is a synchronous method - no async overhead for simple dict access.
+        """
+        # Fast path - lock already exists
+        if path in self._refresh_locks:
+            return self._refresh_locks[path]
+
+        # Thread-safe creation (no async overhead)
+        with self._locks_lock:
             if path not in self._refresh_locks:
                 self._refresh_locks[path] = asyncio.Lock()
             return self._refresh_locks[path]
@@ -948,10 +956,6 @@ class IFlowAuthBase(AuthQueueMixin, BaseTokenManager):
                 backoff_until = self._next_refresh_after[path]
                 if now < backoff_until:
                     # Credential is in backoff for automated refresh, do not queue
-                    # remaining = int(backoff_until - now)
-                    # lib_logger.debug(
-                    #     f"Skipping automated refresh for '{Path(path).name}' (in backoff for {remaining}s)"
-                    # )
                     return
 
         async with self._queue_tracking_lock:

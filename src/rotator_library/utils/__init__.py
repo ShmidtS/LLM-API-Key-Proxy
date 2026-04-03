@@ -22,6 +22,7 @@ from .resilient_io import (
     safe_mkdir,
 )
 from .suppress_litellm_warnings import suppress_litellm_serialization_warnings
+from .http_retry import exponential_backoff_with_jitter
 
 __all__ = [
     "is_headless_environment",
@@ -40,4 +41,5 @@ __all__ = [
     "safe_log_write",
     "safe_mkdir",
     "suppress_litellm_serialization_warnings",
+    "exponential_backoff_with_jitter",
 ]
