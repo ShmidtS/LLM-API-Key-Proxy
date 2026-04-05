@@ -14,6 +14,7 @@ async def exponential_backoff_with_jitter(
     max_wait: float = 60.0,
     jitter: float = 0.1,
     retry_after: Optional[float] = None,
+    min_wait: float = 0.5,
 ) -> None:
     """
     Exponential backoff with optional jitter and retry-after.
@@ -24,6 +25,7 @@ async def exponential_backoff_with_jitter(
         max_wait: Maximum wait time in seconds
         jitter: Jitter factor (0.0-1.0)
         retry_after: Optional override wait time from server
+        min_wait: Minimum wait time in seconds (default: 0.5)
 
     Example:
         for attempt in range(max_retries):
@@ -32,13 +34,13 @@ async def exponential_backoff_with_jitter(
             except RetryableError:
                 await exponential_backoff_with_jitter(attempt)
     """
-    if retry_after is not None:
-        wait_time = retry_after
-    else:
-        wait_time = min(base**attempt, max_wait)
+    wait_time = min(base**attempt, max_wait)
 
     if jitter > 0:
-        jitter_amount = random.uniform(0, wait_time * jitter)
-        wait_time += jitter_amount
+        jitter_amount = random.uniform(-jitter, jitter) * wait_time
+        wait_time = max(min_wait, wait_time + jitter_amount)
+
+    if retry_after is not None:
+        wait_time = max(wait_time, retry_after)
 
     await asyncio.sleep(wait_time)

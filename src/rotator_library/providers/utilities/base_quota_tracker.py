@@ -496,9 +496,22 @@ class BaseQuotaTracker:
         )
 
         results = {}
-        for cred_path in active_credentials:
-            quota_data = await self._fetch_quota_for_credential(cred_path)
-            results[cred_path] = quota_data
+
+        # Use semaphore to limit concurrent requests
+        semaphore = asyncio.Semaphore(QUOTA_FETCH_CONCURRENCY)
+
+        async def fetch_with_semaphore(cred_path: str):
+            async with semaphore:
+                return await self._fetch_quota_for_credential(cred_path)
+
+        tasks = [fetch_with_semaphore(cred_path) for cred_path in active_credentials]
+        fetch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for cred_path, result in zip(active_credentials, fetch_results):
+            if isinstance(result, Exception):
+                lib_logger.debug(f"Failed to fetch quota for {cred_path}: {result}")
+                continue
+            results[cred_path] = result
 
         return results
 

@@ -308,7 +308,8 @@ class ProviderCache:
                             f"ProviderCache[{self._cache_name}]: Writer error: {e}"
                         )
         except asyncio.CancelledError:
-            pass
+            lib_logger.debug(f"ProviderCache[{self._cache_name}]: Writer loop cancelled")
+            raise
 
     async def _cleanup_loop(self) -> None:
         """Background task: periodically clean up expired entries."""
@@ -317,7 +318,8 @@ class ProviderCache:
                 await asyncio.sleep(self._cleanup_interval)
                 await self._cleanup_expired()
         except asyncio.CancelledError:
-            pass
+            lib_logger.debug(f"ProviderCache[{self._cache_name}]: Cleanup loop cancelled")
+            raise
 
     async def _cleanup_expired(self) -> None:
         """Remove expired entries from memory cache.
@@ -533,7 +535,8 @@ class ProviderCache:
                 try:
                     await task
                 except asyncio.CancelledError:
-                    pass
+                    lib_logger.debug(f"ProviderCache[{self._cache_name}]: Shutdown cancelled")
+                    raise
 
         # Final save
         if self._dirty and self._enable_disk:

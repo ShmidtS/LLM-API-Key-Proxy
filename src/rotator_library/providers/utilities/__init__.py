@@ -24,6 +24,13 @@ from .gemini_shared_utils import (
 from .gemini_tool_handler import GeminiToolHandler
 from .gemini_credential_manager import GeminiCredentialManager
 
+# Message transformer for Gemini format conversion
+from .message_transformer import (
+    transform_messages_for_gemini,
+    build_tool_call_id_to_name_mapping,
+    ensure_user_first,
+)
+
 # Re-export loggers from transaction_logger for backward compatibility
 from ...transaction_logger import (
     ProviderLogger,
@@ -54,4 +61,8 @@ __all__ = [
     # Mixins
     "GeminiToolHandler",
     "GeminiCredentialManager",
+    # Message transformer
+    "transform_messages_for_gemini",
+    "build_tool_call_id_to_name_mapping",
+    "ensure_user_first",
 ]

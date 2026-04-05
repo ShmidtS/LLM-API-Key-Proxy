@@ -4391,8 +4391,8 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
                     # lib_logger.error(
                     #     f"API error {response.status_code}: {error_body.decode()}"
                     # )
-                except Exception:
-                    pass
+                except Exception as e:
+                    lib_logger.debug(f"Failed to read error body for logging: {e}")
 
             response.raise_for_status()
 
