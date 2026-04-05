@@ -702,9 +702,16 @@ def _merge_all_of(schema: Any) -> Any:
     return result
 
 
-# Cache for _clean_claude_schema - memoizes based on schema hash
-_clean_claude_schema_cache: Dict[int, Any] = {}
-_CLEAN_CLAUDE_SCHEMA_CACHE_MAX_SIZE = 256
+@functools.lru_cache(maxsize=256)
+def _clean_claude_schema_cached(schema_bytes: bytes, for_gemini: bool) -> tuple:
+    """
+    Cached implementation of schema cleaning.
+    Takes serialized schema bytes and returns cleaned result as tuple for caching.
+    """
+    schema = orjson.loads(schema_bytes)
+    result = _clean_claude_schema_impl(schema, for_gemini)
+    # Convert back to bytes for hashability
+    return orjson.dumps(result, option=orjson.OPT_SORT_KEYS)
 
 
 def _clean_claude_schema(schema: Any, for_gemini: bool = False) -> Any:
@@ -726,13 +733,19 @@ def _clean_claude_schema(schema: Any, for_gemini: bool = False) -> Any:
     - For Gemini: passes through additionalProperties as-is
     - For Claude: normalizes permissive additionalProperties to true
     """
-    # Memoization: check cache for dict schemas
-    if isinstance(schema, dict):
-        # Create hash key from schema content + for_gemini flag
-        cache_key = hash((orjson.dumps(schema, option=orjson.OPT_SORT_KEYS), for_gemini))
-        if cache_key in _clean_claude_schema_cache:
-            return _clean_claude_schema_cache[cache_key]
+    if not isinstance(schema, dict):
+        return schema
+    # Use thread-safe LRU cache via serialization
+    schema_bytes = orjson.dumps(schema, option=orjson.OPT_SORT_KEYS)
+    result_bytes = _clean_claude_schema_cached(schema_bytes, for_gemini)
+    return orjson.loads(result_bytes)
 
+
+def _clean_claude_schema_impl(schema: Any, for_gemini: bool) -> Any:
+    """
+    Internal implementation of schema cleaning.
+    Called by _clean_claude_schema_cached after cache miss.
+    """
     if not isinstance(schema, dict):
         return schema
 
@@ -969,15 +982,6 @@ def _clean_claude_schema(schema: Any, for_gemini: bool = False) -> Any:
         else:
             cleaned[key] = value
     
-    
-    # Memoization: store result in cache
-    cache_key = hash((orjson.dumps(schema, option=orjson.OPT_SORT_KEYS), for_gemini))
-    if len(_clean_claude_schema_cache) >= _CLEAN_CLAUDE_SCHEMA_CACHE_MAX_SIZE:
-     # Simple eviction: clear half the cache when full
-     keys_to_remove = list(_clean_claude_schema_cache.keys())[:_CLEAN_CLAUDE_SCHEMA_CACHE_MAX_SIZE // 2]
-     for k in keys_to_remove:
-      del _clean_claude_schema_cache[k]
-    _clean_claude_schema_cache[cache_key] = cleaned
     
     return cleaned
 
