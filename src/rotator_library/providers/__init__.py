@@ -90,6 +90,12 @@ class DynamicOpenAICompatibleProvider:
         return {"Authorization": f"Bearer {credential_identifier}"}
 
 
+# --- Pre-register providers with custom logic ---
+# These providers implement has_custom_logic() = True and need early registration
+# to bypass the standard litellm flow
+PROVIDER_PLUGINS["colin"] = ColinProvider
+
+
 # --- Lazy Provider Loading ---
 
 # Cache for loaded provider modules

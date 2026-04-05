@@ -89,9 +89,17 @@ class GzipRequestTransport(httpx.AsyncHTTPTransport):
                         compressed = gzip.compress(request.content)
 
                         if len(compressed) < content_len * 0.9:
-                            request.content = compressed
-                            request.headers["content-encoding"] = "gzip"
-                            request.headers["content-length"] = str(len(compressed))
+                            # Create new request with compressed content
+                            # (request.content is read-only in httpx)
+                            headers = dict(request.headers)
+                            headers["content-encoding"] = "gzip"
+                            headers["content-length"] = str(len(compressed))
+                            request = httpx.Request(
+                                method=request.method,
+                                url=request.url,
+                                content=compressed,
+                                headers=headers,
+                            )
 
                             lib_logger.debug(
                                 f"Gzip compressed: {content_len} -> {len(compressed)} bytes "
@@ -105,9 +113,9 @@ def _env_ssl_verify() -> Union[bool, List[str]]:
     Parse SSL verification configuration from environment.
 
     Returns:
-        True: Standard SSL verification (default)
-        False: Disable SSL verification globally
-        List[str]: List of hosts to skip SSL verification for
+    True: Standard SSL verification (default)
+    False: Disable SSL verification globally
+    List[str]: List of hosts to skip SSL verification for
     """
     # Check global SSL verification setting
     if not _env_bool("HTTP_SSL_VERIFY", DEFAULT_SSL_VERIFY):
@@ -149,11 +157,11 @@ def should_skip_ssl_for_host(host: str, ssl_verify: Union[bool, List[str]]) -> b
     Check if SSL verification should be skipped for a specific host.
 
     Args:
-        host: Hostname to check (e.g., "chatgpt.com")
-        ssl_verify: SSL verification setting from _env_ssl_verify()
+    host: Hostname to check (e.g., "chatgpt.com")
+    ssl_verify: SSL verification setting from _env_ssl_verify()
 
     Returns:
-        True if SSL verification should be skipped for this host
+    True if SSL verification should be skipped for this host
     """
     if ssl_verify is False:
         return True
@@ -175,11 +183,11 @@ def _create_custom_dns_resolver(dns_host: str, dns_port: int = DEFAULT_DNS_PORT)
     Results are cached by (host, port) to avoid redundant imports and instantiation.
 
     Args:
-        dns_host: DNS server IP (e.g., "8.8.8.8", "1.1.1.1")
-        dns_port: DNS server port (default: 53)
+    dns_host: DNS server IP (e.g., "8.8.8.8", "1.1.1.1")
+    dns_port: DNS server port (default: 53)
 
     Returns:
-        DNS resolver instance (or None if creation fails)
+    DNS resolver instance (or None if creation fails)
     """
     cache_key = (dns_host, dns_port)
     if cache_key in _dns_resolver_cache:
@@ -213,14 +221,14 @@ class HttpClientPool:
     - Optimized connection limits for high-throughput scenarios
 
     Usage:
-        pool = HttpClientPool()
-        await pool.initialize()  # Pre-warm connections
+    pool = HttpClientPool()
+    await pool.initialize() # Pre-warm connections
 
-        # Get appropriate client
-        client = pool.get_client(streaming=True)
+    # Get appropriate client
+    client = pool.get_client(streaming=True)
 
-        # On shutdown
-        await pool.close()
+    # On shutdown
+    await pool.close()
     """
 
     def __init__(
@@ -235,14 +243,14 @@ class HttpClientPool:
         Initialize the HTTP client pool.
 
         Args:
-            max_keepalive: Max keep-alive connections (default: 50)
-            max_connections: Max total connections (default: 200)
-            keepalive_expiry: Seconds to keep idle connections (default: 30)
-            warmup_connections: Connections to pre-warm per host (default: 3)
-            ssl_verify: SSL verification setting (default: from env or True)
-                      - True: Standard SSL verification
-                      - False: Disable SSL verification globally
-                      - List[str]: List of hosts to skip SSL verification for
+        max_keepalive: Max keep-alive connections (default: 50)
+        max_connections: Max total connections (default: 200)
+        keepalive_expiry: Seconds to keep idle connections (default: 30)
+        warmup_connections: Connections to pre-warm per host (default: 3)
+        ssl_verify: SSL verification setting (default: from env or True)
+        - True: Standard SSL verification
+        - False: Disable SSL verification globally
+        - List[str]: List of hosts to skip SSL verification for
         """
         self._max_keepalive = max_keepalive or _env_int(
             "HTTP_MAX_KEEPALIVE", DEFAULT_MAX_KEEPALIVE_CONNECTIONS
@@ -297,7 +305,7 @@ class HttpClientPool:
 
         # Warmup state
         self._warmed_up = False
-        self._warmup_hosts: list = []  # Hosts to pre-warm
+        self._warmup_hosts: list = [] # Hosts to pre-warm
 
         # Statistics
         self._stats = {
@@ -322,10 +330,10 @@ class HttpClientPool:
         Create a new HTTP client with appropriate configuration.
 
         Args:
-            streaming: Whether this client will be used for streaming requests
+        streaming: Whether this client will be used for streaming requests
 
         Returns:
-            Configured httpx.AsyncClient
+        Configured httpx.AsyncClient
         """
         timeout = (
             TimeoutConfig.streaming() if streaming else TimeoutConfig.non_streaming()
@@ -335,13 +343,13 @@ class HttpClientPool:
         ssl_context = ssl.create_default_context()
         ssl_context.minimum_version = (
             ssl.TLSVersion.TLSv1_2
-        )  # Allow TLS 1.2 and 1.3 for Azure compatibility
+        ) # Allow TLS 1.2 and 1.3 for Azure compatibility
 
         # Set Azure-compatible cipher suites to fix SSLV3_ALERT_HANDSHAKE_FAILURE
         try:
             ssl_context.set_ciphers(AZURE_COMPATIBLE_CIPHERS)
         except ssl.SSLError:
-            pass  # Use default ciphers if set_ciphers fails
+            pass # Use default ciphers if set_ciphers fails
 
         if not self._ssl_verify:
             ssl_context.check_hostname = False
@@ -418,8 +426,8 @@ class HttpClientPool:
         Initialize the client pool and optionally pre-warm connections.
 
         Args:
-            warmup_hosts: List of URLs to pre-warm connections to
-                         (e.g., ["https://api.openai.com", "https://api.anthropic.com"])
+        warmup_hosts: List of URLs to pre-warm connections to
+        (e.g., ["https://api.openai.com", "https://api.anthropic.com"])
         """
         async with self._client_lock:
             # Create both clients upfront
@@ -458,7 +466,7 @@ class HttpClientPool:
 
         # Build list of all warmup tasks (parallel execution)
         warmup_tasks = []
-        for host in self._warmup_hosts[:5]:  # Limit to 5 hosts for warmup
+        for host in self._warmup_hosts[:5]: # Limit to 5 hosts for warmup
             for _ in range(self._warmup_count):
                 warmup_tasks.append(client.head(host, follow_redirects=True))
 
@@ -514,10 +522,10 @@ class HttpClientPool:
         Check if a client is closed or unusable.
 
         Args:
-            client: The client to check
+        client: The client to check
 
         Returns:
-            True if the client is closed or None, False otherwise
+        True if the client is closed or None, False otherwise
         """
         if client is None:
             return True
@@ -532,10 +540,10 @@ class HttpClientPool:
         This is an async method that can safely recreate closed clients.
 
         Args:
-            streaming: Whether to get streaming client
+        streaming: Whether to get streaming client
 
         Returns:
-            Valid httpx.AsyncClient instance
+        Valid httpx.AsyncClient instance
         """
         if streaming:
             client = self._streaming_client
@@ -565,10 +573,10 @@ class HttpClientPool:
         get_client_async() for automatic recovery from closed clients.
 
         Args:
-            streaming: Whether the request will be streaming
+        streaming: Whether the request will be streaming
 
         Returns:
-            httpx.AsyncClient instance
+        httpx.AsyncClient instance
         """
         self._stats["requests_total"] += 1
 
@@ -587,10 +595,10 @@ class HttpClientPool:
         if necessary. Use this for resilience in production code.
 
         Args:
-            streaming: Whether the request will be streaming
+        streaming: Whether the request will be streaming
 
         Returns:
-            Valid httpx.AsyncClient instance
+        Valid httpx.AsyncClient instance
         """
         self._stats["requests_total"] += 1
 
@@ -620,7 +628,7 @@ class HttpClientPool:
             timeout=timeout,
             limits=self._create_limits(),
             follow_redirects=True,
-            verify=self._ssl_verify,  # SSL verification configuration
+            verify=self._ssl_verify, # SSL verification configuration
         )
 
     async def close(self) -> None:
@@ -655,8 +663,8 @@ class HttpClientPool:
         Record an error for health tracking.
 
         Args:
-            error_type: Type of error (connection, timeout, etc.)
-            message: Error message
+        error_type: Type of error (connection, timeout, etc.)
+        message: Error message
         """
         self._last_error = message
         self._last_error_time = time.time()
@@ -691,7 +699,7 @@ class HttpClientPool:
         Perform a health check on the client pool.
 
         Returns:
-            Dict with health status for each client
+        Dict with health status for each client
         """
         health = {
             "streaming_client": "unknown",
@@ -725,7 +733,7 @@ class HttpClientPool:
         Attempt to recover closed or unhealthy clients.
 
         Returns:
-            True if recovery was successful, False otherwise
+        True if recovery was successful, False otherwise
         """
         recovered = []
 
