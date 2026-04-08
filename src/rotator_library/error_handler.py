@@ -168,6 +168,7 @@ def _detect_ip_throttle(
     return None
 
 
+@functools.lru_cache(maxsize=128)
 def _parse_duration_string(duration_str: str) -> Optional[int]:
     """
     Parse duration strings in various formats to total seconds.

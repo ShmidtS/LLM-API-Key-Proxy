@@ -11,6 +11,7 @@ Data retrieval happens asynchronously post-startup to keep initialization fast.
 """
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -616,6 +617,7 @@ class ModelsDevAdapter(DataSourceAdapter):
 # ============================================================================
 
 
+@functools.lru_cache(maxsize=128)
 def _normalize_version_pattern(name: str) -> str:
     """
     Normalize version patterns in model names for fuzzy matching.

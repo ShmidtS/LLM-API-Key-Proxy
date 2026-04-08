@@ -4,6 +4,7 @@
 # src/rotator_library/credential_tool.py
 
 import asyncio
+import functools
 import json
 import os
 import re
@@ -68,6 +69,7 @@ OAUTH_FRIENDLY_NAMES = {
 }
 
 
+@functools.lru_cache(maxsize=128)
 def _extract_key_number(key_name: str) -> int:
     """Extract the numeric suffix from a key name for proper sorting.
 
@@ -80,6 +82,7 @@ def _extract_key_number(key_name: str) -> int:
     return int(match.group(1)) if match else 0
 
 
+@functools.lru_cache(maxsize=128)
 def _normalize_tier_name(tier: str) -> str:
     """Normalize tier names for consistent display.
 
