@@ -79,6 +79,19 @@ class GeminiAuthBase(GoogleOAuthBase):
         self.project_id_cache: Dict[str, str] = {}
         self.project_tier_cache: Dict[str, str] = {}
 
+    def _extract_project_id_from_response(
+        self, data: Dict[str, Any], key: str = "cloudaicompanionProject"
+    ) -> Optional[str]:
+        """Extract project ID from API response, handling both string and object formats."""
+        value = data.get(key)
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            return value.get("id")
+        return None
+
     # =========================================================================
     # POST-AUTH DISCOVERY HOOK
     # =========================================================================
@@ -291,7 +304,7 @@ class GeminiAuthBase(GoogleOAuthBase):
             # Check if user is already known to server (has currentTier)
             if current_tier_id:
                 # User is already onboarded - check for project from server
-                server_project = data.get("cloudaicompanionProject")
+                server_project = self._extract_project_id_from_response(data)
 
                 # Check if this tier requires user-defined project (paid tiers)
                 requires_user_project = any(
@@ -479,12 +492,7 @@ class GeminiAuthBase(GoogleOAuthBase):
             # Extract project ID from LRO response
             # Note: onboardUser returns response.cloudaicompanionProject as an object with .id
             lro_response_data = lro_data.get("response", {})
-            lro_project_obj = lro_response_data.get("cloudaicompanionProject", {})
-            project_id = (
-                lro_project_obj.get("id")
-                if isinstance(lro_project_obj, dict)
-                else None
-            )
+            project_id = self._extract_project_id_from_response(lro_response_data)
 
             # Fallback to configured project if LRO didn't return one
             if not project_id and configured_project_id:
