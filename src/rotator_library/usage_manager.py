@@ -22,6 +22,7 @@ from .utils.provider_locks import ProviderLockManager
 from .batched_persistence import UsagePersistenceManager
 from .utils.paths import get_data_file
 from .utils.model_utils import extract_provider_from_model, normalize_model_string
+from .utils.provider_registry import get_provider_registry
 from .config import (
     DEFAULT_FAIR_CYCLE_DURATION,
     DEFAULT_EXHAUSTION_COOLDOWN_THRESHOLD,
@@ -146,7 +147,7 @@ class UsageManager:
         self.priority_multipliers = priority_multipliers or {}
         self.priority_multipliers_by_mode = priority_multipliers_by_mode or {}
         self.sequential_fallback_multipliers = sequential_fallback_multipliers or {}
-        self._provider_instances: Dict[str, Any] = {}  # Cache for provider instances
+        self._provider_instances = get_provider_registry()  # Shared singleton registry
         self.key_states: Dict[str, Dict[str, Any]] = {}
 
         # Fair cycle rotation configuration
@@ -974,15 +975,7 @@ class UsageManager:
         if not plugin_class:
             return None
 
-        # Get or create provider instance from cache
-        if provider not in self._provider_instances:
-            # Instantiate the plugin if it's a class, or use it directly if already an instance
-            if isinstance(plugin_class, type):
-                self._provider_instances[provider] = plugin_class()
-            else:
-                self._provider_instances[provider] = plugin_class
-
-        return self._provider_instances[provider]
+        return self._provider_instances.get_or_create(provider, plugin_class)
 
     def _get_usage_reset_config(self, credential: str) -> Optional[Dict[str, Any]]:
         """

@@ -4,6 +4,7 @@
 import json
 import os
 import logging
+import functools
 from typing import Dict, Any, Optional
 
 lib_logger = logging.getLogger("rotator_library")
@@ -89,11 +90,13 @@ class ModelDefinitions:
         provider_models = self.get_provider_models(provider_name)
         return provider_models.get(model_name)
 
+    @functools.lru_cache(maxsize=256)
     def get_model_options(self, provider_name: str, model_name: str) -> Dict[str, Any]:
         """Get options for a specific model."""
         model_def = self.get_model_definition(provider_name, model_name)
         return model_def.get("options", {}) if model_def else {}
 
+    @functools.lru_cache(maxsize=256)
     def get_model_id(self, provider_name: str, model_name: str) -> Optional[str]:
         """Get model ID for a specific model. Falls back to model_name if 'id' is not specified."""
         model_def = self.get_model_definition(provider_name, model_name)
@@ -111,3 +114,6 @@ class ModelDefinitions:
         """Reload model definitions from environment variables."""
         self.definitions.clear()
         self._load_definitions()
+        # Clear lru_cache on reload so stale data is not returned
+        self.get_model_options.cache_clear()
+        self.get_model_id.cache_clear()

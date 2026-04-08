@@ -11,9 +11,11 @@ client.py, usage_manager.py, and provider modules.
 
 from __future__ import annotations
 
+import functools
 from typing import Optional
 
 
+@functools.lru_cache(maxsize=256)
 def extract_provider_from_model(model: str) -> str:
     """
     Extract provider prefix from ``provider/model`` format.
@@ -32,6 +34,7 @@ def extract_provider_from_model(model: str) -> str:
     return normalized.split("/", 1)[0].strip().lower()
 
 
+@functools.lru_cache(maxsize=256)
 def normalize_model_string(model: str) -> str:
     """
     Normalize incoming model string for consistent routing.
@@ -47,6 +50,7 @@ def normalize_model_string(model: str) -> str:
     return model.strip()
 
 
+@functools.lru_cache(maxsize=256)
 def parse_env_credential_path(path: str) -> Optional[str]:
     """
     Parse a virtual ``env://`` path and return the credential index.

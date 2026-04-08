@@ -186,6 +186,7 @@ from .transaction_logger import TransactionLogger
 from .utils.paths import get_default_root, get_logs_dir, get_oauth_dir, get_data_file
 from .utils.suppress_litellm_warnings import suppress_litellm_serialization_warnings
 from .utils.model_utils import extract_provider_from_model, normalize_model_string
+from .utils.provider_registry import get_provider_registry
 from .config import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_GLOBAL_TIMEOUT,
@@ -347,7 +348,7 @@ class RotatingClient:
 
         # Initialize provider plugins early so they can be used for rotation mode detection
         self._provider_plugins = PROVIDER_PLUGINS
-        self._provider_instances = {}
+        self._provider_instances = get_provider_registry()
 
         # Build provider rotation modes map
         # Each provider can specify its preferred rotation mode ("balanced" or "sequential")
@@ -1555,23 +1556,20 @@ class RotatingClient:
             )
             return None
 
-        if provider_name not in self._provider_instances:
-            if provider_name in self._provider_plugins:
-                self._provider_instances[provider_name] = self._provider_plugins[
-                    provider_name
-                ]()
-            elif self._is_custom_openai_compatible_provider(provider_name):
-                # Create a generic OpenAI-compatible provider for custom providers
-                try:
-                    self._provider_instances[provider_name] = OpenAICompatibleProvider(
-                        provider_name
-                    )
-                except ValueError:
-                    # If the provider doesn't have the required environment variables, treat it as a standard provider
-                    return None
-            else:
+        if provider_name in self._provider_plugins:
+            return self._provider_instances.get_or_create(provider_name, self._provider_plugins[provider_name])
+        elif self._is_custom_openai_compatible_provider(provider_name):
+            # Create a generic OpenAI-compatible provider for custom providers
+            try:
+                instance = OpenAICompatibleProvider(provider_name)
+                self._provider_instances.register(provider_name, instance)
+                return instance
+            except ValueError:
+                # If the provider doesn't have the required environment variables, treat it as a standard provider
                 return None
-        return self._provider_instances[provider_name]
+        else:
+            # Check if already registered (e.g. by usage_manager)
+            return self._provider_instances.get(provider_name)
 
     def _normalize_model_string(self, model: str) -> str:
         """Normalize incoming model string for consistent routing and matching."""
@@ -4119,10 +4117,7 @@ class RotatingClient:
                 continue
 
             # Get or create provider instance
-            if provider not in self._provider_instances:
-                self._provider_instances[provider] = provider_class()
-            provider_instance = self._provider_instances[provider]
-
+            provider_instance = self._provider_instances.get_or_create(provider, provider_class)
             # Check if provider has quota tracking (like Antigravity)
             if hasattr(provider_instance, "_get_effective_quota_groups"):
                 # Add quota group summary
@@ -4463,9 +4458,7 @@ class RotatingClient:
                 continue
 
             # Get or create provider instance
-            if prov not in self._provider_instances:
-                self._provider_instances[prov] = provider_class()
-            provider_instance = self._provider_instances[prov]
+            provider_instance = self._provider_instances.get_or_create(prov, provider_class)
 
             # Check if provider supports quota refresh (like Antigravity)
             if hasattr(provider_instance, "fetch_initial_baselines"):
