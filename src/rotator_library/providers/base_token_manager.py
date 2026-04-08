@@ -9,6 +9,8 @@ import asyncio
 import threading
 from typing import Any, Dict, Optional
 
+from ..utils.ttl_dict import TTLDict
+
 
 class BaseTokenManager:
     """Common state and infrastructure for token refresh queue management.
@@ -19,7 +21,7 @@ class BaseTokenManager:
 
     def __init__(self):
         # Cache and lock management
-        self._credentials_cache: Dict[str, Dict[str, Any]] = {}
+        self._credentials_cache: TTLDict = TTLDict(maxsize=200, default_ttl=3600.0)
         self._refresh_locks: Dict[str, asyncio.Lock] = {}
         self._locks_lock = threading.Lock()  # Thread-safe, non-async for dict access
 
