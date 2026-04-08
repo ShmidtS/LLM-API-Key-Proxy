@@ -3,7 +3,6 @@
 
 # src/rotator_library/providers/gemini_cli_provider.py
 
-import copy
 import json
 import orjson
 import httpx
@@ -1029,7 +1028,7 @@ class GeminiCliProvider(
 
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
-                new_function = copy.deepcopy(tool["function"])
+                new_function = orjson.loads(orjson.dumps(tool["function"]))
 
                 # The Gemini CLI API does not support the 'strict' property.
                 new_function.pop("strict", None)

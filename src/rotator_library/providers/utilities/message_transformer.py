@@ -17,7 +17,6 @@ Handles:
 
 from __future__ import annotations
 
-import copy
 import json
 import logging
 import orjson
@@ -63,8 +62,9 @@ def transform_messages_for_gemini(
         system_instruction is a dict with role and parts, or None.
         gemini_contents is a list of message dicts in Gemini format.
     """
-    # Don't mutate original messages
-    messages = copy.deepcopy(messages)
+    # Don't mutate original messages; only the outer list is modified (pop),
+    # individual message dicts are read-only, so shallow copy suffices
+    messages = list(messages)
 
     system_instruction = None
     gemini_contents = []

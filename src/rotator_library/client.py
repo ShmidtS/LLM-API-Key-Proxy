@@ -1665,10 +1665,8 @@ class RotatingClient:
                         json_buffer_parts.clear()
 
                     # Convert chunk to dict, handling both litellm.ModelResponse and raw dicts
-                    # Prefer orjson for speed (avoids Pydantic model_dump overhead per chunk)
-                    if hasattr(chunk, "__class__") and chunk.__class__.__name__ == "ModelResponse":
-                        chunk_dict = orjson.loads(orjson.dumps(chunk))
-                    elif hasattr(chunk, "model_dump"):
+                    # model_dump() is faster than orjson round-trip for Pydantic objects
+                    if hasattr(chunk, "model_dump"):
                         chunk_dict = chunk.model_dump()
                     else:
                         chunk_dict = chunk
@@ -2318,6 +2316,11 @@ class RotatingClient:
                             classified_error = classify_error(e, provider=provider)
                             error_message = str(e).split("\n")[0]
 
+                            # Reset LiteLLM client cache on auth errors (401/403)
+                            # Bad credentials can poison cached clients; don't clear on 429/500
+                            if classified_error.error_type == "authentication":
+                                self._reset_litellm_client_cache()
+
                             log_failure(
                                 api_key=current_cred,
                                 model=model,
@@ -2705,6 +2708,11 @@ class RotatingClient:
                             classified_error = classify_error(e, provider=provider)
                             error_message = str(e).split("\n")[0]
 
+                            # Reset LiteLLM client cache on auth errors (401/403)
+                            # Bad credentials can poison cached clients; don't clear on 429/500
+                            if e.response.status_code in (401, 403):
+                                self._reset_litellm_client_cache()
+
                             lib_logger.warning(
                                 f"Key {mask_credential(current_cred)} HTTP {e.response.status_code} ({classified_error.error_type})."
                             )
@@ -3058,6 +3066,10 @@ class RotatingClient:
                                 )
                                 error_message = str(original_exc).split("\n")[0]
 
+                                # Reset LiteLLM client cache on auth errors (401/403)
+                                if classified_error.error_type == "authentication":
+                                    self._reset_litellm_client_cache()
+
                                 log_failure(
                                     api_key=current_cred,
                                     model=model,
@@ -3365,6 +3377,10 @@ class RotatingClient:
                             classified_error = classify_error(
                                 original_exc, provider=provider
                             )
+
+                            # Reset LiteLLM client cache on auth errors (401/403)
+                            if classified_error.error_type == "authentication":
+                                self._reset_litellm_client_cache()
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):

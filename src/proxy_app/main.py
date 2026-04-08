@@ -787,8 +787,14 @@ async def streaming_response_wrapper(
     Wraps a streaming response to log the full response after completion
     and ensures any errors during the stream are sent to the client.
     """
-    response_chunks = []
-    full_response = {}
+    # --- Inline aggregation state (eliminates second pass over response_chunks) ---
+    final_message = {"role": "assistant"}
+    _content_parts: list = []
+    _generic_str_parts: dict = {}
+    aggregated_tool_calls = {}  # index -> {type, id, function: {name_parts, args_parts}}
+    usage_data = None
+    finish_reason = None
+    first_chunk_meta = None  # {id, created, model} from first SSE chunk
     _chunk_count = 0
 
     try:
@@ -804,9 +810,84 @@ async def streaming_response_wrapper(
                 if content != "[DONE]":
                     try:
                         chunk_data = orjson.loads(content)
-                        response_chunks.append(chunk_data)
                         if logger:
                             logger.log_stream_chunk(chunk_data)
+
+                        # --- Inline aggregation (single pass, no second iteration) ---
+                        # Capture metadata from first chunk
+                        if first_chunk_meta is None:
+                            first_chunk_meta = {
+                                "id": chunk_data.get("id"),
+                                "created": chunk_data.get("created"),
+                                "model": chunk_data.get("model"),
+                            }
+
+                        if "choices" in chunk_data and chunk_data["choices"]:
+                            choice = chunk_data["choices"][0]
+                            delta = choice.get("delta", {})
+
+                            for key, value in delta.items():
+                                if value is None:
+                                    continue
+
+                                if key == "content":
+                                    if value:
+                                        _content_parts.append(value)
+
+                                elif key == "tool_calls":
+                                    for tc_chunk in value:
+                                        index = tc_chunk["index"]
+                                        if index not in aggregated_tool_calls:
+                                            aggregated_tool_calls[index] = {
+                                                "type": "function",
+                                                "function": {
+                                                    "name_parts": [],
+                                                    "args_parts": [],
+                                                },
+                                            }
+                                        tc = aggregated_tool_calls[index]
+                                        if tc_chunk.get("id"):
+                                            tc["id"] = tc_chunk["id"]
+                                        if "function" in tc_chunk:
+                                            fn = tc_chunk["function"]
+                                            if fn.get("name") is not None:
+                                                tc["function"]["name_parts"].append(fn["name"])
+                                            if fn.get("arguments") is not None:
+                                                tc["function"]["args_parts"].append(
+                                                    fn["arguments"]
+                                                )
+
+                                elif key == "function_call":
+                                    if "function_call" not in final_message:
+                                        final_message["function_call"] = {
+                                            "_name_parts": [],
+                                            "_args_parts": [],
+                                        }
+                                    if value.get("name") is not None:
+                                        final_message["function_call"]["_name_parts"].append(
+                                            value["name"]
+                                        )
+                                    if value.get("arguments") is not None:
+                                        final_message["function_call"]["_args_parts"].append(
+                                            value["arguments"]
+                                        )
+
+                                else:  # Generic key handling for other data like 'reasoning'
+                                    if key == "role":
+                                        final_message[key] = value
+                                    elif isinstance(value, str):
+                                        if key not in _generic_str_parts:
+                                            _generic_str_parts[key] = []
+                                        _generic_str_parts[key].append(value)
+                                    else:
+                                        final_message[key] = value
+
+                            if "finish_reason" in choice and choice["finish_reason"]:
+                                finish_reason = choice["finish_reason"]
+
+                        if "usage" in chunk_data and chunk_data["usage"]:
+                            usage_data = chunk_data["usage"]
+
                     except json.JSONDecodeError:
                         pass
     except Exception as e:
@@ -828,87 +909,7 @@ async def streaming_response_wrapper(
             )
         return  # Stop further processing
     finally:
-        if response_chunks:
-            # --- Aggregation Logic ---
-            final_message = {"role": "assistant"}
-            # Use lists for O(n) string building instead of O(n²) repeated concatenation
-            _content_parts: list = []
-            _generic_str_parts: dict = {}  # key -> list of str parts
-            aggregated_tool_calls = (
-                {}
-            )  # index -> {type, id, function: {name_parts, args_parts}}
-            usage_data = None
-            finish_reason = None
-
-            for chunk in response_chunks:
-                if "choices" in chunk and chunk["choices"]:
-                    choice = chunk["choices"][0]
-                    delta = choice.get("delta", {})
-
-                    # Dynamically aggregate all fields from the delta
-                    for key, value in delta.items():
-                        if value is None:
-                            continue
-
-                        if key == "content":
-                            if value:
-                                _content_parts.append(value)
-
-                        elif key == "tool_calls":
-                            for tc_chunk in value:
-                                index = tc_chunk["index"]
-                                if index not in aggregated_tool_calls:
-                                    aggregated_tool_calls[index] = {
-                                        "type": "function",
-                                        "function": {
-                                            "name_parts": [],
-                                            "args_parts": [],
-                                        },
-                                    }
-                                tc = aggregated_tool_calls[index]
-                                if tc_chunk.get("id"):
-                                    tc["id"] = tc_chunk["id"]
-                                if "function" in tc_chunk:
-                                    fn = tc_chunk["function"]
-                                    if fn.get("name") is not None:
-                                        tc["function"]["name_parts"].append(fn["name"])
-                                    if fn.get("arguments") is not None:
-                                        tc["function"]["args_parts"].append(
-                                            fn["arguments"]
-                                        )
-
-                        elif key == "function_call":
-                            if "function_call" not in final_message:
-                                final_message["function_call"] = {
-                                    "_name_parts": [],
-                                    "_args_parts": [],
-                                }
-                            if value.get("name") is not None:
-                                final_message["function_call"]["_name_parts"].append(
-                                    value["name"]
-                                )
-                            if value.get("arguments") is not None:
-                                final_message["function_call"]["_args_parts"].append(
-                                    value["arguments"]
-                                )
-
-                        else:  # Generic key handling for other data like 'reasoning'
-                            # FIX: Role should always replace, never concatenate
-                            if key == "role":
-                                final_message[key] = value
-                            elif isinstance(value, str):
-                                if key not in _generic_str_parts:
-                                    _generic_str_parts[key] = []
-                                _generic_str_parts[key].append(value)
-                            else:
-                                final_message[key] = value
-
-                    if "finish_reason" in choice and choice["finish_reason"]:
-                        finish_reason = choice["finish_reason"]
-
-                if "usage" in chunk and chunk["usage"]:
-                    usage_data = chunk["usage"]
-
+        if first_chunk_meta is not None:
             # --- Join accumulated string parts ---
             if _content_parts:
                 final_message["content"] = "".join(_content_parts)
@@ -948,7 +949,6 @@ async def streaming_response_wrapper(
                 if field not in final_message:
                     final_message[field] = None
 
-            first_chunk = response_chunks[0]
             final_choice = {
                 "index": 0,
                 "message": final_message,
@@ -956,13 +956,15 @@ async def streaming_response_wrapper(
             }
 
             full_response = {
-                "id": first_chunk.get("id"),
+                "id": first_chunk_meta.get("id"),
                 "object": "chat.completion",
-                "created": first_chunk.get("created"),
-                "model": first_chunk.get("model"),
+                "created": first_chunk_meta.get("created"),
+                "model": first_chunk_meta.get("model"),
                 "choices": [final_choice],
                 "usage": usage_data,
             }
+        else:
+            full_response = {}
 
         if logger:
             logger.log_final_response(

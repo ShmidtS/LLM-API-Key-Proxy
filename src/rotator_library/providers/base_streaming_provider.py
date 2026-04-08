@@ -7,7 +7,6 @@ across multiple API providers.
 """
 
 import asyncio
-import copy
 import json
 import logging
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
@@ -88,7 +87,7 @@ class StreamingResponseMixin:
         cleaned_tools = []
 
         for tool in tools:
-            cleaned_tool = copy.deepcopy(tool)
+            cleaned_tool = orjson.loads(orjson.dumps(tool))
 
             if "function" in cleaned_tool:
                 func = cleaned_tool["function"]

@@ -37,31 +37,37 @@ class ChunkBatcher:
     - Time since last flush exceeds max_delay_ms
     """
     
-    def __init__(self, max_size: int = 4096, max_delay_ms: int = 10):
+    def __init__(self, max_size: int = 4096, max_delay_ms: int = 1):
         self.buffer = []
         self.current_size = 0
         self.max_size = max_size
         self.max_delay_ms = max_delay_ms
         self.last_flush = monotonic()
-    
+        self._first_event = True  # Flush first event immediately for low TTFT
+
     def add(self, event: str) -> Optional[str]:
         """
         Add event to buffer.
-        
+
         Returns:
             Flushed buffer if threshold reached, None otherwise
         """
         self.buffer.append(event)
         self.current_size += len(event)
-        
+
+        # First event flushes immediately to minimize time-to-first-token
+        if self._first_event:
+            self._first_event = False
+            return self.flush()
+
         if self.current_size >= self.max_size:
             return self.flush()
-        
+
         # Check time-based flush
         elapsed_ms = (monotonic() - self.last_flush) * 1000
         if elapsed_ms >= self.max_delay_ms:
             return self.flush()
-        
+
         return None
     
     def flush(self) -> str:
@@ -241,7 +247,7 @@ async def anthropic_streaming_wrapper_fast(
     stop_reason_final = "end_turn"
     
     # Initialize chunk batcher for improved throughput
-    batcher = ChunkBatcher(max_size=4096, max_delay_ms=10)
+    batcher = ChunkBatcher(max_size=4096, max_delay_ms=1)
     
     # Heartbeat tracking to prevent connection timeouts
     last_event_time = monotonic()

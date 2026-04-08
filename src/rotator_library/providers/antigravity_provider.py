@@ -21,7 +21,6 @@ Key Features:
 from __future__ import annotations
 
 import asyncio
-import copy
 import functools
 import hashlib
 import orjson
@@ -1750,7 +1749,8 @@ class AntigravityProvider(
             - sanitized_messages: The cleaned message list
             - force_disable_thinking: If True, thinking must be disabled for this request
         """
-        messages = copy.deepcopy(messages)
+        # gemini_contents is a local variable freshly created by _transform_messages,
+        # not shared across coroutines — no need to deepcopy before in-place mutation
         state = self._analyze_conversation_state(messages)
 
         lib_logger.debug(
@@ -2423,7 +2423,9 @@ class AntigravityProvider(
         - Claude thinking injection from cache
         - Gemini 3 thoughtSignature preservation
         """
-        messages = copy.deepcopy(messages)
+        # Only the outer list is mutated (pop(0) for system messages);
+        # individual message dicts are read-only, so shallow copy suffices
+        messages = list(messages)
         system_instruction = None
         gemini_contents = []
 
@@ -2736,7 +2738,7 @@ class AntigravityProvider(
         if not tools:
             return tools
 
-        modified = copy.deepcopy(tools) if copy_tools else tools
+        modified = orjson.loads(orjson.dumps(tools)) if copy_tools else tools
         for tool in modified:
             for func_decl in tool.get("functionDeclarations", []):
                 name = func_decl.get("name", "")
@@ -2767,7 +2769,7 @@ class AntigravityProvider(
         if not tools:
             return tools
 
-        modified = copy.deepcopy(tools) if copy_tools else tools
+        modified = orjson.loads(orjson.dumps(tools)) if copy_tools else tools
         for tool in modified:
             for func_decl in tool.get("functionDeclarations", []):
                 # Support both parametersJsonSchema and parameters keys
@@ -2803,7 +2805,7 @@ class AntigravityProvider(
         # Use provided prompt or default to Gemini 3 prompt
         prompt_template = description_prompt or self._gemini3_description_prompt
 
-        modified = copy.deepcopy(tools) if copy_tools else tools
+        modified = orjson.loads(orjson.dumps(tools)) if copy_tools else tools
         for tool in modified:
             for func_decl in tool.get("functionDeclarations", []):
                 # Delegate to mixin's singular _inject_signature_into_description method
@@ -3398,7 +3400,7 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
             "requestType": "agent",  # Required for agent-style requests
             "requestId": _generate_request_id(),
             "model": internal_model,
-            "request": copy.deepcopy(gemini_payload),
+            "request": orjson.loads(orjson.dumps(gemini_payload)),
         }
 
         # Add stable session ID based on first user message
@@ -3474,9 +3476,11 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
         # Add default safety settings to prevent content filtering
         # Only add if not already present in the payload
         if "safetySettings" not in antigravity_payload["request"]:
-            antigravity_payload["request"]["safetySettings"] = copy.deepcopy(
-                DEFAULT_SAFETY_SETTINGS
-            )
+            # DEFAULT_SAFETY_SETTINGS is a list of simple flat dicts with
+            # string keys/values — shallow list copy is sufficient
+            antigravity_payload["request"]["safetySettings"] = [
+                dict(item) for item in DEFAULT_SAFETY_SETTINGS
+            ]
 
         # Handle max_tokens and thinking budget clamping/expansion
         # For Claude: expand max_tokens to accommodate thinking (default) or clamp thinking to max_tokens
@@ -4070,8 +4074,10 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
             # Apply tool transformations
             if self._is_gemini_3(model) and self._enable_gemini3_tool_fix:
                 # Gemini 3: namespace prefix + strict schema + parameter signatures
+                # Tools are freshly built by _build_tools_payload — no other
+                # reference exists, so in-place mutation is safe (skip deepcopy)
                 gemini_payload["tools"] = self._apply_gemini3_namespace(
-                    gemini_payload["tools"]
+                    gemini_payload["tools"], copy_tools=False
                 )
 
                 if self._gemini3_enforce_strict_schema:
@@ -4083,8 +4089,9 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
                 )
             elif self._is_claude(model) and self._enable_claude_tool_fix:
                 # Claude: parameter signatures only (no namespace prefix)
+                # Freshly built tools — safe to mutate in place
                 gemini_payload["tools"] = self._inject_signature_into_descriptions(
-                    gemini_payload["tools"], self._claude_description_prompt
+                    gemini_payload["tools"], self._claude_description_prompt, copy_tools=False
                 )
 
         # Get access token first (needed for project discovery)
@@ -4682,9 +4689,11 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
                         current_gemini_contents.append(assistant_msg)
                         current_gemini_contents.append(user_msg)
 
-                        # Rebuild payload with modified contents
-                        gemini_payload_copy = copy.deepcopy(gemini_payload)
-                        gemini_payload_copy["contents"] = current_gemini_contents
+                        # Only "contents" differs from the original payload;
+                        # _transform_to_antigravity_format deep-copies internally
+                        # (line 3401: orjson round-trip), so a shallow dict copy
+                        # with replaced contents is sufficient here
+                        gemini_payload_copy = {**gemini_payload, "contents": current_gemini_contents}
                         current_payload = self._transform_to_antigravity_format(
                             gemini_payload_copy,
                             model,
