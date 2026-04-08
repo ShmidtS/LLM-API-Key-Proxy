@@ -64,6 +64,7 @@ class CredentialWeightCache:
         self._ttl = ttl_seconds
         self._threshold = usage_change_threshold
         self._cache: Dict[str, CachedWeights] = {}  # key -> CachedWeights
+        self._provider_index: Dict[str, List[str]] = {}  # provider -> [cache_keys]
         self._lock = asyncio.Lock()
 
         # Statistics
@@ -151,6 +152,8 @@ class CredentialWeightCache:
 
         async with self._lock:
             self._cache[key] = cached
+            # Update provider index for O(1) invalidation
+            self._provider_index.setdefault(provider, []).append(key)
 
     async def invalidate(
         self,
@@ -169,9 +172,12 @@ class CredentialWeightCache:
         async with self._lock:
             keys_to_invalidate = []
 
-            for key, cached in self._cache.items():
-                # Check if this key is for the affected provider
-                if not key.startswith(f"{provider}:"):
+            # Use provider index for O(1) lookup instead of O(n) prefix scan
+            provider_keys = self._provider_index.get(provider, [])
+
+            for key in provider_keys:
+                cached = self._cache.get(key)
+                if cached is None:
                     continue
 
                 # Check if this credential is in the cached entry
@@ -202,12 +208,12 @@ class CredentialWeightCache:
         async with self._lock:
             if provider is None:
                 self._cache.clear()
+                self._provider_index.clear()
             else:
-                keys_to_remove = [
-                    k for k in self._cache.keys() if k.startswith(f"{provider}:")
-                ]
+                # Use provider index for O(1) lookup
+                keys_to_remove = self._provider_index.pop(provider, [])
                 for key in keys_to_remove:
-                    del self._cache[key]
+                    self._cache.pop(key, None)
 
             self._stats["invalidations"] += len(self._cache)
 
@@ -277,7 +283,14 @@ class CredentialWeightCache:
             ]
             for key in keys_to_remove:
                 del self._cache[key]
+                # Clean up provider index
+                for prov_keys in self._provider_index.values():
+                    if key in prov_keys:
+                        prov_keys.remove(key)
                 removed += 1
+
+            # Clean empty provider index entries
+            self._provider_index = {k: v for k, v in self._provider_index.items() if v}
 
         return removed
 
