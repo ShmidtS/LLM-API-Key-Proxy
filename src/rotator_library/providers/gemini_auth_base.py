@@ -79,19 +79,6 @@ class GeminiAuthBase(GoogleOAuthBase):
         self.project_id_cache: Dict[str, str] = {}
         self.project_tier_cache: Dict[str, str] = {}
 
-    def _extract_project_id_from_response(
-        self, data: Dict[str, Any], key: str = "cloudaicompanionProject"
-    ) -> Optional[str]:
-        """Extract project ID from API response, handling both string and object formats."""
-        value = data.get(key)
-        if value is None:
-            return None
-        if isinstance(value, str):
-            return value
-        if isinstance(value, dict):
-            return value.get("id")
-        return None
-
     # =========================================================================
     # POST-AUTH DISCOVERY HOOK
     # =========================================================================
@@ -639,43 +626,6 @@ class GeminiAuthBase(GoogleOAuthBase):
             "To manually specify a project, set GEMINI_CLI_PROJECT_ID in your .env file."
         )
 
-    async def _persist_project_metadata(
-        self, credential_path: str, project_id: str, tier: Optional[str]
-    ):
-        """Persists project ID and tier to the credential file for faster future startups."""
-        # Skip persistence for env:// paths (environment-based credentials)
-        credential_index = self._parse_env_credential_path(credential_path)
-        if credential_index is not None:
-            lib_logger.debug(
-                f"Skipping project metadata persistence for env:// credential path: {credential_path}"
-            )
-            return
-
-        try:
-            # Load current credentials
-            with open(credential_path, "r") as f:
-                creds = json.load(f)
-
-            # Update metadata
-            if "_proxy_metadata" not in creds:
-                creds["_proxy_metadata"] = {}
-
-            creds["_proxy_metadata"]["project_id"] = project_id
-            if tier:
-                creds["_proxy_metadata"]["tier"] = tier
-
-            # Save back using the existing save method (handles atomic writes and permissions)
-            await self._save_credentials(credential_path, creds)
-
-            lib_logger.debug(
-                f"Persisted project_id and tier to credential file: {credential_path}"
-            )
-        except Exception as e:
-            lib_logger.warning(
-                f"Failed to persist project metadata to credential file: {e}"
-            )
-            # Non-fatal - just means slower startup next time
-
     # =========================================================================
     # CREDENTIAL MANAGEMENT OVERRIDES
     # =========================================================================
@@ -684,25 +634,3 @@ class GeminiAuthBase(GoogleOAuthBase):
         """Return the file prefix for Gemini CLI credentials."""
         return "gemini_cli"
 
-    def build_env_lines(self, creds: Dict[str, Any], cred_number: int) -> List[str]:
-        """
-        Generate .env file lines for a Gemini CLI credential.
-
-        Includes tier and project_id from _proxy_metadata.
-        """
-        # Get base lines from parent class
-        lines = super().build_env_lines(creds, cred_number)
-
-        # Add Gemini-specific fields (tier and project_id)
-        metadata = creds.get("_proxy_metadata", {})
-        prefix = f"{self.ENV_PREFIX}_{cred_number}"
-
-        project_id = metadata.get("project_id", "")
-        tier = metadata.get("tier", "")
-
-        if project_id:
-            lines.append(f"{prefix}_PROJECT_ID={project_id}")
-        if tier:
-            lines.append(f"{prefix}_TIER={tier}")
-
-        return lines
