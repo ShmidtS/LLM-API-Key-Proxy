@@ -12,11 +12,8 @@ import asyncio
 import logging
 import webbrowser
 import os
-import re
-from dataclasses import dataclass, field
 from pathlib import Path
-from glob import glob
-from typing import Dict, Any, Tuple, Union, Optional, List
+from typing import ClassVar, Dict, Any, Tuple, Union, Optional, List
 
 import httpx
 
@@ -29,7 +26,6 @@ from rich.markup import escape as rich_escape
 
 from ..utils.headless_detection import is_headless_environment
 from ..utils.reauth_coordinator import get_reauth_coordinator
-from ..utils.resilient_io import safe_write_json
 from ..error_handler import CredentialNeedsReauthError
 
 lib_logger = logging.getLogger("rotator_library")
@@ -39,26 +35,10 @@ CLIENT_ID = (
 )
 SCOPE = "openid profile email model.completion"
 TOKEN_ENDPOINT = "https://chat.qwen.ai/api/v1/oauth2/token"
-REFRESH_EXPIRY_BUFFER_SECONDS = 3 * 60 * 60  # 3 hours buffer before expiry
-
 console = Console()
 
 
-@dataclass
-class QwenCredentialSetupResult:
-    """
-    Standardized result structure for Qwen credential setup operations.
-    """
-
-    success: bool
-    file_path: Optional[str] = None
-    email: Optional[str] = None
-    is_update: bool = False
-    error: Optional[str] = None
-    credentials: Optional[Dict[str, Any]] = field(default=None, repr=False)
-
-
-from .google_oauth_base import GoogleOAuthBase
+from .google_oauth_base import CredentialSetupResult, GoogleOAuthBase
 
 
 class QwenAuthBase(GoogleOAuthBase):
@@ -68,6 +48,7 @@ class QwenAuthBase(GoogleOAuthBase):
     OAUTH_SCOPES = ["openid", "profile", "email", "model.completion"]
     ENV_PREFIX = "QWEN_CODE"
     REFRESH_EXPIRY_BUFFER_SECONDS = 3 * 60 * 60  # 3 hours buffer
+    BUFFER_ON_FAILURE: ClassVar[bool] = False
 
     def __init__(self):
         super().__init__()
@@ -189,56 +170,6 @@ class QwenAuthBase(GoogleOAuthBase):
                     self._credentials_cache[path] = env_creds
                     return env_creds
                 raise  # Re-raise the original file not found error
-
-    async def _save_credentials(self, path: str, creds: Dict[str, Any]) -> bool:
-        """Save credentials to disk, then update cache. Returns True only if disk write succeeded.
-
-        For providers with rotating refresh tokens (like Qwen), disk persistence is CRITICAL.
-        If we update the cache but fail to write to disk:
-        - The old refresh_token on disk is now invalid (consumed by API)
-        - On restart, we'd load the invalid token and require re-auth
-
-        By writing to disk FIRST, we ensure:
-        - Cache only updated after disk succeeds (guaranteed parity)
-        - If disk fails, cache keeps old tokens, refresh is retried
-        - No desync between cache and disk is possible
-        """
-        # Don't save to file if credentials were loaded from environment
-        if creds.get("_proxy_metadata", {}).get("loaded_from_env"):
-            self._credentials_cache[path] = creds
-            lib_logger.debug("Credentials loaded from env, skipping file save")
-            return True
-
-        # Write to disk FIRST - do NOT buffer on failure for rotating tokens
-        # Buffering is dangerous because the refresh_token may be stale by retry time
-        if not safe_write_json(
-            path, creds, lib_logger, secure_permissions=True, buffer_on_failure=False
-        ):
-            lib_logger.error(
-                f"Failed to write Qwen credentials to disk for '{Path(path).name}'. "
-                f"Cache NOT updated to maintain parity with disk."
-            )
-            return False
-
-        # Disk write succeeded - now update cache (guaranteed parity)
-        self._credentials_cache[path] = creds
-        lib_logger.debug(
-            f"Saved updated Qwen OAuth credentials to '{Path(path).name}'."
-        )
-        return True
-
-    def _is_token_expired(self, creds: Dict[str, Any]) -> bool:
-        expiry_timestamp = creds.get("expiry_date", 0) / 1000
-        return expiry_timestamp < time.time() + REFRESH_EXPIRY_BUFFER_SECONDS
-
-    def _is_token_truly_expired(self, creds: Dict[str, Any]) -> bool:
-        """Check if token is TRULY expired (past actual expiry, not just threshold).
-
-        This is different from _is_token_expired() which uses a buffer for proactive refresh.
-        This method checks if the token is actually unusable.
-        """
-        expiry_timestamp = creds.get("expiry_date", 0) / 1000
-        return expiry_timestamp < time.time()
 
     async def _refresh_token(self, path: str, force: bool = False) -> Dict[str, Any]:
         async with self._get_lock(path):
@@ -917,76 +848,9 @@ class QwenAuthBase(GoogleOAuthBase):
             lib_logger.error(f"Failed to get Qwen user info from credentials: {e}")
             return {"email": None}
 
-    # =========================================================================
-    # CREDENTIAL MANAGEMENT METHODS
-    # =========================================================================
-
-    def _get_provider_file_prefix(self) -> str:
-        """Return the file prefix for Qwen credentials."""
-        return "qwen_code"
-
-    def _get_oauth_base_dir(self) -> Path:
-        """Get the base directory for OAuth credential files."""
-        return Path.cwd() / "oauth_creds"
-
-    def _find_existing_credential_by_email(
-        self, email: str, base_dir: Optional[Path] = None
-    ) -> Optional[Path]:
-        """Find an existing credential file for the given email."""
-        if base_dir is None:
-            base_dir = self._get_oauth_base_dir()
-
-        prefix = self._get_provider_file_prefix()
-        pattern = str(base_dir / f"{prefix}_oauth_*.json")
-
-        for cred_file in glob(pattern):
-            try:
-                with open(cred_file, "r") as f:
-                    creds = json.load(f)
-                existing_email = creds.get("_proxy_metadata", {}).get("email")
-                if existing_email == email:
-                    return Path(cred_file)
-            except (json.JSONDecodeError, IOError) as e:
-                lib_logger.debug(f"Could not read credential file {cred_file}: {e}")
-                continue
-
-        return None
-
-    def _get_next_credential_number(self, base_dir: Optional[Path] = None) -> int:
-        """Get the next available credential number."""
-        if base_dir is None:
-            base_dir = self._get_oauth_base_dir()
-
-        prefix = self._get_provider_file_prefix()
-        pattern = str(base_dir / f"{prefix}_oauth_*.json")
-
-        existing_numbers = []
-        for cred_file in glob(pattern):
-            match = re.search(r"_oauth_(\d+)\.json$", cred_file)
-            if match:
-                existing_numbers.append(int(match.group(1)))
-
-        if not existing_numbers:
-            return 1
-        return max(existing_numbers) + 1
-
-    def _build_credential_path(
-        self, base_dir: Optional[Path] = None, number: Optional[int] = None
-    ) -> Path:
-        """Build a path for a new credential file."""
-        if base_dir is None:
-            base_dir = self._get_oauth_base_dir()
-
-        if number is None:
-            number = self._get_next_credential_number(base_dir)
-
-        prefix = self._get_provider_file_prefix()
-        filename = f"{prefix}_oauth_{number}.json"
-        return base_dir / filename
-
     async def setup_credential(
         self, base_dir: Optional[Path] = None
-    ) -> QwenCredentialSetupResult:
+    ) -> CredentialSetupResult:
         """
         Complete credential setup flow: OAuth -> save.
 
@@ -1009,7 +873,7 @@ class QwenAuthBase(GoogleOAuthBase):
             email = new_creds.get("_proxy_metadata", {}).get("email")
 
             if not email:
-                return QwenCredentialSetupResult(
+                return CredentialSetupResult(
                     success=False, error="Could not retrieve email from OAuth response"
                 )
 
@@ -1030,12 +894,12 @@ class QwenAuthBase(GoogleOAuthBase):
 
             # Step 4: Save credentials to file
             if not await self._save_credentials(str(file_path), new_creds):
-                return QwenCredentialSetupResult(
+                return CredentialSetupResult(
                     success=False,
                     error=f"Failed to save credentials to disk at {file_path.name}",
                 )
 
-            return QwenCredentialSetupResult(
+            return CredentialSetupResult(
                 success=True,
                 file_path=str(file_path),
                 email=email,
@@ -1045,7 +909,7 @@ class QwenAuthBase(GoogleOAuthBase):
 
         except Exception as e:
             lib_logger.error(f"Credential setup failed: {e}")
-            return QwenCredentialSetupResult(success=False, error=str(e))
+            return CredentialSetupResult(success=False, error=str(e))
 
     def build_env_lines(self, creds: Dict[str, Any], cred_number: int) -> List[str]:
         """Generate .env file lines for a Qwen credential."""
@@ -1069,102 +933,3 @@ class QwenAuthBase(GoogleOAuthBase):
 
         return lines
 
-    def export_credential_to_env(
-        self, credential_path: str, output_dir: Optional[Path] = None
-    ) -> Optional[str]:
-        """Export a credential file to .env format."""
-        try:
-            cred_path = Path(credential_path)
-
-            # Load credential
-            with open(cred_path, "r") as f:
-                creds = json.load(f)
-
-            # Extract metadata
-            email = creds.get("_proxy_metadata", {}).get("email", "unknown")
-
-            # Get credential number from filename
-            match = re.search(r"_oauth_(\d+)\.json$", cred_path.name)
-            cred_number = int(match.group(1)) if match else 1
-
-            # Build output path
-            if output_dir is None:
-                output_dir = cred_path.parent
-
-            safe_email = email.replace("@", "_at_").replace(".", "_")
-            env_filename = f"qwen_code_{cred_number}_{safe_email}.env"
-            env_path = output_dir / env_filename
-
-            # Build and write content
-            env_lines = self.build_env_lines(creds, cred_number)
-            with open(env_path, "w") as f:
-                f.write("\n".join(env_lines))
-
-            lib_logger.info(f"Exported credential to {env_path}")
-            return str(env_path)
-
-        except Exception as e:
-            lib_logger.error(f"Failed to export credential: {e}")
-            return None
-
-    def list_credentials(self, base_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
-        """List all Qwen credential files."""
-        if base_dir is None:
-            base_dir = self._get_oauth_base_dir()
-
-        prefix = self._get_provider_file_prefix()
-        pattern = str(base_dir / f"{prefix}_oauth_*.json")
-
-        credentials = []
-        for cred_file in sorted(glob(pattern)):
-            try:
-                with open(cred_file, "r") as f:
-                    creds = json.load(f)
-
-                metadata = creds.get("_proxy_metadata", {})
-
-                # Extract number from filename
-                match = re.search(r"_oauth_(\d+)\.json$", cred_file)
-                number = int(match.group(1)) if match else 0
-
-                credentials.append(
-                    {
-                        "file_path": cred_file,
-                        "email": metadata.get("email", "unknown"),
-                        "number": number,
-                    }
-                )
-            except Exception as e:
-                lib_logger.debug(f"Could not read credential file {cred_file}: {e}")
-                continue
-
-        return credentials
-
-    def delete_credential(self, credential_path: str) -> bool:
-        """Delete a credential file."""
-        try:
-            cred_path = Path(credential_path)
-
-            # Validate that it's one of our credential files
-            prefix = self._get_provider_file_prefix()
-            if not cred_path.name.startswith(f"{prefix}_oauth_"):
-                lib_logger.error(
-                    f"File {cred_path.name} does not appear to be a Qwen Code credential"
-                )
-                return False
-
-            if not cred_path.exists():
-                lib_logger.warning(f"Credential file does not exist: {credential_path}")
-                return False
-
-            # Remove from cache if present
-            self._credentials_cache.pop(credential_path, None)
-
-            # Delete the file
-            cred_path.unlink()
-            lib_logger.info(f"Deleted credential file: {credential_path}")
-            return True
-
-        except Exception as e:
-            lib_logger.error(f"Failed to delete credential: {e}")
-            return False

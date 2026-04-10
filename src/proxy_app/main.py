@@ -174,7 +174,7 @@ with _console.status("[dim]Loading LiteLLM library...", spinner="dots"):
 # Phase 4: Application imports with granular loading messages
 print("  → Initializing proxy core...")
 with _console.status("[dim]Initializing proxy core...", spinner="dots"):
-    from rotator_library import RotatingClient
+    from rotator_library import RotatingClient, STREAM_DONE
     from rotator_library.credential_manager import CredentialManager
     from rotator_library.background_refresher import BackgroundRefresher
     from rotator_library.dns_fix import close_doh_client
@@ -301,6 +301,7 @@ print(
 # --- Logging Configuration ---
 # Import path utilities here (after loading screen) to avoid triggering heavy imports early
 from rotator_library.utils.paths import get_logs_dir, get_data_file
+from rotator_library.utils.json_utils import sse_data_event
 
 LOG_DIR = get_logs_dir(_root_dir)
 
@@ -782,12 +783,15 @@ async def verify_anthropic_api_key(
 async def streaming_response_wrapper(
     request: Request,
     request_data: dict,
-    response_stream: AsyncGenerator[str, None],
+    response_stream: AsyncGenerator[Any, None],
     logger: Optional[RawIOLogger] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Wraps a streaming response to log the full response after completion
     and ensures any errors during the stream are sent to the client.
+
+    Receives dicts + STREAM_DONE sentinel from the client pipeline,
+    serializes to SSE only at the HTTP yield boundary (single serialize).
     """
     # --- Inline aggregation state (eliminates second pass over response_chunks) ---
     final_message = {"role": "assistant"}
@@ -796,102 +800,106 @@ async def streaming_response_wrapper(
     aggregated_tool_calls = {}  # index -> {type, id, function: {name_parts, args_parts}}
     usage_data = None
     finish_reason = None
-    first_chunk_meta = None  # {id, created, model} from first SSE chunk
+    first_chunk_meta = None  # {id, created, model} from first chunk
     _chunk_count = 0
 
     try:
-        async for chunk_str in response_stream:
+        async for chunk in response_stream:
             _chunk_count += 1
             # Check disconnection every 20 chunks to avoid per-chunk syscall overhead
             if _chunk_count % 20 == 0 and await request.is_disconnected():
                 logging.warning("Client disconnected, stopping stream.")
                 break
+
+            # STREAM_DONE sentinel: emit SSE [DONE] and stop
+            if chunk is STREAM_DONE:
+                yield "data: [DONE]\n\n"
+                continue
+
+            # chunk is a dict — serialize to SSE only here (single serialize point)
+            chunk_str = sse_data_event(chunk)
             yield chunk_str
-            if chunk_str.strip() and chunk_str.startswith("data:"):
-                content = chunk_str[len("data:") :].strip()
-                if content != "[DONE]":
-                    try:
-                        chunk_data = orjson.loads(content)
-                        if logger:
-                            logger.log_stream_chunk(chunk_data)
 
-                        # --- Inline aggregation (single pass, no second iteration) ---
-                        # Capture metadata from first chunk
-                        if first_chunk_meta is None:
-                            first_chunk_meta = {
-                                "id": chunk_data.get("id"),
-                                "created": chunk_data.get("created"),
-                                "model": chunk_data.get("model"),
+            if not isinstance(chunk, dict):
+                continue
+
+            if logger:
+                logger.log_stream_chunk(chunk)
+
+            # --- Inline aggregation (single pass, no second iteration) ---
+            # Capture metadata from first chunk
+            if first_chunk_meta is None:
+                first_chunk_meta = {
+                    "id": chunk.get("id"),
+                    "created": chunk.get("created"),
+                    "model": chunk.get("model"),
+                }
+
+            if "choices" in chunk and chunk["choices"]:
+                choice = chunk["choices"][0]
+                delta = choice.get("delta", {})
+
+                for key, value in delta.items():
+                    if value is None:
+                        continue
+
+                    if key == "content":
+                        if value:
+                            _content_parts.append(value)
+
+                    elif key == "tool_calls":
+                        for tc_chunk in value:
+                            index = tc_chunk["index"]
+                            if index not in aggregated_tool_calls:
+                                aggregated_tool_calls[index] = {
+                                    "type": "function",
+                                    "function": {
+                                        "name_parts": [],
+                                        "args_parts": [],
+                                    },
+                                }
+                            tc = aggregated_tool_calls[index]
+                            if tc_chunk.get("id"):
+                                tc["id"] = tc_chunk["id"]
+                            if "function" in tc_chunk:
+                                fn = tc_chunk["function"]
+                                if fn.get("name") is not None:
+                                    tc["function"]["name_parts"].append(fn["name"])
+                                if fn.get("arguments") is not None:
+                                    tc["function"]["args_parts"].append(
+                                        fn["arguments"]
+                                    )
+
+                    elif key == "function_call":
+                        if "function_call" not in final_message:
+                            final_message["function_call"] = {
+                                "_name_parts": [],
+                                "_args_parts": [],
                             }
+                        if value.get("name") is not None:
+                            final_message["function_call"]["_name_parts"].append(
+                                value["name"]
+                            )
+                        if value.get("arguments") is not None:
+                            final_message["function_call"]["_args_parts"].append(
+                                value["arguments"]
+                            )
 
-                        if "choices" in chunk_data and chunk_data["choices"]:
-                            choice = chunk_data["choices"][0]
-                            delta = choice.get("delta", {})
+                    else:  # Generic key handling for other data like 'reasoning'
+                        if key == "role":
+                            final_message[key] = value
+                        elif isinstance(value, str):
+                            if key not in _generic_str_parts:
+                                _generic_str_parts[key] = []
+                            _generic_str_parts[key].append(value)
+                        else:
+                            final_message[key] = value
 
-                            for key, value in delta.items():
-                                if value is None:
-                                    continue
+                if "finish_reason" in choice and choice["finish_reason"]:
+                    finish_reason = choice["finish_reason"]
 
-                                if key == "content":
-                                    if value:
-                                        _content_parts.append(value)
-
-                                elif key == "tool_calls":
-                                    for tc_chunk in value:
-                                        index = tc_chunk["index"]
-                                        if index not in aggregated_tool_calls:
-                                            aggregated_tool_calls[index] = {
-                                                "type": "function",
-                                                "function": {
-                                                    "name_parts": [],
-                                                    "args_parts": [],
-                                                },
-                                            }
-                                        tc = aggregated_tool_calls[index]
-                                        if tc_chunk.get("id"):
-                                            tc["id"] = tc_chunk["id"]
-                                        if "function" in tc_chunk:
-                                            fn = tc_chunk["function"]
-                                            if fn.get("name") is not None:
-                                                tc["function"]["name_parts"].append(fn["name"])
-                                            if fn.get("arguments") is not None:
-                                                tc["function"]["args_parts"].append(
-                                                    fn["arguments"]
-                                                )
-
-                                elif key == "function_call":
-                                    if "function_call" not in final_message:
-                                        final_message["function_call"] = {
-                                            "_name_parts": [],
-                                            "_args_parts": [],
-                                        }
-                                    if value.get("name") is not None:
-                                        final_message["function_call"]["_name_parts"].append(
-                                            value["name"]
-                                        )
-                                    if value.get("arguments") is not None:
-                                        final_message["function_call"]["_args_parts"].append(
-                                            value["arguments"]
-                                        )
-
-                                else:  # Generic key handling for other data like 'reasoning'
-                                    if key == "role":
-                                        final_message[key] = value
-                                    elif isinstance(value, str):
-                                        if key not in _generic_str_parts:
-                                            _generic_str_parts[key] = []
-                                        _generic_str_parts[key].append(value)
-                                    else:
-                                        final_message[key] = value
-
-                            if "finish_reason" in choice and choice["finish_reason"]:
-                                finish_reason = choice["finish_reason"]
-
-                        if "usage" in chunk_data and chunk_data["usage"]:
-                            usage_data = chunk_data["usage"]
-
-                    except (json.JSONDecodeError, orjson.JSONDecodeError):
-                        pass
+            if "usage" in chunk and chunk["usage"]:
+                usage_data = chunk["usage"]
     except Exception as e:
         logging.error(f"An error occurred during the response stream: {e}")
         # Yield a final error message to the client to ensure they are not left hanging.
@@ -902,7 +910,7 @@ async def streaming_response_wrapper(
                 "code": 500,
             }
         }
-        yield f"data: {orjson.dumps(error_payload).decode()}\n\n"
+        yield sse_data_event(error_payload)
         yield "data: [DONE]\n\n"
         # Also log this as a failed request
         if logger:

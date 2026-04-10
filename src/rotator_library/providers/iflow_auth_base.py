@@ -12,11 +12,8 @@ import logging
 import webbrowser
 import socket
 import os
-import re
-from dataclasses import dataclass, field
 from pathlib import Path
-from glob import glob
-from typing import Dict, Any, Tuple, Union, Optional, List
+from typing import ClassVar, Dict, Any, Tuple, Union, Optional, List
 from urllib.parse import urlencode, parse_qs, urlparse
 
 import httpx
@@ -29,7 +26,6 @@ from rich.text import Text
 from rich.markup import escape as rich_escape
 from ..utils.headless_detection import is_headless_environment
 from ..utils.reauth_coordinator import get_reauth_coordinator
-from ..utils.resilient_io import safe_write_json
 from ..error_handler import CredentialNeedsReauthError
 
 lib_logger = logging.getLogger("rotator_library")
@@ -48,18 +44,7 @@ IFLOW_CLIENT_SECRET = "4Z3YjXycVsQvyGF1etiNlIBB4RsqSDtW"
 CALLBACK_PORT = 11451
 
 
-@dataclass
-class IFlowCredentialSetupResult:
-    """
-    Standardized result structure for iFlow credential setup operations.
-    """
-
-    success: bool
-    file_path: Optional[str] = None
-    email: Optional[str] = None
-    is_update: bool = False
-    error: Optional[str] = None
-    credentials: Optional[Dict[str, Any]] = field(default=None, repr=False)
+from .google_oauth_base import CredentialSetupResult
 
 
 def get_callback_port() -> int:
@@ -79,9 +64,6 @@ def get_callback_port() -> int:
             )
     return CALLBACK_PORT
 
-
-# Refresh tokens 24 hours before expiry
-REFRESH_EXPIRY_BUFFER_SECONDS = 24 * 60 * 60
 
 console = Console()
 
@@ -206,6 +188,7 @@ class IFlowAuthBase(GoogleOAuthBase):
     OAUTH_SCOPES = ["read", "write"]
     ENV_PREFIX = "IFLOW"
     REFRESH_EXPIRY_BUFFER_SECONDS = 24 * 60 * 60
+    BUFFER_ON_FAILURE: ClassVar[bool] = False
 
     def __init__(self):
         super().__init__()
@@ -325,45 +308,14 @@ class IFlowAuthBase(GoogleOAuthBase):
                     return env_creds
                 raise  # Re-raise the original file not found error
 
-    async def _save_credentials(self, path: str, creds: Dict[str, Any]) -> bool:
-        """Save credentials to disk, then update cache. Returns True only if disk write succeeded.
-
-        For providers with rotating refresh tokens, disk persistence is CRITICAL.
-        If we update the cache but fail to write to disk:
-        - The old refresh_token on disk may become invalid (consumed by API)
-        - On restart, we'd load the invalid token and require re-auth
-
-        By writing to disk FIRST, we ensure:
-        - Cache only updated after disk succeeds (guaranteed parity)
-        - If disk fails, cache keeps old tokens, refresh is retried
-        - No desync between cache and disk is possible
-        """
-        # Don't save to file if credentials were loaded from environment
-        if creds.get("_proxy_metadata", {}).get("loaded_from_env"):
-            self._credentials_cache[path] = creds
-            lib_logger.debug("Credentials loaded from env, skipping file save")
-            return True
-
-        # Write to disk FIRST - do NOT buffer on failure for rotating tokens
-        # Buffering is dangerous because the refresh_token may be stale by retry time
-        if not safe_write_json(
-            path, creds, lib_logger, secure_permissions=True, buffer_on_failure=False
-        ):
-            lib_logger.error(
-                f"Failed to write iFlow credentials to disk for '{Path(path).name}'. "
-                f"Cache NOT updated to maintain parity with disk."
-            )
-            return False
-
-        # Disk write succeeded - now update cache (guaranteed parity)
-        self._credentials_cache[path] = creds
-        lib_logger.debug(
-            f"Saved updated iFlow OAuth credentials to '{Path(path).name}'."
-        )
-        return True
-
     def _is_token_expired(self, creds: Dict[str, Any]) -> bool:
-        """Checks if the token is expired (with buffer for proactive refresh)."""
+        """Checks if the token is expired (with buffer for proactive refresh).
+
+        Override required: iFlow uses ISO 8601 string format for expiry_date
+        (e.g. "2025-01-17T12:00:00Z") while GoogleOAuthBase expects gcloud
+        token_expiry strings or numeric milliseconds. The parent's logic would
+        attempt string division (/ 1000) and crash on this format.
+        """
         # Try to parse expiry_date as ISO 8601 string
         expiry_str = creds.get("expiry_date")
         if not expiry_str:
@@ -383,13 +335,14 @@ class IFlowAuthBase(GoogleOAuthBase):
                 lib_logger.warning(f"Could not parse expiry_date: {expiry_str}")
                 return True
 
-        return expiry_timestamp < time.time() + REFRESH_EXPIRY_BUFFER_SECONDS
+        return expiry_timestamp < time.time() + self.REFRESH_EXPIRY_BUFFER_SECONDS
 
     def _is_token_truly_expired(self, creds: Dict[str, Any]) -> bool:
         """Check if token is TRULY expired (past actual expiry, not just threshold).
 
-        This is different from _is_token_expired() which uses a buffer for proactive refresh.
-        This method checks if the token is actually unusable.
+        Override required for the same reason as _is_token_expired: iFlow uses
+        ISO 8601 string format for expiry_date, incompatible with the parent's
+        gcloud/milliseconds parsing logic.
         """
         expiry_str = creds.get("expiry_date")
         if not expiry_str:
@@ -1203,74 +1156,9 @@ class IFlowAuthBase(GoogleOAuthBase):
     # CREDENTIAL MANAGEMENT METHODS
     # =========================================================================
 
-    def _get_provider_file_prefix(self) -> str:
-        """Return the file prefix for iFlow credentials."""
-        return "iflow"
-
-    def _get_oauth_base_dir(self) -> Path:
-        """Get the base directory for OAuth credential files."""
-        return Path.cwd() / "oauth_creds"
-
-    def _find_existing_credential_by_email(
-        self, email: str, base_dir: Optional[Path] = None
-    ) -> Optional[Path]:
-        """Find an existing credential file for the given email."""
-        if base_dir is None:
-            base_dir = self._get_oauth_base_dir()
-
-        prefix = self._get_provider_file_prefix()
-        pattern = str(base_dir / f"{prefix}_oauth_*.json")
-
-        for cred_file in glob(pattern):
-            try:
-                with open(cred_file, "r") as f:
-                    creds = json.load(f)
-                existing_email = creds.get("email") or creds.get(
-                    "_proxy_metadata", {}
-                ).get("email")
-                if existing_email == email:
-                    return Path(cred_file)
-            except (json.JSONDecodeError, IOError) as e:
-                lib_logger.debug(f"Could not read credential file {cred_file}: {e}")
-                continue
-
-        return None
-
-    def _get_next_credential_number(self, base_dir: Optional[Path] = None) -> int:
-        """Get the next available credential number."""
-        if base_dir is None:
-            base_dir = self._get_oauth_base_dir()
-
-        prefix = self._get_provider_file_prefix()
-        pattern = str(base_dir / f"{prefix}_oauth_*.json")
-
-        existing_numbers = []
-        for cred_file in glob(pattern):
-            match = re.search(r"_oauth_(\d+)\.json$", cred_file)
-            if match:
-                existing_numbers.append(int(match.group(1)))
-
-        if not existing_numbers:
-            return 1
-        return max(existing_numbers) + 1
-
-    def _build_credential_path(
-        self, base_dir: Optional[Path] = None, number: Optional[int] = None
-    ) -> Path:
-        """Build a path for a new credential file."""
-        if base_dir is None:
-            base_dir = self._get_oauth_base_dir()
-
-        if number is None:
-            number = self._get_next_credential_number(base_dir)
-
-        prefix = self._get_provider_file_prefix()
-        filename = f"{prefix}_oauth_{number}.json"
-        return base_dir / filename
-
     async def setup_credential(
         self, base_dir: Optional[Path] = None
-    ) -> IFlowCredentialSetupResult:
+    ) -> CredentialSetupResult:
         """
         Complete credential setup flow: OAuth -> save.
 
@@ -1293,7 +1181,7 @@ class IFlowAuthBase(GoogleOAuthBase):
             )
 
             if not email:
-                return IFlowCredentialSetupResult(
+                return CredentialSetupResult(
                     success=False, error="Could not retrieve email from OAuth response"
                 )
 
@@ -1314,12 +1202,12 @@ class IFlowAuthBase(GoogleOAuthBase):
 
             # Step 4: Save credentials to file
             if not await self._save_credentials(str(file_path), new_creds):
-                return IFlowCredentialSetupResult(
+                return CredentialSetupResult(
                     success=False,
                     error=f"Failed to save credentials to disk at {file_path.name}",
                 )
 
-            return IFlowCredentialSetupResult(
+            return CredentialSetupResult(
                 success=True,
                 file_path=str(file_path),
                 email=email,
@@ -1329,7 +1217,7 @@ class IFlowAuthBase(GoogleOAuthBase):
 
         except Exception as e:
             lib_logger.error(f"Credential setup failed: {e}")
-            return IFlowCredentialSetupResult(success=False, error=str(e))
+            return CredentialSetupResult(success=False, error=str(e))
 
     def build_env_lines(self, creds: Dict[str, Any], cred_number: int) -> List[str]:
         """Generate .env file lines for an iFlow credential."""
@@ -1356,107 +1244,3 @@ class IFlowAuthBase(GoogleOAuthBase):
         ]
 
         return lines
-
-    def export_credential_to_env(
-        self, credential_path: str, output_dir: Optional[Path] = None
-    ) -> Optional[str]:
-        """Export a credential file to .env format."""
-        try:
-            cred_path = Path(credential_path)
-
-            # Load credential
-            with open(cred_path, "r") as f:
-                creds = json.load(f)
-
-            # Extract metadata
-            email = creds.get("email") or creds.get("_proxy_metadata", {}).get(
-                "email", "unknown"
-            )
-
-            # Get credential number from filename
-            match = re.search(r"_oauth_(\d+)\.json$", cred_path.name)
-            cred_number = int(match.group(1)) if match else 1
-
-            # Build output path
-            if output_dir is None:
-                output_dir = cred_path.parent
-
-            safe_email = email.replace("@", "_at_").replace(".", "_")
-            env_filename = f"iflow_{cred_number}_{safe_email}.env"
-            env_path = output_dir / env_filename
-
-            # Build and write content
-            env_lines = self.build_env_lines(creds, cred_number)
-            with open(env_path, "w") as f:
-                f.write("\n".join(env_lines))
-
-            lib_logger.info(f"Exported credential to {env_path}")
-            return str(env_path)
-
-        except Exception as e:
-            lib_logger.error(f"Failed to export credential: {e}")
-            return None
-
-    def list_credentials(self, base_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
-        """List all iFlow credential files."""
-        if base_dir is None:
-            base_dir = self._get_oauth_base_dir()
-
-        prefix = self._get_provider_file_prefix()
-        pattern = str(base_dir / f"{prefix}_oauth_*.json")
-
-        credentials = []
-        for cred_file in sorted(glob(pattern)):
-            try:
-                with open(cred_file, "r") as f:
-                    creds = json.load(f)
-
-                email = creds.get("email") or creds.get("_proxy_metadata", {}).get(
-                    "email", "unknown"
-                )
-
-                # Extract number from filename
-                match = re.search(r"_oauth_(\d+)\.json$", cred_file)
-                number = int(match.group(1)) if match else 0
-
-                credentials.append(
-                    {
-                        "file_path": cred_file,
-                        "email": email,
-                        "number": number,
-                    }
-                )
-            except Exception as e:
-                lib_logger.debug(f"Could not read credential file {cred_file}: {e}")
-                continue
-
-        return credentials
-
-    def delete_credential(self, credential_path: str) -> bool:
-        """Delete a credential file."""
-        try:
-            cred_path = Path(credential_path)
-
-            # Validate that it's one of our credential files
-            prefix = self._get_provider_file_prefix()
-            if not cred_path.name.startswith(f"{prefix}_oauth_"):
-                lib_logger.error(
-                    f"File {cred_path.name} does not appear to be an iFlow credential"
-                )
-                return False
-
-            if not cred_path.exists():
-                lib_logger.warning(f"Credential file does not exist: {credential_path}")
-                return False
-
-            # Remove from cache if present
-            self._credentials_cache.pop(credential_path, None)
-
-            # Delete the file
-            cred_path.unlink()
-            lib_logger.info(f"Deleted credential file: {credential_path}")
-            return True
-
-        except Exception as e:
-            lib_logger.error(f"Failed to delete credential: {e}")
-            return False

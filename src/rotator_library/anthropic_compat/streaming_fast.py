@@ -23,7 +23,7 @@ from typing import AsyncGenerator, Callable, Optional, Awaitable, Any, TYPE_CHEC
 if TYPE_CHECKING:
     from ..transaction_logger import TransactionLogger
 
-from ..utils.json_utils import json_dumps_str as json_dumps, json_loads
+from ..utils.json_utils import json_dumps_str as json_dumps, json_loads, STREAM_DONE
 
 logger = logging.getLogger("rotator_library.anthropic_compat")
 
@@ -185,7 +185,7 @@ def _make_message_stop_event() -> str:
 
 
 async def anthropic_streaming_wrapper_fast(
-    openai_stream: AsyncGenerator[str, None],
+    openai_stream: AsyncGenerator[Any, None],
     original_model: str,
     request_id: Optional[str] = None,
     is_disconnected: Optional[Callable[[], Awaitable[bool]]] = None,
@@ -208,7 +208,7 @@ async def anthropic_streaming_wrapper_fast(
     - message_stop: End of message
 
     Args:
-        openai_stream: AsyncGenerator yielding OpenAI SSE format strings
+        openai_stream: AsyncGenerator yielding OpenAI chunks (dict) or SSE strings
         original_model: The model name to include in responses
         request_id: Optional request ID (auto-generated if not provided)
         is_disconnected: Optional async callback that returns True if client disconnected
@@ -254,32 +254,13 @@ async def anthropic_streaming_wrapper_fast(
     HEARTBEAT_INTERVAL = 30  # seconds
 
     try:
-        async for chunk_str in openai_stream:
+        async for raw_chunk in openai_stream:
             # Check for client disconnection if callback provided
             if is_disconnected is not None and await is_disconnected():
                 break
 
-            # Fast path: skip empty chunks and non-data lines
-            if not chunk_str or not chunk_str.startswith("data:"):
-                continue
-
-            data_content = chunk_str[5:].strip()  # Skip "data:" prefix
-
-            # Send heartbeat if no events for a while
-            current_time = monotonic()
-            if current_time - last_event_time > HEARTBEAT_INTERVAL:
-                yield ": heartbeat\n\n"
-                last_event_time = current_time
-            
-            # Handle stream end
-            if data_content == "[DONE]":
-                # CRITICAL: Send message_start if we haven't yet
-                if not message_started:
-                    event_str = _make_message_start_event(request_id, original_model, input_tokens, cached_tokens, cache_creation_tokens)
-                    if event := batcher.add(event_str):
-                        yield event
-                    message_started = True
-
+            # STREAM_DONE sentinel: stream is complete
+            if raw_chunk is STREAM_DONE:
                 # Close any open thinking block
                 if thinking_block_started:
                     event_str = _make_content_block_stop_event(current_block_index)
@@ -314,7 +295,7 @@ async def anthropic_streaming_wrapper_fast(
                 event_str = _make_message_stop_event()
                 if event := batcher.add(event_str):
                     yield event
-                
+
                 # Flush any remaining events
                 if remaining := batcher.flush():
                     yield remaining
@@ -329,11 +310,73 @@ async def anthropic_streaming_wrapper_fast(
                     )
                 break
 
-            # Parse chunk (fast path with orjson)
-            try:
-                chunk = json_loads(data_content)
-            except Exception:
+            # Dict chunk (new internal pipeline format)
+            if isinstance(raw_chunk, dict):
+                chunk = raw_chunk
+            elif isinstance(raw_chunk, str):
+                # Legacy SSE string format (backward compat)
+                if not raw_chunk or not raw_chunk.startswith("data:"):
+                    continue
+                data_content = raw_chunk[5:].strip()
+                if data_content == "[DONE]":
+                    # Re-yield STREAM_DONE path (reuse logic above by continuing loop after yielding)
+                    # Synthesize a STREAM_DONE and re-enter loop
+                    # Easier: just set raw_chunk and continue won't work, so inline the [DONE] handling
+                    # Close any open thinking block
+                    if thinking_block_started:
+                        event_str = _make_content_block_stop_event(current_block_index)
+                        if event := batcher.add(event_str):
+                            yield event
+                        current_block_index += 1
+                        thinking_block_started = False
+
+                    if content_block_started:
+                        event_str = _make_content_block_stop_event(current_block_index)
+                        if event := batcher.add(event_str):
+                            yield event
+                        current_block_index += 1
+                        content_block_started = False
+
+                    for tc_index in sorted(tool_block_indices.keys()):
+                        block_idx = tool_block_indices[tc_index]
+                        event_str = _make_content_block_stop_event(block_idx)
+                        if event := batcher.add(event_str):
+                            yield event
+
+                    stop_reason = "tool_use" if tool_calls_by_index else "end_turn"
+                    stop_reason_final = stop_reason
+
+                    event_str = _make_message_delta_event(stop_reason, output_tokens, cached_tokens, cache_creation_tokens)
+                    if event := batcher.add(event_str):
+                        yield event
+                    event_str = _make_message_stop_event()
+                    if event := batcher.add(event_str):
+                        yield event
+
+                    if remaining := batcher.flush():
+                        yield remaining
+
+                    if transaction_logger:
+                        _log_anthropic_response(
+                            transaction_logger, request_id, original_model,
+                            "".join(_thinking_parts), "".join(_text_parts),
+                            tool_calls_by_index, input_tokens, output_tokens,
+                            cached_tokens, cache_creation_tokens, stop_reason_final
+                        )
+                    break
+
+                try:
+                    chunk = json_loads(data_content)
+                except Exception:
+                    continue
+            else:
                 continue
+
+            # Send heartbeat if no events for a while
+            current_time = monotonic()
+            if current_time - last_event_time > HEARTBEAT_INTERVAL:
+                yield ": heartbeat\n\n"
+                last_event_time = current_time
 
             # Extract usage if present
             if "usage" in chunk and chunk["usage"]:

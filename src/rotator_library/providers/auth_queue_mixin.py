@@ -216,6 +216,18 @@ class AuthQueueMixin:
                     if not creds:
                         creds = await self._load_credentials(path)
 
+                    # Try-lock: if a user request holds the per-path lock,
+                    # skip this round — background refresh is best-effort and
+                    # must not block incoming API requests.
+                    lock = self._get_lock(path)
+                    if lock.locked():
+                        lib_logger.debug(
+                            f"Skipping refresh for '{Path(path).name}': "
+                            f"lock held by user request"
+                        )
+                        self._queue_retry_count.pop(path, None)
+                        continue
+
                     try:
                         async with asyncio.timeout(self._refresh_timeout_seconds):
                             await self._refresh_token(path, creds, force=force)

@@ -11,6 +11,8 @@ serialization and deserialization of large payloads in hot paths
 import orjson
 from typing import Any
 
+STREAM_DONE = object()
+"""Sentinel marker indicating stream completion in internal pipeline."""
 
 def json_dumps(obj: Any) -> bytes:
     """Fast JSON serialization using orjson. Returns UTF-8 encoded bytes."""
@@ -25,6 +27,14 @@ def json_dumps_str(obj: Any) -> str:
 def json_loads(s: str) -> Any:
     """Fast JSON deserialization using orjson."""
     return orjson.loads(s)
+
+
+def sse_data_event(data: Any) -> str:
+    """Format a dict as an SSE data event string.
+
+    Produces ``data: {...}\\n\\n`` suitable for yielding in SSE streaming responses.
+    """
+    return f"data: {orjson.dumps(data).decode()}\n\n"
 
 
 def json_deep_copy(obj: Any) -> Any:

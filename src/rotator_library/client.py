@@ -234,6 +234,9 @@ class StreamedAPIError(Exception):
         self.data = data
 
 
+from .utils.json_utils import STREAM_DONE  # noqa: E402 – after litellm patching
+
+
 class RotatingClient:
     """
     A client that intelligently rotates and retries API keys using LiteLLM,
@@ -1085,14 +1088,11 @@ class RotatingClient:
         Returns:
             httpx.AsyncClient instance
         """
-        # If pool not initialized, return a temporary client
+        # If pool reference not set, bind to the singleton pool
         # (this should rarely happen if initialize() is called properly)
         if self._http_pool is None:
             lib_logger.warning("HTTP pool accessed before initialization")
-            return httpx.AsyncClient(
-                timeout=httpx.Timeout(self.global_timeout, connect=30.0),
-                limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
-            )
+            self._http_pool = HttpClientPool()
         return self._http_pool.get_client(streaming=streaming)
 
     async def _get_http_client_async(
@@ -1768,7 +1768,7 @@ class RotatingClient:
                             # (litellm.ModelResponse defaults to "stop" which is wrong)
                             choice["finish_reason"] = None
 
-                    yield f"data: {orjson.dumps(chunk_dict).decode()}\n\n"
+                    yield chunk_dict
 
                     if hasattr(chunk, "usage") and chunk.usage:
                         last_usage = chunk.usage
@@ -1967,7 +1967,7 @@ class RotatingClient:
             if stream_completed and (
                 not request or not await request.is_disconnected()
             ):
-                yield "data: [DONE]\n\n"
+                yield STREAM_DONE
 
     async def _transaction_logging_stream_wrapper(
         self,
@@ -1979,38 +1979,28 @@ class RotatingClient:
         Wrap a stream to log chunks and final response to TransactionLogger.
 
         This wrapper:
-        1. Yields chunks unchanged (passthrough)
-        2. Parses SSE chunks and logs them via transaction_logger.log_stream_chunk()
+        1. Yields chunks unchanged (passthrough) - dicts flow through without re-parse
+        2. Logs dict chunks via transaction_logger.log_stream_chunk()
         3. Collects chunks for final response assembly
         4. After stream ends, assembles and logs final response
 
         Args:
-            stream: The streaming generator (yields SSE strings like "data: {...}")
+            stream: The streaming generator (yields dicts or STREAM_DONE sentinel)
             transaction_logger: Optional TransactionLogger instance
             request_data: Original request data for context
         """
         chunks = []
         try:
-            async for chunk_str in stream:
-                yield chunk_str
+            async for chunk in stream:
+                yield chunk
 
-                # Log chunk if logging enabled
+                # Log chunk if logging enabled (chunk is now a dict, no re-parse needed)
                 if (
                     transaction_logger
-                    and isinstance(chunk_str, str)
-                    and chunk_str.strip()
-                    and chunk_str.startswith("data:")
+                    and isinstance(chunk, dict)
                 ):
-                    content = chunk_str[len("data:") :].strip()
-                    if content and content != "[DONE]":
-                        try:
-                            chunk_data = orjson.loads(content)
-                            chunks.append(chunk_data)
-                            transaction_logger.log_stream_chunk(chunk_data)
-                        except orjson.JSONDecodeError:
-                            lib_logger.warning(
-                                f"TransactionLogger: Failed to parse chunk: {content[:100]}"
-                            )
+                    chunks.append(chunk)
+                    transaction_logger.log_stream_chunk(chunk)
         finally:
             # Assemble and log final response after stream ends
             if transaction_logger and chunks:
@@ -3499,8 +3489,8 @@ class RotatingClient:
                                     lib_logger.error(
                                         f"Fatal quota error for {mask_credential(current_cred)}. ID: {quota_id}, Limit: {quota_value}"
                                     )
-                                    yield f"data: {orjson.dumps({'error': {'message': client_error_message, 'type': 'proxy_fatal_quota_error'}}).decode()}\n\n"
-                                    yield "data: [DONE]\n\n"
+                                    yield {'error': {'message': client_error_message, 'type': 'proxy_fatal_quota_error'}}
+                                    yield STREAM_DONE
                                     return
                                 else:
                                     lib_logger.warning(
@@ -3677,16 +3667,16 @@ class RotatingClient:
                 }
                 lib_logger.error(final_error_message)
 
-            yield f"data: {orjson.dumps(error_data).decode()}\n\n"
-            yield "data: [DONE]\n\n"
+            yield error_data
+            yield STREAM_DONE
 
         except NoAvailableKeysError as e:
             lib_logger.error(
                 f"A streaming request failed because no keys were available within the time budget: {e}"
             )
             error_data = {"error": {"message": str(e), "type": "proxy_busy"}}
-            yield f"data: {orjson.dumps(error_data).decode()}\n\n"
-            yield "data: [DONE]\n\n"
+            yield error_data
+            yield STREAM_DONE
         except Exception as e:
             # This will now only catch fatal errors that should be raised, like invalid requests.
             lib_logger.error(
@@ -3699,8 +3689,8 @@ class RotatingClient:
                     "type": "proxy_internal_error",
                 }
             }
-            yield f"data: {orjson.dumps(error_data).decode()}\n\n"
-            yield "data: [DONE]\n\n"
+            yield error_data
+            yield STREAM_DONE
 
     async def _forced_streaming_acompletion(
         self,
@@ -3723,7 +3713,7 @@ class RotatingClient:
             **kwargs,
         )
 
-        # Collect SSE chunks and assemble into a non-streaming response
+        # Collect dict chunks and assemble into a non-streaming response
         # This mirrors the aggregation logic in main.py's streaming_response_wrapper
         _content_parts: list = []
         _generic_str_parts: dict = {}
@@ -3735,34 +3725,31 @@ class RotatingClient:
         created_ts = None
         response_id = None
 
-        async for chunk_str in stream_generator:
-            if not chunk_str or not chunk_str.strip() or not chunk_str.startswith("data:"):
-                continue
-            content = chunk_str[len("data:"):].strip()
-            if content == "[DONE]":
+        async for chunk in stream_generator:
+            # STREAM_DONE sentinel: stream is complete
+            if chunk is STREAM_DONE:
                 break
-            try:
-                chunk_data = orjson.loads(content)
-            except (orjson.JSONDecodeError, ValueError):
+
+            if not isinstance(chunk, dict):
                 continue
 
             # Detect error payloads from the streaming retry layer
-            if "error" in chunk_data and "choices" not in chunk_data:
-                error_info = chunk_data["error"]
+            if "error" in chunk and "choices" not in chunk:
+                error_info = chunk["error"]
                 error_msg = error_info.get("message", str(error_info)) if isinstance(error_info, dict) else str(error_info)
                 raise litellm.InternalServerError(error_msg)
 
             # Capture metadata from first chunk
-            if response_id is None and chunk_data.get("id"):
-                response_id = chunk_data["id"]
-            if created_ts is None and chunk_data.get("created"):
-                created_ts = chunk_data["created"]
-            if model_id is None and chunk_data.get("model"):
-                model_id = chunk_data["model"]
+            if response_id is None and chunk.get("id"):
+                response_id = chunk["id"]
+            if created_ts is None and chunk.get("created"):
+                created_ts = chunk["created"]
+            if model_id is None and chunk.get("model"):
+                model_id = chunk["model"]
 
             # Aggregate choices
-            if "choices" in chunk_data and chunk_data["choices"]:
-                choice = chunk_data["choices"][0]
+            if "choices" in chunk and chunk["choices"]:
+                choice = chunk["choices"][0]
                 delta = choice.get("delta", {})
 
                 for key, value in delta.items():
@@ -3814,8 +3801,8 @@ class RotatingClient:
                 if "finish_reason" in choice and choice["finish_reason"]:
                     finish_reason = choice["finish_reason"]
 
-            if "usage" in chunk_data and chunk_data["usage"]:
-                usage_data = chunk_data["usage"]
+            if "usage" in chunk and chunk["usage"]:
+                usage_data = chunk["usage"]
 
         # Assemble final message content
         if _content_parts:
@@ -3885,7 +3872,7 @@ class RotatingClient:
         request: Optional[Any] = None,
         pre_request_callback: Optional[callable] = None,
         **kwargs,
-    ) -> Union[Any, AsyncGenerator[str, None]]:
+    ) -> Union[Any, AsyncGenerator[Any, None]]:
         """
         Dispatcher for completion requests.
 

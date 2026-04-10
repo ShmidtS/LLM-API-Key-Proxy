@@ -128,6 +128,10 @@ class ProviderCache:
         # Track disk health for monitoring
         self._disk_available = True
 
+        # In-memory index of disk entries for O(1) lookup (invalidated on write)
+        self._disk_entry_cache: Dict[str, Dict] = {}
+        self._disk_cache_valid = False
+
         # Metadata about this cache instance
         self._cache_name = cache_file.stem if cache_file else "unnamed"
 
@@ -278,6 +282,7 @@ class ProviderCache:
             ):
                 self._stats["writes"] += 1
                 self._disk_available = True
+                self._disk_cache_valid = False
                 # Log merge info only when we preserved disk-only entries (infrequent)
                 if preserved_from_disk > 0:
                     lib_logger.debug(
@@ -309,16 +314,21 @@ class ProviderCache:
         try:
             while self._running:
                 await asyncio.sleep(self._write_interval)
-                if self._dirty:
-                    try:
-                        success = await self._save_to_disk()
-                        if success:
-                            self._dirty = False
-                        # If save failed, _dirty remains True so we retry next interval
-                    except Exception as e:
-                        lib_logger.error(
-                            f"ProviderCache[{self._cache_name}]: Writer error: {e}"
-                        )
+                with self._sync_lock:
+                    if not self._dirty:
+                        continue
+                    self._dirty = False
+                try:
+                    success = await self._save_to_disk()
+                    if not success:
+                        with self._sync_lock:
+                            self._dirty = True
+                except Exception as e:
+                    with self._sync_lock:
+                        self._dirty = True
+                    lib_logger.error(
+                        f"ProviderCache[{self._cache_name}]: Writer error: {e}"
+                    )
         except asyncio.CancelledError:
             lib_logger.debug(f"ProviderCache[{self._cache_name}]: Writer loop cancelled")
             raise
@@ -383,7 +393,7 @@ class ProviderCache:
             with self._sync_lock:
                 self._cache[key] = {"value": value, "timestamp": now, "accessed": now}
                 self._cache.move_to_end(key)  # Mark as most-recently-used
-            self._dirty = True
+                self._dirty = True
 
     async def store_async(self, key: str, value: str) -> None:
         """
@@ -424,7 +434,7 @@ class ProviderCache:
         self._stats["misses"] += 1
         if self._enable_disk:
             # Schedule async disk lookup for next time
-            asyncio.create_task(self._check_disk_fallback(key))
+            asyncio.create_task(self._disk_lookup(key))
         return None
 
     async def retrieve_async(self, key: str) -> Optional[str]:
@@ -448,75 +458,92 @@ class ProviderCache:
 
         # Check disk
         if self._enable_disk:
-            return await self._disk_retrieve(key)
+            return await self._disk_lookup(key, return_value=True)
 
         self._stats["misses"] += 1
         return None
 
-    async def _check_disk_fallback(self, key: str) -> None:
-        """Check disk for key and load into memory if found (background)."""
-        try:
-            if not self._cache_file.exists():
-                return
+    async def _load_disk_index(self) -> Dict[str, Dict]:
+        """Load and cache all disk entries. Returns dict of key -> entry.
 
+        Reads the file once, parses all entries, and caches them in memory
+        for O(1) lookups until invalidated by a write.
+        """
+        if self._disk_cache_valid and self._disk_entry_cache:
+            return self._disk_entry_cache
+
+        try:
             async with self._disk_lock:
+                if not self._cache_file.exists():
+                    self._disk_entry_cache = {}
+                    self._disk_cache_valid = True
+                    return self._disk_entry_cache
+
                 with open(self._cache_file, "r", encoding="utf-8") as f:
                     data = json_loads(f.read())
 
                 entries = data.get("entries", {})
-                if key in entries:
-                    entry = entries[key]
-                    ts = entry.get("timestamp", 0)
-                    if time.time() - ts <= self._disk_ttl:
-                        value = entry.get("value", entry.get("signature", ""))
-                        if value:
-                            async with self._rw_lock.write():
-                                with self._sync_lock:
-                                    now = time.time()
-                                    self._cache[key] = {"value": value, "timestamp": ts, "accessed": now}
-                                    self._cache.move_to_end(key)  # Maintain LRU order
-                                self._stats["disk_hits"] += 1
-                                lib_logger.debug(
-                                    f"ProviderCache[{self._cache_name}]: Loaded {key} from disk"
-                                )
+                # Filter by disk_ttl at load time to keep index lean
+                now = time.time()
+                self._disk_entry_cache = {
+                    k: v for k, v in entries.items()
+                    if now - v.get("timestamp", 0) <= self._disk_ttl
+                }
+                self._disk_cache_valid = True
+        except (JSONDecodeError, IOError, OSError):
+            self._disk_entry_cache = {}
+            self._disk_cache_valid = True
         except Exception as e:
             lib_logger.debug(
-                f"ProviderCache[{self._cache_name}]: Disk fallback failed: {e}"
+                f"ProviderCache[{self._cache_name}]: Disk index load failed: {e}"
             )
+            self._disk_entry_cache = {}
+            self._disk_cache_valid = True
+        return self._disk_entry_cache
 
-    async def _disk_retrieve(self, key: str) -> Optional[str]:
-        """Direct disk retrieval with loading into memory."""
+    async def _disk_lookup(self, key: str, return_value: bool = False) -> Optional[str]:
+        """Look up a key in the disk index and load into memory if found.
+
+        Args:
+            key: Cache key to look up.
+            return_value: If True, return the value (for retrieve_async).
+                If False, just load into memory (for background fallback).
+
+        Returns:
+            The cached value if return_value=True and found, None otherwise.
+        """
         try:
-            if not self._cache_file.exists():
-                self._stats["misses"] += 1
+            entries = await self._load_disk_index()
+            entry = entries.get(key)
+            if entry is None:
+                if return_value:
+                    self._stats["misses"] += 1
                 return None
 
-            async with self._disk_lock:
-                with open(self._cache_file, "r", encoding="utf-8") as f:
-                    data = json_loads(f.read())
+            ts = entry.get("timestamp", 0)
+            value = entry.get("value", entry.get("signature", ""))
+            if not value:
+                if return_value:
+                    self._stats["misses"] += 1
+                return None
 
-                entries = data.get("entries", {})
-                if key in entries:
-                    entry = entries[key]
-                    ts = entry.get("timestamp", 0)
-                    if time.time() - ts <= self._disk_ttl:
-                        value = entry.get("value", entry.get("signature", ""))
-                        if value:
-                            async with self._rw_lock.write():
-                                with self._sync_lock:
-                                    now = time.time()
-                                    self._cache[key] = {"value": value, "timestamp": ts, "accessed": now}
-                                    self._cache.move_to_end(key)  # Maintain LRU order
-                                self._stats["disk_hits"] += 1
-                                return value
-
-            self._stats["misses"] += 1
-            return None
+            async with self._rw_lock.write():
+                with self._sync_lock:
+                    now = time.time()
+                    self._cache[key] = {"value": value, "timestamp": ts, "accessed": now}
+                    self._cache.move_to_end(key)
+                self._stats["disk_hits"] += 1
+                if not return_value:
+                    lib_logger.debug(
+                        f"ProviderCache[{self._cache_name}]: Loaded {key} from disk"
+                    )
+            return value if return_value else None
         except Exception as e:
             lib_logger.debug(
-                f"ProviderCache[{self._cache_name}]: Disk retrieve failed: {e}"
+                f"ProviderCache[{self._cache_name}]: Disk lookup failed: {e}"
             )
-            self._stats["misses"] += 1
+            if return_value:
+                self._stats["misses"] += 1
             return None
 
     # =========================================================================
@@ -548,7 +575,7 @@ class ProviderCache:
         async with self._rw_lock.write():
             with self._sync_lock:
                 self._cache.clear()
-            self._dirty = True
+                self._dirty = True
             if self._enable_disk:
                 await self._save_to_disk()
 

@@ -4,6 +4,7 @@
 from typing import TYPE_CHECKING, Dict, Type
 
 from .client import RotatingClient
+from .utils.json_utils import STREAM_DONE
 
 # For type checkers (Pylint, mypy), import PROVIDER_PLUGINS statically
 # At runtime, it's lazy-loaded via __getattr__
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "RotatingClient",
+    "STREAM_DONE",
     "PROVIDER_PLUGINS",
     "ModelInfoService",
     "ModelInfo",

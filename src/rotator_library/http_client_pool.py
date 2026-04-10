@@ -564,7 +564,9 @@ class HttpClientPool(metaclass=SingletonMeta):
         """
         Get or create a client lazily (fallback when not initialized).
 
-        This should rarely be called if initialize() is used properly.
+        The created client is stored in the pool so that close() can shut it
+        down gracefully.  This prevents connection leaks when initialize() is
+        not called before get_client().
         """
         lib_logger.warning(
             "HTTP client pool accessed before initialization. "
@@ -575,12 +577,20 @@ class HttpClientPool(metaclass=SingletonMeta):
         timeout = (
             TimeoutConfig.streaming() if streaming else TimeoutConfig.non_streaming()
         )
-        return httpx.AsyncClient(
+        client = httpx.AsyncClient(
             timeout=timeout,
             limits=self._create_limits(),
             follow_redirects=True,
-            verify=self._ssl_context, # Reuse pre-built SSL context singleton
+            verify=self._ssl_context,
         )
+
+        # Store in pool so close() can clean it up
+        if streaming:
+            self._streaming_client = client
+        else:
+            self._non_streaming_client = client
+
+        return client
 
     async def close(self) -> None:
         """Close all HTTP clients gracefully."""

@@ -7,7 +7,7 @@ import os
 import re
 import webbrowser
 from dataclasses import dataclass, field
-from typing import Union, Optional, List, Dict, Any
+from typing import ClassVar, Union, Optional, List, Dict, Any
 import json
 import time
 import asyncio
@@ -96,6 +96,7 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
     ENV_PREFIX: str = None
 
     # Subclasses MAY override these
+    BUFFER_ON_FAILURE: ClassVar[bool] = True
     TOKEN_URI: str = "https://oauth2.googleapis.com/token"
     USER_INFO_URI: str = "https://www.googleapis.com/oauth2/v1/userinfo"
     CALLBACK_PORT: int = DEFAULT_OAUTH_CALLBACK_PORT
@@ -366,36 +367,43 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
                     f"Failed to load {self.ENV_PREFIX} OAuth credentials from '{path}': {e}"
                 )
 
-    async def _save_credentials(self, path: str, creds: Dict[str, Any]):
+    async def _save_credentials(self, path: str, creds: Dict[str, Any]) -> bool:
         """Save credentials with in-memory fallback if disk unavailable."""
-        # Always update cache first (memory is reliable)
-        self._credentials_cache[path] = creds
-
         # Don't save to file if credentials were loaded from environment
         if creds.get("_proxy_metadata", {}).get("loaded_from_env"):
             lib_logger.debug("Credentials loaded from env, skipping file save")
-            return
+            self._credentials_cache[path] = creds
+            return True
 
-        # Attempt disk write - if it fails, we still have the cache
-        # buffer_on_failure ensures data is retried periodically and saved on shutdown
-        if safe_write_json(
-            path, creds, lib_logger, secure_permissions=True, buffer_on_failure=True
+        # Write to disk first — only update cache on success to avoid
+        # losing credentials if the process crashes mid-write.
+        # BUFFER_ON_FAILURE controls whether failed writes are buffered for retry.
+        # Google (non-rotating tokens): True — stale token still valid on restart.
+        # iFlow/Qwen (rotating tokens): False — stale token invalidated by server.
+        if await asyncio.to_thread(
+            safe_write_json, path, creds, lib_logger, secure_permissions=True, buffer_on_failure=self.BUFFER_ON_FAILURE
         ):
+            self._credentials_cache[path] = creds
             lib_logger.debug(
                 f"Saved updated {self.ENV_PREFIX} OAuth credentials to '{path}'."
             )
+            return True
         else:
             lib_logger.warning(
-                f"Credentials for {self.ENV_PREFIX} cached in memory only (buffered for retry)."
+                f"Disk write failed for {self.ENV_PREFIX}; cache NOT updated to prevent data loss (buffered for retry)."
             )
+            return False
 
     def _is_token_expired(self, creds: Dict[str, Any]) -> bool:
-        expiry = creds.get("token_expiry")  # gcloud format
-        if not expiry:  # gemini-cli format
-            expiry_timestamp = creds.get("expiry_date", 0) / 1000
-        else:
-            expiry_timestamp = time.mktime(time.strptime(expiry, "%Y-%m-%dT%H:%M:%SZ"))
-        return expiry_timestamp < time.time() + self.REFRESH_EXPIRY_BUFFER_SECONDS
+        expiry = creds.get("_parsed_expiry")
+        if expiry is None:
+            expiry_str = creds.get("token_expiry")  # gcloud format
+            if not expiry_str:  # gemini-cli format
+                expiry = creds.get("expiry_date", 0) / 1000
+            else:
+                expiry = time.mktime(time.strptime(expiry_str, "%Y-%m-%dT%H:%M:%SZ"))
+            creds["_parsed_expiry"] = expiry
+        return expiry < time.time() + self.REFRESH_EXPIRY_BUFFER_SECONDS
 
     async def _refresh_token(
         self, path: str, creds: Dict[str, Any], force: bool = False
@@ -525,6 +533,7 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
             creds["access_token"] = new_token_data["access_token"]
             expiry_timestamp = time.time() + new_token_data["expires_in"]
             creds["expiry_date"] = expiry_timestamp * 1000  # gemini-cli format
+            creds["_parsed_expiry"] = expiry_timestamp
 
             # [FIX 2] Update refresh_token if server provided a new one (rare but possible with Google OAuth)
             if "refresh_token" in new_token_data:
@@ -1232,7 +1241,7 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
             try:
                 with open(cred_file, "r") as f:
                     creds = json.load(f)
-                existing_email = creds.get("_proxy_metadata", {}).get("email")
+                existing_email = creds.get("email") or creds.get("_proxy_metadata", {}).get("email")
                 if existing_email == email:
                     return Path(cred_file)
             except (json.JSONDecodeError, IOError) as e:
@@ -1453,8 +1462,8 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
             with open(cred_path, "r") as f:
                 creds = json.load(f)
 
-            # Extract metadata
-            email = creds.get("_proxy_metadata", {}).get("email", "unknown")
+            # Extract metadata (top-level email for iFlow/Qwen, metadata email for Google)
+            email = creds.get("email") or creds.get("_proxy_metadata", {}).get("email", "unknown")
 
             # Get credential number from filename
             match = re.search(r"_oauth_(\d+)\.json$", cred_path.name)
@@ -1514,10 +1523,13 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
                 match = re.search(r"_oauth_(\d+)\.json$", cred_file)
                 number = int(match.group(1)) if match else 0
 
+                # Top-level email for iFlow/Qwen, metadata email for Google
+                email = creds.get("email") or metadata.get("email", "unknown")
+
                 credentials.append(
                     {
                         "file_path": cred_file,
-                        "email": metadata.get("email", "unknown"),
+                        "email": email,
                         "tier": metadata.get("tier"),
                         "project_id": metadata.get("project_id"),
                         "number": number,
