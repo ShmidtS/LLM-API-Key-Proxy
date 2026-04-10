@@ -5,7 +5,7 @@
 
 import asyncio
 import functools
-import json
+import orjson
 import os
 import re
 import time
@@ -14,6 +14,7 @@ from dotenv import set_key, get_key
 
 # NOTE: Heavy imports (provider_factory, PROVIDER_PLUGINS) are deferred
 # to avoid 6-7 second delay before showing loading screen
+from .utils.json_utils import json_loads
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
@@ -627,7 +628,7 @@ async def _edit_oauth_credential_email(provider_name: str):
 
         # Load and update the credential file
         with open(cred_path, "r") as f:
-            creds = json.load(f)
+            creds = json_loads(f.read())
 
         if "_proxy_metadata" not in creds:
             creds["_proxy_metadata"] = {}
@@ -637,7 +638,7 @@ async def _edit_oauth_credential_email(provider_name: str):
 
         # Save the updated credentials
         with open(cred_path, "w") as f:
-            json.dump(creds, f, indent=2)
+            f.write(orjson.dumps(creds, option=orjson.OPT_INDENT_2).decode("utf-8"))
 
         console.print(
             Panel(
@@ -2290,7 +2291,7 @@ async def combine_provider_credentials(provider_name: str):
         try:
             # Load credential file
             with open(cred_info["file_path"], "r") as f:
-                creds = json.load(f)
+                creds = json_loads(f.read())
 
             # Use auth class to build env lines
             env_lines = auth_instance.build_env_lines(creds, cred_info["number"])
@@ -2368,7 +2369,7 @@ async def combine_all_credentials():
             try:
                 # Load credential file
                 with open(cred_info["file_path"], "r") as f:
-                    creds = json.load(f)
+                    creds = json_loads(f.read())
 
                 # Use auth class to build env lines
                 env_lines = auth_instance.build_env_lines(creds, cred_info["number"])

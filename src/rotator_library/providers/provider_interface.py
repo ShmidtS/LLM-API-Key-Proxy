@@ -14,6 +14,8 @@ from typing import (
     Tuple,
     TYPE_CHECKING,
 )
+import re
+import json
 import os
 import httpx
 import litellm
@@ -436,16 +438,71 @@ class ProviderInterface(ABC):
         env_key = f"ROTATION_MODE_{provider_name.upper()}"
         return os.getenv(env_key, cls.default_rotation_mode)
 
+    # Providers set this to a list of pattern specs for quota error matching.
+    # Each spec is one of:
+    #   ("json", json_path, expected_value, default_retry_secs, reason)
+    #     Dotted path navigates nested dicts; path ending "*" = substring match.
+    #   ("extract", json_path, reason)
+    #     Navigate to json_path, use the numeric value there as retry_after.
+    #   ("body", keyword, default_retry_secs, reason)
+    #     Case-insensitive keyword search in the raw body text.
+    #
+    # The generic parser also runs extract_retry_after_from_body() first;
+    # if it finds a duration, that overrides default_retry_secs.
+    _quota_error_patterns: Optional[list] = None
+
     @staticmethod
+    def _extract_error_body(error: Exception, error_body: Optional[str] = None) -> Optional[str]:
+        """Extract error body text from various exception shapes."""
+        body = error_body
+        if body:
+            return body
+        if hasattr(error, "response") and hasattr(error.response, "text"):
+            try:
+                return error.response.text
+            except Exception:
+                pass
+        if hasattr(error, "body") and error.body:
+            return str(error.body)
+        if hasattr(error, "message"):
+            return str(error.message)
+        return None
+
+    @staticmethod
+    def _navigate_json(data: Any, path: str) -> Any:
+        """Navigate *data* along dotted *path*, returning the value or None."""
+        node = data
+        for part in path.split("."):
+            if isinstance(node, dict):
+                node = node.get(part)
+            else:
+                return None
+        return node
+
+    @classmethod
+    def _match_quota_pattern(cls, data: Any, path: str, expected: Any) -> bool:
+        """Navigate *data* along dotted *path* and compare to *expected*.
+
+        If *path* ends with "*", perform case-insensitive substring match.
+        """
+        is_substring = path.endswith("*")
+        node = cls._navigate_json(data, path.rstrip("*"))
+        if node is None:
+            return False
+        if is_substring:
+            return str(expected).lower() in str(node).lower()
+        return node == expected
+
+    @classmethod
     def parse_quota_error(
-        error: Exception, error_body: Optional[str] = None
+        cls, error: Exception, error_body: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Parse a quota/rate-limit error and extract structured information.
 
-        Providers should override this method to handle their specific error formats.
-        This allows the error_handler to use provider-specific parsing when available,
-        falling back to generic parsing otherwise.
+        When ``_quota_error_patterns`` is defined on the provider, performs
+        generic pattern matching.  Providers with complex logic (Google RPC
+        details, datetime arithmetic) override this method entirely.
 
         Args:
             error: The caught exception
@@ -454,13 +511,61 @@ class ProviderInterface(ABC):
         Returns:
             None if not a parseable quota error, otherwise:
             {
-                "retry_after": int,  # seconds until quota resets
-                "reason": str,       # e.g., "QUOTA_EXHAUSTED", "RATE_LIMITED"
-                "reset_timestamp": str | None,  # ISO timestamp if available
-                "quota_reset_timestamp": float | None,  # Unix timestamp for quota reset
+                "retry_after": int,
+                "reason": str,
+                "reset_timestamp": str | None,
+                "quota_reset_timestamp": float | None,
             }
         """
-        return None  # Default: no provider-specific parsing
+        patterns = getattr(cls, "_quota_error_patterns", None)
+        if not patterns:
+            return None
+
+        body = cls._extract_error_body(error, error_body)
+        if not body:
+            return None
+
+        from ..error_handler import extract_retry_after_from_body
+
+        retry_after = extract_retry_after_from_body(body)
+
+        data = None
+        try:
+            json_match = re.search(r"\{[\s\S]*\}", body)
+            if json_match:
+                data = json.loads(json_match.group(0))
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        for spec in patterns:
+            kind = spec[0]
+
+            if kind == "json":
+                _, path, expected, default_retry, reason = spec
+                if data is not None and cls._match_quota_pattern(data, path, expected):
+                    final_retry = retry_after if retry_after else default_retry
+                    return {"retry_after": final_retry, "reason": reason}
+
+            elif kind == "extract":
+                _, path, reason = spec
+                if data is not None:
+                    val = cls._navigate_json(data, path)
+                    if val is not None:
+                        try:
+                            return {"retry_after": int(val), "reason": reason}
+                        except (ValueError, TypeError):
+                            pass
+
+            elif kind == "body":
+                _, keyword, default_retry, reason = spec
+                if keyword.lower() in body.lower():
+                    final_retry = retry_after if retry_after else default_retry
+                    return {"retry_after": final_retry, "reason": reason}
+
+        if retry_after:
+            return {"retry_after": retry_after, "reason": "RATE_LIMIT_EXCEEDED"}
+
+        return None
 
     # =========================================================================
     # Per-Provider Usage Tracking Configuration

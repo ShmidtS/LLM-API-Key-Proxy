@@ -24,6 +24,7 @@ from .resilient_io import (
 from .suppress_litellm_warnings import suppress_litellm_serialization_warnings
 from .http_retry import exponential_backoff_with_jitter
 from .json_utils import json_dumps, json_dumps_str, json_loads, sse_data_event, STREAM_DONE
+from .duration import parse_duration
 
 __all__ = [
     "is_headless_environment",
@@ -48,4 +49,5 @@ __all__ = [
     "json_loads",
     "sse_data_event",
     "STREAM_DONE",
+    "parse_duration",
 ]

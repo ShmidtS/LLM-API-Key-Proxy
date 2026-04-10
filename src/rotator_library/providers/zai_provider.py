@@ -4,7 +4,7 @@
 import httpx
 import os
 import re
-import json as _json
+from ..utils.json_utils import json_loads
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -94,9 +94,9 @@ class ZaiProvider(QuotaRefreshMixin, ZaiQuotaTracker, ProviderInterface):
         # every real model (e.g. zai/glm-5.1).
         return "zai_global"
 
-    @staticmethod
+    @classmethod
     def parse_quota_error(
-        error: Exception, error_body: Optional[str] = None
+        cls, error: Exception, error_body: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Parse ZAI 429 error to extract quota reset information.
@@ -104,9 +104,9 @@ class ZaiProvider(QuotaRefreshMixin, ZaiQuotaTracker, ProviderInterface):
         ZAI returns rate limit errors when hourly quota is exhausted.
         Error format: {'error': {'code': '1113', 'message': 'Insufficient balance...'}}
         """
-        body = error_body or ""
+        body = cls._extract_error_body(error, error_body) or ""
         try:
-            data = _json.loads(body) if body else {}
+            data = json_loads(body) if body else {}
         except (ValueError, TypeError):
             data = {}
 

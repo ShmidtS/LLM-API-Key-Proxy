@@ -31,6 +31,7 @@ from .ip_throttle_detector import (
 )
 from .circuit_breaker import ProviderCircuitBreaker
 from .cooldown_manager import CooldownManager
+from .utils.json_utils import json_loads
 
 from .config.defaults import COOLDOWN_RATE_LIMIT_DEFAULT
 
@@ -760,7 +761,7 @@ def _extract_retry_from_json_body(json_text: str) -> Optional[int]:
         if not json_match:
             return None
 
-        error_json = json.loads(json_match.group(1))
+        error_json = json_loads(json_match.group(1))
         details = error_json.get("error", {}).get("details", [])
 
         # Iterate through ALL details items (not just index 0)
@@ -821,7 +822,7 @@ def _extract_quota_details(json_text: str) -> Tuple[Optional[str], Optional[str]
         if not json_match:
             return None, None
 
-        error_json = json.loads(json_match.group(1))
+        error_json = json_loads(json_match.group(1))
         details = error_json.get("error", {}).get("details", [])
 
         for detail in details:

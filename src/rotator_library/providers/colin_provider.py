@@ -28,6 +28,7 @@ from litellm.types.utils import Delta as DeltaType, ChatCompletionMessageToolCal
 
 from .provider_interface import ProviderInterface, strip_provider_prefix, build_bearer_headers
 from .base_streaming_provider import parse_sse_stream
+from ..utils.json_utils import json_loads
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -236,7 +237,7 @@ class ColinProvider(ProviderInterface):
                         break
 
                     try:
-                        data = json.loads(data_str)
+                        data = json_loads(data_str)
 
                         # Capture response metadata from response.created event
                         if data.get("type") == "response.created":

@@ -14,6 +14,7 @@ import asyncio
 import functools
 import json
 import logging
+from .utils.json_utils import json_loads
 import os
 import time
 from dataclasses import dataclass, field
@@ -438,7 +439,7 @@ class DataSourceAdapter:
         """Execute HTTP GET with standard headers."""
         req = Request(url, headers={"User-Agent": "ModelRegistry/1.0"})
         with urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            return json_loads(resp.read().decode("utf-8"))
 
 
 class OpenRouterAdapter(DataSourceAdapter):

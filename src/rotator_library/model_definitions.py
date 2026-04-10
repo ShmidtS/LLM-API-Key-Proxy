@@ -8,6 +8,7 @@ import functools
 from typing import Dict, Any, Optional
 
 from .utils.singleton import SingletonMeta
+from .utils.json_utils import json_loads
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -42,7 +43,7 @@ class ModelDefinitions(metaclass=SingletonMeta):
             if env_var.endswith("_MODELS"):
                 provider_name = env_var[:-7].lower()  # Remove "_MODELS" (7 characters)
                 try:
-                    models_json = json.loads(env_value)
+                    models_json = json_loads(env_value)
 
                     # Handle dict format: {"model-name": {"id": "...", "options": {...}}}
                     if isinstance(models_json, dict):

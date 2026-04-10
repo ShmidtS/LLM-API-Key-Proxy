@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 
-from rotator_library.utils.json_utils import json_deep_copy
+from rotator_library.utils.json_utils import json_deep_copy, json_loads
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -356,7 +356,7 @@ def recursively_parse_json_strings(
             try:
                 # Use json.loads with quotes to properly unescape the string
                 # This converts \n -> newline, \t -> tab
-                unescaped = json.loads(f'"{obj}"')
+                unescaped = json_loads(f'"{obj}"')
                 # Log the fix with a snippet for debugging
                 snippet = obj[:80] + "..." if len(obj) > 80 else obj
                 lib_logger.debug(
@@ -389,7 +389,7 @@ def recursively_parse_json_strings(
                 stripped.startswith("[") and stripped.endswith("]")
             ):
                 try:
-                    parsed = json.loads(obj)
+                    parsed = json_loads(obj)
                     return recursively_parse_json_strings(
                         parsed, schema, parse_json_objects, log_prefix
                     )
@@ -404,7 +404,7 @@ def recursively_parse_json_strings(
                     last_bracket = stripped.rfind("]")
                     if last_bracket > 0:
                         cleaned = stripped[: last_bracket + 1]
-                        parsed = json.loads(cleaned)
+                        parsed = json_loads(cleaned)
                         lib_logger.warning(
                             f"[{log_prefix}] Auto-corrected malformed JSON string: "
                             f"truncated {len(stripped) - len(cleaned)} extra chars"
@@ -422,7 +422,7 @@ def recursively_parse_json_strings(
                     last_brace = stripped.rfind("}")
                     if last_brace > 0:
                         cleaned = stripped[: last_brace + 1]
-                        parsed = json.loads(cleaned)
+                        parsed = json_loads(cleaned)
                         lib_logger.warning(
                             f"[{log_prefix}] Auto-corrected malformed JSON string: "
                             f"truncated {len(stripped) - len(cleaned)} extra chars"

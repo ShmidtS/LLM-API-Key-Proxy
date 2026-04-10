@@ -78,6 +78,8 @@ if args.add_credential:
 # If we get here, we're ACTUALLY running the proxy - NOW show startup messages and start timer
 _start_time = time.time()
 
+_models_cache: dict = {"data": None, "expires": 0.0}
+
 # Load all .env files from root folder (main .env first, then any additional *.env files)
 from dotenv import load_dotenv
 from glob import glob
@@ -541,6 +543,9 @@ async def lifespan(app: FastAPI):
 
             provider_instance = provider_plugin_class()
 
+            if hasattr(provider_instance, "preload_credentials"):
+                await provider_instance.preload_credentials(paths)
+
             for path in paths:
                 tasks.append(process_credential(provider, path, provider_instance))
 
@@ -726,6 +731,9 @@ class _NoGzipForSSE:
     without buffering, avoiding TTFT overhead from GZipMiddleware.
     """
 
+    _ACCEPT_ENCODING = b"accept-encoding"
+    _GZIP = b"gzip"
+
     def __init__(self, app, minimum_size=1000):
         self._app = app
         self._minimum_size = minimum_size
@@ -735,14 +743,11 @@ class _NoGzipForSSE:
             await self._app(scope, receive, send)
             return
 
-        accept_gzip = False
-        for k, v in scope.get("headers", []):
-            key = (k.decode("latin-1") if isinstance(k, bytes) else k).lower()
-            if key == "accept-encoding":
-                val = v.decode("latin-1") if isinstance(v, bytes) else v
-                if "gzip" in val:
-                    accept_gzip = True
-                break
+        accept_gzip = any(
+            _NoGzipForSSE._GZIP in v
+            for k, v in scope.get("headers", [])
+            if k == _NoGzipForSSE._ACCEPT_ENCODING
+        )
 
         if not accept_gzip:
             await self._app(scope, receive, send)
@@ -909,14 +914,17 @@ async def streaming_response_wrapper(
     finish_reason = None
     first_chunk_meta = None  # {id, created, model} from first chunk
     _chunk_count = 0
+    _last_disconnect_check = time.monotonic()
 
     try:
         async for chunk in response_stream:
             _chunk_count += 1
-            # Check disconnection every 20 chunks to avoid per-chunk syscall overhead
-            if _chunk_count % 20 == 0 and await request.is_disconnected():
-                logging.warning("Client disconnected, stopping stream.")
-                break
+            now = time.monotonic()
+            if now - _last_disconnect_check > 1.0:
+                if await request.is_disconnected():
+                    logging.warning("Client disconnected, stopping stream.")
+                    break
+                _last_disconnect_check = now
 
             # STREAM_DONE sentinel: emit SSE [DONE] and stop
             if chunk is STREAM_DONE:
@@ -932,6 +940,8 @@ async def streaming_response_wrapper(
 
             if logger:
                 logger.log_stream_chunk(chunk)
+            else:
+                continue
 
             # --- Inline aggregation (single pass, no second iteration) ---
             # Capture metadata from first chunk
@@ -1026,64 +1036,64 @@ async def streaming_response_wrapper(
             )
         return  # Stop further processing
     finally:
-        if first_chunk_meta is not None:
-            # --- Join accumulated string parts ---
-            if _content_parts:
-                final_message["content"] = "".join(_content_parts)
+        if logger:
+            if first_chunk_meta is not None:
+                # --- Join accumulated string parts ---
+                if _content_parts:
+                    final_message["content"] = "".join(_content_parts)
 
-            for key, parts in _generic_str_parts.items():
-                final_message[key] = "".join(parts)
+                for key, parts in _generic_str_parts.items():
+                    final_message[key] = "".join(parts)
 
-            # Flatten tool_calls: convert name_parts/args_parts to strings
-            if aggregated_tool_calls:
-                tool_calls_list = []
-                for tc in aggregated_tool_calls.values():
-                    fn = tc["function"]
-                    tool_calls_list.append(
-                        {
-                            "id": tc.get("id"),
-                            "type": tc["type"],
-                            "function": {
-                                "name": "".join(fn["name_parts"]),
-                                "arguments": "".join(fn["args_parts"]),
-                            },
-                        }
-                    )
-                final_message["tool_calls"] = tool_calls_list
-                # CRITICAL FIX: Override finish_reason when tool_calls exist
-                # This ensures OpenCode and other agentic systems continue the conversation loop
-                finish_reason = "tool_calls"
+                # Flatten tool_calls: convert name_parts/args_parts to strings
+                if aggregated_tool_calls:
+                    tool_calls_list = []
+                    for tc in aggregated_tool_calls.values():
+                        fn = tc["function"]
+                        tool_calls_list.append(
+                            {
+                                "id": tc.get("id"),
+                                "type": tc["type"],
+                                "function": {
+                                    "name": "".join(fn["name_parts"]),
+                                    "arguments": "".join(fn["args_parts"]),
+                                },
+                            }
+                        )
+                    final_message["tool_calls"] = tool_calls_list
+                    # CRITICAL FIX: Override finish_reason when tool_calls exist
+                    # This ensures OpenCode and other agentic systems continue the conversation loop
+                    finish_reason = "tool_calls"
 
-            if "function_call" in final_message:
-                fc = final_message["function_call"]
-                final_message["function_call"] = {
-                    "name": "".join(fc["_name_parts"]),
-                    "arguments": "".join(fc["_args_parts"]),
+                if "function_call" in final_message:
+                    fc = final_message["function_call"]
+                    final_message["function_call"] = {
+                        "name": "".join(fc["_name_parts"]),
+                        "arguments": "".join(fc["_args_parts"]),
+                    }
+
+                # Ensure standard fields are present for consistent logging
+                for field in ["content", "tool_calls", "function_call"]:
+                    if field not in final_message:
+                        final_message[field] = None
+
+                final_choice = {
+                    "index": 0,
+                    "message": final_message,
+                    "finish_reason": finish_reason,
                 }
 
-            # Ensure standard fields are present for consistent logging
-            for field in ["content", "tool_calls", "function_call"]:
-                if field not in final_message:
-                    final_message[field] = None
+                full_response = {
+                    "id": first_chunk_meta.get("id"),
+                    "object": "chat.completion",
+                    "created": first_chunk_meta.get("created"),
+                    "model": first_chunk_meta.get("model"),
+                    "choices": [final_choice],
+                    "usage": usage_data,
+                }
+            else:
+                full_response = {}
 
-            final_choice = {
-                "index": 0,
-                "message": final_message,
-                "finish_reason": finish_reason,
-            }
-
-            full_response = {
-                "id": first_chunk_meta.get("id"),
-                "object": "chat.completion",
-                "created": first_chunk_meta.get("created"),
-                "model": first_chunk_meta.get("model"),
-                "choices": [final_choice],
-                "usage": usage_data,
-            }
-        else:
-            full_response = {}
-
-        if logger:
             logger.log_final_response(
                 status_code=200,
                 headers=None,  # Headers are not available at this stage
@@ -1494,14 +1504,20 @@ async def list_models(
         enriched: If True (default), returns detailed model info with pricing and capabilities.
                   If False, returns minimal OpenAI-compatible response.
     """
+    now = time.monotonic()
+    if _models_cache["data"] is not None and _models_cache["expires"] > now:
+        return _models_cache["data"]
+
     model_ids = await client.get_all_available_models(grouped=False)
 
     if enriched and hasattr(request.app.state, "model_info_service"):
         model_info_service = request.app.state.model_info_service
         if model_info_service.is_ready:
-            # Return enriched model data
             enriched_data = model_info_service.enrich_model_list(model_ids)
-            return {"object": "list", "data": enriched_data}
+            response_data = {"object": "list", "data": enriched_data}
+            _models_cache["data"] = response_data
+            _models_cache["expires"] = now + 60
+            return response_data
 
     # Fallback to basic model cards
     model_cards = [
@@ -1513,7 +1529,10 @@ async def list_models(
         }
         for model_id in model_ids
     ]
-    return {"object": "list", "data": model_cards}
+    response_data = {"object": "list", "data": model_cards}
+    _models_cache["data"] = response_data
+    _models_cache["expires"] = now + 60
+    return response_data
 
 
 @app.get("/v1/models/{model_id:path}")

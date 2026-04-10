@@ -30,6 +30,7 @@ Required from provider (via mixin inheritance):
 import asyncio
 import json
 import logging
+import orjson
 import os
 import time
 from abc import abstractmethod
@@ -38,6 +39,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from ...utils.paths import get_cache_dir
+from ...utils.json_utils import json_loads
 
 if TYPE_CHECKING:
     from ...usage_manager import UsageManager
@@ -218,7 +220,7 @@ class BaseQuotaTracker:
     def _read_costs_file(self, costs_file: Path) -> Optional[Dict]:
         """Sync helper to read costs file (called via run_in_executor)."""
         with open(costs_file, "r") as f:
-            return json.load(f)
+            return json_loads(f.read())
 
     def _load_learned_costs(self) -> None:
         """
@@ -244,7 +246,7 @@ class BaseQuotaTracker:
 
         try:
             with open(costs_file, "r") as f:
-                data = json.load(f)
+                data = json_loads(f.read())
 
             if self._use_integer_max_requests:
                 raw_costs = data.get("max_requests", data.get("costs", {}))
@@ -277,7 +279,7 @@ class BaseQuotaTracker:
     def _write_costs_file(self, costs_file: Path, payload: Dict) -> None:
         """Sync helper to write costs file (called via run_in_executor)."""
         with open(costs_file, "w") as f:
-            json.dump(payload, f, indent=2)
+            f.write(orjson.dumps(payload, option=orjson.OPT_INDENT_2).decode("utf-8"))
 
     async def _save_learned_costs_async(self) -> None:
         """Save learned quota costs to cache file (non-blocking)."""
@@ -320,7 +322,7 @@ class BaseQuotaTracker:
 
         try:
             with open(costs_file, "w") as f:
-                json.dump(data, f, indent=2)
+                f.write(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode("utf-8"))
             lib_logger.debug(f"Saved learned quota costs to {costs_file}")
         except IOError as e:
             lib_logger.warning(f"Failed to save learned quota costs: {e}")
@@ -736,7 +738,7 @@ class BaseQuotaTracker:
             if not credential_path.startswith("env://"):
                 try:
                     with open(credential_path, "r") as f:
-                        cred_data = json.load(f)
+                        cred_data = json_loads(f.read())
                         tier = cred_data.get("_proxy_metadata", {}).get("tier")
                 except Exception:
                     pass

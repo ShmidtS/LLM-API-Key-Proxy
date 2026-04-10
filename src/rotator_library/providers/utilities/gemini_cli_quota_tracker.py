@@ -28,6 +28,7 @@ Required from provider:
 import asyncio
 import json
 import logging
+from ...utils.json_utils import json_loads
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -496,7 +497,7 @@ class GeminiCliQuotaTracker(BaseQuotaTracker):
             if not cred_path.startswith("env://"):
                 try:
                     with open(cred_path, "r") as f:
-                        creds = json.load(f)
+                        creds = json_loads(f.read())
                     email = creds.get("_proxy_metadata", {}).get("email")
                 except (IOError, json.JSONDecodeError):
                     lib_logger.debug(

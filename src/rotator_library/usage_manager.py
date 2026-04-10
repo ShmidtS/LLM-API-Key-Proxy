@@ -3,6 +3,7 @@
 
 import json
 import os
+from .utils.json_utils import json_loads
 import time
 import logging
 import asyncio
@@ -1637,7 +1638,7 @@ class UsageManager:
             try:
                 async with aiofiles.open(self.file_path, "r") as f:
                     content = await f.read()
-                    self._usage_data = json.loads(content) if content.strip() else {}
+                    self._usage_data = json_loads(content) if content.strip() else {}
             except FileNotFoundError:
                 # File deleted between exists check and open
                 self._usage_data = {}

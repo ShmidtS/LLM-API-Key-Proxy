@@ -13,6 +13,7 @@ generalized for any state data.
 import asyncio
 import json
 import logging
+from .utils.json_utils import json_loads
 import orjson
 import time
 from pathlib import Path
@@ -136,7 +137,7 @@ class BatchedPersistence:
         try:
             async with aiofiles.open(self._file_path, "r", encoding="utf-8") as f:
                content = await f.read()
-               self._state = json.loads(content)
+               self._state = json_loads(content)
             lib_logger.debug(f"Loaded state from {self._file_path.name}")
         except (json.JSONDecodeError, IOError, OSError) as e:
             lib_logger.warning(f"Failed to load state from {self._file_path.name}: {e}")

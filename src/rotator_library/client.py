@@ -345,6 +345,7 @@ class RotatingClient:
         for provider, paths in self.oauth_credentials.items():
             all_credentials.setdefault(provider, []).extend(paths)
         self.all_credentials = all_credentials
+        self._cred_offset: Dict[str, int] = {}
 
         self.max_retries = max_retries
         self.global_timeout = global_timeout
@@ -2074,9 +2075,12 @@ class RotatingClient:
                 compatible_creds = []
                 unknown_creds = []
 
+                has_priority = hasattr(provider_plugin, "get_credential_priority")
+                if has_priority:
+                    get_priority = provider_plugin.get_credential_priority
                 for cred in credentials_for_provider:
-                    if hasattr(provider_plugin, "get_credential_priority"):
-                        priority = provider_plugin.get_credential_priority(cred)
+                    if has_priority:
+                        priority = get_priority(cred)
                         if priority is None:
                             # Unknown priority - keep it, will be discovered on first use
                             unknown_creds.append(cred)
@@ -2182,11 +2186,11 @@ class RotatingClient:
             )
             transaction_logger.log_request(kwargs)
 
-        # Create a mutable copy of the keys and shuffle it to ensure
-        # that the key selection is randomized, which is crucial when
-        # multiple keys have the same usage stats.
+        # Create a mutable copy of the keys and rotate it for round-robin selection.
         credentials_for_provider = list(self.all_credentials[provider])
-        random.shuffle(credentials_for_provider)
+        offset = self._cred_offset.get(provider, 0)
+        self._cred_offset[provider] = (offset + 1) % len(credentials_for_provider)
+        credentials_for_provider = credentials_for_provider[offset:] + credentials_for_provider[:offset]
 
         # Filter out credentials that are unavailable (queued for re-auth)
         provider_plugin = self._get_provider_instance(provider)
@@ -2891,9 +2895,11 @@ class RotatingClient:
         # Extract internal logging parameters (not passed to API)
         parent_log_dir = kwargs.pop("_parent_log_dir", None)
 
-        # Create a mutable copy of the keys and shuffle it.
+        # Create a mutable copy of the keys and rotate it for round-robin selection.
         credentials_for_provider = list(self.all_credentials[provider])
-        random.shuffle(credentials_for_provider)
+        offset = self._cred_offset.get(provider, 0)
+        self._cred_offset[provider] = (offset + 1) % len(credentials_for_provider)
+        credentials_for_provider = credentials_for_provider[offset:] + credentials_for_provider[:offset]
 
         # Filter out credentials that are unavailable (queued for re-auth)
         provider_plugin = self._get_provider_instance(provider)
@@ -4068,9 +4074,11 @@ class RotatingClient:
             lib_logger.warning(f"No credentials for provider: {provider}")
             return []
 
-        # Create a copy and shuffle it to randomize the starting credential
+        # Create a copy and rotate it for round-robin credential selection
         shuffled_credentials = list(credentials_for_provider)
-        random.shuffle(shuffled_credentials)
+        offset = self._cred_offset.get(provider, 0)
+        self._cred_offset[provider] = (offset + 1) % len(shuffled_credentials)
+        shuffled_credentials = shuffled_credentials[offset:] + shuffled_credentials[:offset]
 
         provider_instance = self._get_provider_instance(provider)
         if provider_instance:

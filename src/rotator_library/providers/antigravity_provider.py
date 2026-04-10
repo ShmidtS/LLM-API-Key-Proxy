@@ -25,6 +25,7 @@ import functools
 import hashlib
 import orjson
 from rotator_library.utils.json_utils import json_deep_copy
+from rotator_library.utils.duration import parse_duration as _parse_duration_shared
 import logging
 import os
 import random
@@ -1097,114 +1098,23 @@ class AntigravityProvider(
 
     default_sequential_fallback_multiplier = GEMINI_DEFAULT_SEQUENTIAL_FALLBACK_MULTIPLIER
 
+    @classmethod
     def parse_quota_error(
-        error: Exception, error_body: Optional[str] = None
+        cls, error: Exception, error_body: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Parse Antigravity/Google RPC quota errors.
 
         Handles the Google Cloud API error format with ErrorInfo and RetryInfo details.
-
-        Example error format:
-        {
-          "error": {
-            "code": 429,
-            "details": [
-              {
-                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-                "reason": "QUOTA_EXHAUSTED",
-                "metadata": {
-                  "quotaResetDelay": "143h4m52.730699158s",
-                  "quotaResetTimeStamp": "2025-12-11T22:53:16Z"
-                }
-              },
-              {
-                "@type": "type.googleapis.com/google.rpc.RetryInfo",
-                "retryDelay": "515092.730699158s"
-              }
-            ]
-          }
-        }
-
-        Args:
-            error: The caught exception
-            error_body: Optional raw response body string
-
-        Returns:
-            None if not a parseable quota error, otherwise:
-            {
-                "retry_after": int,
-                "reason": str,
-                "reset_timestamp": str | None,
-            }
         """
         import re as regex_module
 
-        def parse_duration(duration_str: str) -> Optional[int]:
-            """Parse duration strings like '143h4m52.73s' or '515092.73s' to seconds.
-
-            Also handles millisecond format: '290.979975ms' -> 0 seconds (rounded).
-            Returns 0 for sub-second durations (not None), as 0 is a valid value.
-            """
-            if not duration_str:
-                return None
-
-            # Handle pure milliseconds format: "290.979975ms"
-            # MUST check this BEFORE checking 'm' for minutes to avoid misinterpreting 'ms'
-            ms_match = regex_module.match(r"^([\d.]+)ms$", duration_str)
-            if ms_match:
-                ms_value = float(ms_match.group(1))
-                # Convert milliseconds to seconds, round up to at least 1 if > 0
-                seconds = ms_value / 1000.0
-                return max(1, int(seconds)) if seconds > 0 else 0
-
-            # Handle pure seconds format: "515092.730699158s" or "0.290979975s"
-            pure_seconds_match = regex_module.match(r"^([\d.]+)s$", duration_str)
-            if pure_seconds_match:
-                seconds = float(pure_seconds_match.group(1))
-                # For sub-second values, round up to 1 to avoid immediate retry floods
-                return max(1, int(seconds)) if seconds > 0 else 0
-
-            # Handle compound format: "143h4m52.730699158s"
-            # Note: 'm' here means minutes, not milliseconds (ms is handled above)
-            total_seconds = 0.0
-            patterns = [
-                (r"(\d+)h", 3600),  # hours
-                (
-                    r"(\d+)m(?!s)",
-                    60,
-                ),  # minutes - negative lookahead to avoid matching 'ms'
-                (
-                    r"([\d.]+)s$",
-                    1,
-                ),  # seconds - anchor to end to avoid matching 's' in 'ms'
-            ]
-            for pattern, multiplier in patterns:
-                match = regex_module.search(pattern, duration_str)
-                if match:
-                    total_seconds += float(match.group(1)) * multiplier
-
-            # Return 0 explicitly for very small values (it's valid, not "no value")
-            if total_seconds > 0:
-                return max(1, int(total_seconds))
-            return None
-
-        # Get error body from exception if not provided
-        body = error_body
+        body = cls._extract_error_body(error, error_body)
         if not body:
-            # Try to extract from various exception attributes
-            if hasattr(error, "response") and hasattr(error.response, "text"):
-                body = error.response.text
-            elif hasattr(error, "body"):
-                body = str(error.body)
-            elif hasattr(error, "message"):
-                body = str(error.message)
-            else:
-                body = str(error)
+            body = str(error)
 
         # Try to find JSON in the body
         try:
-            # Handle cases where JSON is embedded in a larger string
             json_match = regex_module.search(r"\{[\s\S]*\}", body)
             if not json_match:
                 return None
@@ -1213,7 +1123,6 @@ class AntigravityProvider(
         except (orjson.JSONDecodeError, AttributeError, TypeError):
             return None
 
-        # Navigate to error.details
         error_obj = data.get("error", data)
         details = error_obj.get("details", [])
 
@@ -1221,41 +1130,35 @@ class AntigravityProvider(
             "retry_after": None,
             "reason": None,
             "reset_timestamp": None,
-            "quota_reset_timestamp": None,  # Unix timestamp for quota reset
+            "quota_reset_timestamp": None,
         }
 
         for detail in details:
             detail_type = detail.get("@type", "")
 
-            # Parse RetryInfo - most authoritative source for retry delay
             if "RetryInfo" in detail_type:
                 retry_delay = detail.get("retryDelay")
                 if retry_delay:
-                    parsed = parse_duration(retry_delay)
-                    if parsed is not None:  # 0 is valid, only None means "no value"
+                    parsed = _parse_duration_shared(retry_delay)
+                    if parsed is not None:
                         result["retry_after"] = parsed
 
-            # Parse ErrorInfo - contains reason and quota reset metadata
             elif "ErrorInfo" in detail_type:
                 result["reason"] = detail.get("reason")
                 metadata = detail.get("metadata", {})
 
-                # Get quotaResetDelay as fallback if RetryInfo not present
                 if result["retry_after"] is None:
                     quota_delay = metadata.get("quotaResetDelay")
                     if quota_delay:
-                        parsed = parse_duration(quota_delay)
-                        if parsed is not None:  # 0 is valid, only None means "no value"
+                        parsed = _parse_duration_shared(quota_delay)
+                        if parsed is not None:
                             result["retry_after"] = parsed
 
-                # Capture reset timestamp for logging and authoritative reset time
                 reset_ts_str = metadata.get("quotaResetTimeStamp")
                 result["reset_timestamp"] = reset_ts_str
 
-                # Parse ISO timestamp to Unix timestamp for usage tracking
                 if reset_ts_str:
                     try:
-                        # Handle ISO format: "2025-12-11T22:53:16Z"
                         reset_dt = datetime.fromisoformat(
                             reset_ts_str.replace("Z", "+00:00")
                         )
@@ -1265,10 +1168,7 @@ class AntigravityProvider(
                             f"Failed to parse quota reset timestamp '{reset_ts_str}': {e}"
                         )
 
-        # Return None if we couldn't extract retry_after
         if result["retry_after"] is None:
-            # Bare RESOURCE_EXHAUSTED without timing details
-            # Return None to signal transient error (caller will retry internally)
             return None
 
         return result

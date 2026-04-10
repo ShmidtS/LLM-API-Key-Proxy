@@ -26,7 +26,7 @@ from rich.markup import escape as rich_escape
 from ..utils.headless_detection import is_headless_environment
 from ..utils.resilient_io import safe_write_json
 from ..utils.model_utils import parse_env_credential_path
-from ..utils.json_utils import json_loads
+from ..utils.json_utils import json_loads, json_dumps_str
 from ..error_handler import CredentialNeedsReauthError
 
 lib_logger = logging.getLogger("rotator_library")
@@ -147,7 +147,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, BaseTokenManager):
         import base64
 
         state_data = {"v": code_verifier}  # Minimal - just verifier
-        json_bytes = json.dumps(state_data, separators=(",", ":")).encode("utf-8")
+        json_bytes = json_dumps_str(state_data).encode("utf-8")
         return base64.urlsafe_b64encode(json_bytes).decode("ascii").rstrip("=")
 
     def _decode_oauth_state(self, state: str) -> str:
@@ -168,7 +168,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, BaseTokenManager):
         # Re-pad base64 string (base64url encoding strips padding)
         padded = state + "=" * (-len(state) % 4)
         try:
-            state_data = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+            state_data = json_loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
             if "v" not in state_data:
                 raise ValueError("Missing verifier in state")
             return state_data["v"]
@@ -314,6 +314,10 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, BaseTokenManager):
 
         return creds
 
+    async def preload_credentials(self, paths: list[str]) -> None:
+        tasks = [self._load_credentials(p) for p in paths]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
     async def _load_credentials(self, path: str) -> Dict[str, Any]:
         if path in self._credentials_cache:
             return self._credentials_cache[path]
@@ -343,8 +347,8 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, BaseTokenManager):
                 lib_logger.debug(
                     f"Loading {self.ENV_PREFIX} credentials from file: {path}"
                 )
-                with open(path, "r") as f:
-                    creds = json_loads(f.read())
+                creds_raw = await asyncio.to_thread(Path(path).read_text, encoding="utf-8")
+                creds = json_loads(creds_raw)
                 # Handle gcloud-style creds file which nest tokens under "credential"
                 if "credential" in creds:
                     creds = creds["credential"]
@@ -376,22 +380,25 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, BaseTokenManager):
             self._credentials_cache[path] = creds
             return True
 
-        # Write to disk first — only update cache on success to avoid
-        # losing credentials if the process crashes mid-write.
-        # BUFFER_ON_FAILURE controls whether failed writes are buffered for retry.
-        # Google (non-rotating tokens): True — stale token still valid on restart.
-        # iFlow/Qwen (rotating tokens): False — stale token invalidated by server.
-        if await asyncio.to_thread(
-            safe_write_json, path, creds, lib_logger, secure_permissions=True, buffer_on_failure=self.BUFFER_ON_FAILURE
-        ):
-            self._credentials_cache[path] = creds
+        # Optimistic cache update — serve from cache immediately while disk write proceeds.
+        # Rollback on failure to avoid serving un-persisted credentials after crash.
+        self._credentials_cache[path] = creds
+        try:
+            success = await asyncio.to_thread(
+                safe_write_json, path, creds, lib_logger, secure_permissions=True, buffer_on_failure=self.BUFFER_ON_FAILURE
+            )
+        except Exception:
+            self._credentials_cache.pop(path, None)
+            raise
+        if success:
             lib_logger.debug(
                 f"Saved updated {self.ENV_PREFIX} OAuth credentials to '{path}'."
             )
             return True
         else:
+            self._credentials_cache.pop(path, None)
             lib_logger.warning(
-                f"Disk write failed for {self.ENV_PREFIX}; cache NOT updated to prevent data loss (buffered for retry)."
+                f"Disk write failed for {self.ENV_PREFIX}; cache rolled back to prevent data loss (buffered for retry)."
             )
             return False
 
@@ -587,10 +594,12 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, BaseTokenManager):
         Handles IOError gracefully: direct API keys cannot be loaded as
         OAuth credentials, so the refresh is silently skipped.
         """
-        try:
-            creds = await self._load_credentials(credential_path)
-        except IOError:
-            return
+        creds = self._credentials_cache.get(credential_path)
+        if not creds:
+            try:
+                creds = await self._load_credentials(credential_path)
+            except IOError:
+                return
         if self._is_token_expired(creds):
             await self._queue_refresh(credential_path, force=False, needs_reauth=False)
 

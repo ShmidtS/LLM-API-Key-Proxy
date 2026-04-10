@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Mirrowel
 
 import logging
-import json
+import orjson
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from datetime import datetime
@@ -10,6 +10,7 @@ from typing import Optional, Union
 
 from .error_handler import mask_credential
 from .utils.paths import get_logs_dir
+from .utils.json_utils import json_dumps_str
 
 # =============================================================================
 # CONFIGURATION DEFAULTS
@@ -40,7 +41,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record):
         # The message is already a dict, so we just format it as a JSON string
-        return json.dumps(record.msg)
+        return json_dumps_str(record.msg)
 
 
 # Module-level state for lazy initialization
@@ -136,7 +137,7 @@ def _extract_response_body(error: Exception) -> str:
         # If data is a dict (parsed JSON error), return it as JSON
         if isinstance(inner, dict):
             try:
-                return json.dumps(inner, indent=2)
+                return orjson.dumps(inner, option=orjson.OPT_INDENT_2).decode("utf-8")
             except Exception:
                 return str(inner)
         # If data is an exception, recurse to extract from it

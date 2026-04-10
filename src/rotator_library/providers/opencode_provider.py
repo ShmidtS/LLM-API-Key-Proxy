@@ -1,12 +1,10 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 Mirrowel
 
-import json
 import httpx
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict
 from .provider_interface import ProviderInterface
-from ..error_handler import extract_retry_after_from_body
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -24,6 +22,16 @@ class OpencodeProvider(ProviderInterface):
     """
 
     skip_cost_calculation = True  # Skip cost calculation for OpenCode
+
+    _quota_error_patterns = [
+        ("json", "error.code", 1113, 3600, "QUOTA_EXHAUSTED"),
+        ("json", "error.code", 429, 60, "RATE_LIMIT_EXCEEDED"),
+        ("json", "error.message*", "insufficient balance", 3600, "QUOTA_EXHAUSTED"),
+        ("json", "error.message*", "no resource package", 3600, "QUOTA_EXHAUSTED"),
+        ("json", "error.message*", "rate limit", 60, "RATE_LIMIT_EXCEEDED"),
+        ("body", "rate limit", 60, "RATE_LIMIT_EXCEEDED"),
+        ("body", "too many requests", 60, "RATE_LIMIT_EXCEEDED"),
+    ]
 
     async def get_auth_header(self, credential_identifier: str) -> Dict[str, str]:
         """
@@ -61,94 +69,3 @@ class OpencodeProvider(ProviderInterface):
         except httpx.RequestError as e:
             lib_logger.error(f"Failed to fetch OpenCode models: {e}")
             return []
-
-    @staticmethod
-    def parse_quota_error(
-        error: Exception, error_body: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Parse OpenCode rate limit and quota errors.
-
-        OpenCode error format:
-        {
-            "error": {
-                "code": 1113,
-                "message": "Insufficient balance or no resource package"
-            }
-        }
-
-        Common error codes:
-        - 1113: Insufficient balance or no resource package (quota exhausted)
-        - 429: Rate limit exceeded
-        """
-        body = error_body
-        if not body:
-            if hasattr(error, "response") and hasattr(error.response, "text"):
-                try:
-                    body = error.response.text
-                except Exception:
-                    pass
-            if not body and hasattr(error, "body"):
-                body = str(error.body) if error.body else None
-
-        if not body:
-            return None
-
-        # Try extract_retry_after_from_body first
-        retry_after = extract_retry_after_from_body(body)
-        if retry_after:
-            return {
-                "retry_after": retry_after,
-                "reason": "RATE_LIMIT_EXCEEDED",
-            }
-
-        # Try to parse JSON for OpenCode-specific format
-        try:
-            data = json.loads(body)
-            error_obj = data.get("error", data)
-
-            error_code = error_obj.get("code")
-            error_message = error_obj.get("message", "").lower()
-
-            # Code 1113: Insufficient balance or no resource package
-            if error_code == 1113:
-                return {
-                    "retry_after": 3600,  # 1 hour default for quota issues
-                    "reason": "QUOTA_EXHAUSTED",
-                }
-
-            # Code 429: Rate limit exceeded
-            if error_code == 429:
-                return {
-                    "retry_after": 60,  # Default 60s for rate limit
-                    "reason": "RATE_LIMIT_EXCEEDED",
-                }
-
-            # Check message content for specific errors
-            if (
-                "insufficient balance" in error_message
-                or "no resource package" in error_message
-            ):
-                return {
-                    "retry_after": 3600,  # 1 hour default
-                    "reason": "QUOTA_EXHAUSTED",
-                }
-
-            if "rate limit" in error_message:
-                return {
-                    "retry_after": 60,
-                    "reason": "RATE_LIMIT_EXCEEDED",
-                }
-
-        except (json.JSONDecodeError, TypeError, ValueError):
-            pass
-
-        # Check for generic rate limit indicators
-        body_lower = body.lower()
-        if "rate limit" in body_lower or "too many requests" in body_lower:
-            return {
-                "retry_after": 60,
-                "reason": "RATE_LIMIT_EXCEEDED",
-            }
-
-        return None

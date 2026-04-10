@@ -667,10 +667,50 @@ class QwenAuthBase(GoogleOAuthBase):
             raise ValueError(f"Failed to initialize Qwen OAuth for '{path}': {e}")
 
     async def get_auth_header(self, credential_path: str) -> Dict[str, str]:
-        creds = await self._load_credentials(credential_path)
-        if self._is_token_expired(creds):
-            creds = await self._refresh_token(credential_path)
-        return {"Authorization": f"Bearer {creds['access_token']}"}
+        """Get auth header with graceful degradation if refresh fails."""
+        try:
+            creds = await self._load_credentials(credential_path)
+            if self._is_token_expired(creds):
+                try:
+                    creds = await self._refresh_token(credential_path, creds)
+                    self._staleness_counter.pop(credential_path, None)
+                except Exception as e:
+                    cached = self._credentials_cache.get(credential_path)
+                    if cached and cached.get("access_token"):
+                        stale_count = self._staleness_counter.get(credential_path, 0)
+                        if stale_count < 1:
+                            self._staleness_counter[credential_path] = stale_count + 1
+                            lib_logger.warning(
+                                f"Token refresh failed for {Path(credential_path).name}: {e}. "
+                                "Using cached token (may be expired)."
+                            )
+                            creds = cached
+                        else:
+                            lib_logger.error(
+                                f"Token refresh failed for {Path(credential_path).name}: {e}. "
+                                "Stale token served too many times, raising."
+                            )
+                            raise
+                    else:
+                        raise
+            return {"Authorization": f"Bearer {creds['access_token']}"}
+        except Exception as e:
+            cached = self._credentials_cache.get(credential_path)
+            if cached and cached.get("access_token"):
+                stale_count = self._staleness_counter.get(credential_path, 0)
+                if stale_count < 1:
+                    self._staleness_counter[credential_path] = stale_count + 1
+                    lib_logger.error(
+                        f"Credential load failed for {credential_path}: {e}. "
+                        "Using stale cached token as last resort."
+                    )
+                    return {"Authorization": f"Bearer {cached['access_token']}"}
+                else:
+                    lib_logger.error(
+                        f"Credential load failed for {credential_path}: {e}. "
+                        "Stale token served too many times, raising."
+                    )
+            raise
 
     async def get_user_info(
         self, creds_or_path: Union[Dict[str, Any], str]

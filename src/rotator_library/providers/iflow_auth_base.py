@@ -971,16 +971,56 @@ class IFlowAuthBase(GoogleOAuthBase):
         """
         Returns auth header with API key (NOT OAuth access_token).
         CRITICAL: iFlow API requests use the api_key, not the OAuth tokens.
+        Includes graceful degradation if refresh fails.
         """
-        creds = await self._load_credentials(credential_path)
-        if self._is_token_expired(creds):
-            creds = await self._refresh_token(credential_path)
+        try:
+            creds = await self._load_credentials(credential_path)
+            if self._is_token_expired(creds):
+                try:
+                    creds = await self._refresh_token(credential_path, creds)
+                    self._staleness_counter.pop(credential_path, None)
+                except Exception as e:
+                    cached = self._credentials_cache.get(credential_path)
+                    if cached and cached.get("api_key"):
+                        stale_count = self._staleness_counter.get(credential_path, 0)
+                        if stale_count < 1:
+                            self._staleness_counter[credential_path] = stale_count + 1
+                            lib_logger.warning(
+                                f"Token refresh failed for {Path(credential_path).name}: {e}. "
+                                "Using cached api_key (token may be expired)."
+                            )
+                            creds = cached
+                        else:
+                            lib_logger.error(
+                                f"Token refresh failed for {Path(credential_path).name}: {e}. "
+                                "Stale token served too many times, raising."
+                            )
+                            raise
+                    else:
+                        raise
 
-        api_key = creds.get("api_key")
-        if not api_key:
-            raise ValueError("Missing api_key in iFlow credentials")
+            api_key = creds.get("api_key")
+            if not api_key:
+                raise ValueError("Missing api_key in iFlow credentials")
 
-        return {"Authorization": f"Bearer {api_key}"}
+            return {"Authorization": f"Bearer {api_key}"}
+        except Exception as e:
+            cached = self._credentials_cache.get(credential_path)
+            if cached and cached.get("api_key"):
+                stale_count = self._staleness_counter.get(credential_path, 0)
+                if stale_count < 1:
+                    self._staleness_counter[credential_path] = stale_count + 1
+                    lib_logger.error(
+                        f"Credential load failed for {credential_path}: {e}. "
+                        "Using stale cached api_key as last resort."
+                    )
+                    return {"Authorization": f"Bearer {cached['api_key']}"}
+                else:
+                    lib_logger.error(
+                        f"Credential load failed for {credential_path}: {e}. "
+                        "Stale token served too many times, raising."
+                    )
+            raise
 
     async def get_user_info(
         self, creds_or_path: Union[Dict[str, Any], str]

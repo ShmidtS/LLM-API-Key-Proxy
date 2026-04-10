@@ -27,7 +27,7 @@ import os
 import socket
 import struct
 import random
-import json
+from .utils.json_utils import json_loads
 import ssl
 import threading
 import time
@@ -237,7 +237,7 @@ def _doh_query(host: str, doh_url: str) -> Optional[str]:
             with urllib.request.urlopen(
                 req, timeout=_get_doh_timeout(), context=ctx
             ) as resp:
-                data = json.loads(resp.read().decode())
+                data = json_loads(resp.read().decode())
 
         if data.get("Status") == 0 and "Answer" in data:
             for answer in data["Answer"]:

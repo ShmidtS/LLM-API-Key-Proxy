@@ -24,8 +24,6 @@ Directory structure:
 
 from __future__ import annotations
 
-import json
-
 import orjson
 import logging
 import time
@@ -331,7 +329,7 @@ class TransactionLogger:
             return
         try:
             with open(self.log_dir / filename, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.write(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode("utf-8"))
         except Exception as e:
             lib_logger.error(f"TransactionLogger: Failed to write {filename}: {e}")
 
@@ -569,7 +567,7 @@ class ProviderLogger:
             return
         try:
             with open(self.log_dir / filename, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.write(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode("utf-8"))
         except Exception as e:
             lib_logger.error(f"ProviderLogger: Failed to write {filename}: {e}")
 

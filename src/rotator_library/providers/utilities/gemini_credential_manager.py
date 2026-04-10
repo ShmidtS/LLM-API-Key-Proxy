@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from ...utils.json_utils import json_loads
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -72,7 +73,7 @@ class GeminiCredentialManager:
 
         try:
             with open(credential_path, "r") as f:
-                creds = json.load(f)
+                creds = json_loads(f.read())
 
             metadata = creds.get("_proxy_metadata", {})
             tier = metadata.get("tier")
@@ -196,7 +197,7 @@ class GeminiCredentialManager:
             """Synchronous file read for use with asyncio.to_thread."""
             try:
                 with open(path, "r") as f:
-                    return path, json.load(f)
+                    return path, json_loads(f.read())
             except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
                 return path, e
 
