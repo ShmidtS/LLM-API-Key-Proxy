@@ -19,9 +19,14 @@ class BaseTokenManager:
     Contains only the __init__ state initialization that is identical across all.
     """
 
+    # Subclasses override to match their REFRESH_EXPIRY_BUFFER_SECONDS + token lifetime.
+    # Default 3600s works for Google (30min buffer, 1hr tokens).
+    # Qwen (3hr buffer) and iFlow (24hr buffer) override with longer TTLs.
+    _cache_default_ttl: float = 3600.0
+
     def __init__(self):
         # Cache and lock management
-        self._credentials_cache: TTLDict = TTLDict(maxsize=200, default_ttl=3600.0)
+        self._credentials_cache: TTLDict = TTLDict(maxsize=200, default_ttl=self._cache_default_ttl)
         self._refresh_locks: Dict[str, asyncio.Lock] = {}
         self._locks_lock = threading.Lock()  # Thread-safe, non-async for dict access
 
@@ -56,5 +61,3 @@ class BaseTokenManager:
         """
         self._credentials_cache.pop(credential, None)
         self._unavailable_credentials.pop(credential, None)
-        if credential in self._refresh_locks:
-            del self._refresh_locks[credential]

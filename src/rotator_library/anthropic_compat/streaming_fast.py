@@ -253,10 +253,12 @@ async def anthropic_streaming_wrapper_fast(
     last_event_time = monotonic()
     HEARTBEAT_INTERVAL = 30  # seconds
 
+    _chunk_count = 0
     try:
         async for raw_chunk in openai_stream:
-            # Check for client disconnection if callback provided
-            if is_disconnected is not None and await is_disconnected():
+            # Check for client disconnection every 20 chunks (avoid per-chunk syscall overhead)
+            _chunk_count += 1
+            if is_disconnected is not None and _chunk_count % 20 == 0 and await is_disconnected():
                 break
 
             # STREAM_DONE sentinel: stream is complete

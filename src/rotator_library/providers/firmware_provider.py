@@ -10,12 +10,11 @@ Environment variables:
     FIRMWARE_QUOTA_REFRESH_INTERVAL: Quota refresh interval in seconds (default: 300)
 """
 
-import asyncio
 import httpx
-from ..http_client_pool import get_http_pool
 import os
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
+from .base_streaming_provider import QuotaRefreshMixin
 from .provider_interface import ProviderInterface
 from .utilities.firmware_quota_tracker import FirmwareQuotaTracker
 
@@ -26,14 +25,15 @@ import logging
 
 lib_logger = logging.getLogger("rotator_library")
 
-# Concurrency limit for parallel quota fetches
-QUOTA_FETCH_CONCURRENCY = 5
 
-
-class FirmwareProvider(FirmwareQuotaTracker, ProviderInterface):
+class FirmwareProvider(QuotaRefreshMixin, FirmwareQuotaTracker, ProviderInterface):
     """
     Provider implementation for the Firmware.ai API with quota tracking.
     """
+
+    _virtual_model_name = "firmware/_quota"
+    provider_name = "firmware"
+    _include_max_requests = False
 
     # Quota groups for tracking 5-hour rolling window limits
     # Uses a virtual model "firmware/_quota" for credential-level quota tracking
@@ -154,58 +154,3 @@ class FirmwareProvider(FirmwareQuotaTracker, ProviderInterface):
             "run_on_start": True,
         }
 
-    async def run_background_job(
-        self,
-        usage_manager: "UsageManager",
-        credentials: List[str],
-    ) -> None:
-        """
-        Refresh quota usage for all credentials in parallel.
-
-        Args:
-            usage_manager: UsageManager instance
-            credentials: List of API keys
-        """
-        semaphore = asyncio.Semaphore(QUOTA_FETCH_CONCURRENCY)
-
-        async def refresh_single_credential(
-            api_key: str, client: httpx.AsyncClient
-        ) -> None:
-            async with semaphore:
-                try:
-                    usage_data = await self.fetch_quota_usage(api_key, client)
-
-                    if usage_data.get("status") == "success":
-                        # Update quota cache
-                        self._quota_cache[api_key] = usage_data
-
-                        # Calculate values for usage manager
-                        remaining_fraction = usage_data.get("remaining_fraction", 0.0)
-                        reset_ts = usage_data.get("reset_at")
-
-                        # Store baseline in usage manager
-                        # Since Firmware.ai uses credential-level quota, we use a virtual model name
-                        await usage_manager.update_quota_baseline(
-                            api_key,
-                            "firmware/_quota",  # Virtual model for credential-level tracking
-                            remaining_fraction,
-                            # No max_requests - Firmware.ai doesn't expose this
-                            reset_timestamp=reset_ts,
-                        )
-
-                        lib_logger.debug(
-                            f"Updated Firmware.ai quota baseline: "
-                            f"{remaining_fraction * 100:.1f}% remaining, "
-                            f"active_window={usage_data.get('has_active_window', False)}"
-                        )
-
-                except Exception as e:
-                    lib_logger.warning(f"Failed to refresh Firmware.ai quota usage: {e}")
-
-        # Fetch all credentials in parallel with shared HTTP client
-        pool = await get_http_pool()
-        client = await pool.get_client_async()
-        tasks = [
-            refresh_single_credential(api_key, client) for api_key in credentials
-        ]
-        await asyncio.gather(*tasks, return_exceptions=True)

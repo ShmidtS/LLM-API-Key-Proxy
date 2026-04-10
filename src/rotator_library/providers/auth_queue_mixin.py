@@ -34,7 +34,7 @@ class AuthQueueMixin:
     - _refresh_interval_seconds: int, delay between processing credentials
     - _credentials_cache: dict caching loaded credentials
     - initialize_token(path, force_interactive=True): async method
-    - _refresh_token(path, creds, force=False): async method
+    - _refresh_token(path, creds=None, force=False): async method
     - _load_credentials(path): async method
     - _is_token_expired(creds): method to check if token needs refresh
     - _is_token_truly_expired(creds): method to check if token is actually expired

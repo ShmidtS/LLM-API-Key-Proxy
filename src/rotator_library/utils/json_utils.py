@@ -29,12 +29,12 @@ def json_loads(s: str) -> Any:
     return orjson.loads(s)
 
 
-def sse_data_event(data: Any) -> str:
-    """Format a dict as an SSE data event string.
+def sse_data_event(data: Any) -> bytes:
+    """Format a dict as an SSE data event bytes.
 
-    Produces ``data: {...}\\n\\n`` suitable for yielding in SSE streaming responses.
+    Produces ``b"data: {...}\\n\\n"`` suitable for yielding in SSE streaming responses.
     """
-    return f"data: {orjson.dumps(data).decode()}\n\n"
+    return b"data: " + orjson.dumps(data) + b"\n\n"
 
 
 def json_deep_copy(obj: Any) -> Any:

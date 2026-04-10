@@ -576,17 +576,26 @@ def translate_anthropic_request(request: AnthropicMessagesRequest) -> Dict[str, 
     Returns:
         Dictionary containing the OpenAI-compatible request parameters
     """
-    anthropic_request = request.model_dump(exclude_none=True)
+    messages = request.messages
+    if messages and not isinstance(messages[0], dict):
+        messages = [m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else m for m in messages]
 
-    messages = anthropic_request.get("messages", [])
-    openai_messages = anthropic_to_openai_messages(
-        messages, anthropic_request.get("system")
-    )
+    system = request.system
+    if system is not None and hasattr(system, "model_dump"):
+        system = system.model_dump(exclude_none=True)
 
-    openai_tools = anthropic_to_openai_tools(anthropic_request.get("tools"))
-    openai_tool_choice = anthropic_to_openai_tool_choice(
-        anthropic_request.get("tool_choice")
-    )
+    openai_messages = anthropic_to_openai_messages(messages, system)
+
+    tools = request.tools
+    if tools and not isinstance(tools[0], dict):
+        tools = [t.model_dump(exclude_none=True) if hasattr(t, "model_dump") else t for t in tools]
+
+    tool_choice = request.tool_choice
+    if tool_choice is not None and hasattr(tool_choice, "model_dump"):
+        tool_choice = tool_choice.model_dump(exclude_none=True)
+
+    openai_tools = anthropic_to_openai_tools(tools)
+    openai_tool_choice = anthropic_to_openai_tool_choice(tool_choice)
 
     # Build OpenAI-compatible request
     openai_request = {
@@ -616,16 +625,20 @@ def translate_anthropic_request(request: AnthropicMessagesRequest) -> Dict[str, 
 
     # Handle Anthropic thinking config -> reasoning_effort translation
     # Only set reasoning_effort if thinking is explicitly configured
-    if request.thinking:
-        if request.thinking.type == "enabled":
-            # Only set reasoning_effort if budget_tokens was specified
-            if request.thinking.budget_tokens is not None:
+    thinking = request.thinking
+    if thinking:
+        if isinstance(thinking, dict):
+            _thinking_type = thinking.get("type")
+            _budget_tokens = thinking.get("budget_tokens")
+        else:
+            _thinking_type = thinking.type
+            _budget_tokens = thinking.budget_tokens
+        if _thinking_type == "enabled":
+            if _budget_tokens is not None:
                 openai_request["reasoning_effort"] = _budget_to_reasoning_effort(
-                    request.thinking.budget_tokens, request.model
+                    _budget_tokens, request.model
                 )
-            # If thinking enabled but no budget specified, don't set anything
-            # Let the provider decide the default
-        elif request.thinking.type == "disabled":
+        elif _thinking_type == "disabled":
             openai_request["reasoning_effort"] = "disable"
 
     return openai_request

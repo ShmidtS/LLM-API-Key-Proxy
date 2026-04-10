@@ -35,7 +35,7 @@ class ACompletionMixin(StreamingResponseMixin):
 
     Requires the host class to also inherit from an auth base that supplies:
       - get_api_details(credential_path) -> (api_base, auth_token)
-      - _refresh_token(credential_path, force=True)
+      - _refresh_token(credential_path, creds=None, force=True)
     and to define _build_request_payload / _convert_chunk_to_openai itself.
     """
 

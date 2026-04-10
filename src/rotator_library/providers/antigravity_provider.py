@@ -63,6 +63,10 @@ from .utilities.gemini_shared_utils import (
     GEMINI3_TOOL_RENAMES_REVERSE,
     FINISH_REASON_MAP,
     DEFAULT_SAFETY_SETTINGS,
+    GEMINI_TIER_PRIORITIES,
+    GEMINI_DEFAULT_TIER_PRIORITY,
+    GEMINI_DEFAULT_PRIORITY_MULTIPLIERS,
+    GEMINI_DEFAULT_SEQUENTIAL_FALLBACK_MULTIPLIER,
 )
 from ..transaction_logger import AntigravityProviderLogger
 from .utilities.gemini_tool_handler import GeminiToolHandler
@@ -1025,22 +1029,9 @@ class AntigravityProvider(
     # Provider name for env var lookups (QUOTA_GROUPS_ANTIGRAVITY_*)
     provider_env_name: str = "antigravity"
 
-    # Tier name -> priority mapping (Single Source of Truth)
-    # Lower numbers = higher priority
-    tier_priorities = {
-        # Priority 1: Highest paid tier (Google AI Ultra - name unconfirmed)
-        # "google-ai-ultra": 1,  # Uncomment when tier name is confirmed
-        # Priority 2: Standard paid tier
-        "standard-tier": 2,
-        # Priority 3: Free tier
-        "free-tier": 3,
-        # Priority 10: Legacy/Unknown (lowest)
-        "legacy-tier": 10,
-        "unknown": 10,
-    }
+    tier_priorities = GEMINI_TIER_PRIORITIES
 
-    # Default priority for tiers not in the mapping
-    default_tier_priority: int = 10
+    default_tier_priority: int = GEMINI_DEFAULT_TIER_PRIORITY
 
     # Usage reset configs keyed by priority sets
     # Priorities 1-2 (paid tiers) get 5h window, others get 7d window
@@ -1102,16 +1093,9 @@ class AntigravityProvider(
     # comparing credentials for selection
     model_usage_weights = {}
 
-    # Priority-based concurrency multipliers
-    # Higher priority credentials (lower number) get higher multipliers
-    # Priority 1 (paid ultra): 5x concurrent requests
-    # Priority 2 (standard paid): 3x concurrent requests
-    # Others: Use sequential fallback (2x) or balanced default (1x)
-    default_priority_multipliers = {1: 5, 2: 3}
+    default_priority_multipliers = GEMINI_DEFAULT_PRIORITY_MULTIPLIERS
 
-    # For sequential mode, lower priority tiers still get 2x to maintain stickiness
-    # For balanced mode, this doesn't apply (falls back to 1x)
-    default_sequential_fallback_multiplier = 2
+    default_sequential_fallback_multiplier = GEMINI_DEFAULT_SEQUENTIAL_FALLBACK_MULTIPLIER
 
     def parse_quota_error(
         error: Exception, error_body: Optional[str] = None

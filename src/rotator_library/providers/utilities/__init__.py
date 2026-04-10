@@ -23,6 +23,7 @@ from .gemini_shared_utils import (
 )
 from .gemini_tool_handler import GeminiToolHandler
 from .gemini_credential_manager import GeminiCredentialManager
+from .google_project_discovery import GoogleProjectDiscoveryMixin
 
 # Message transformer for Gemini format conversion
 from .message_transformer import (
@@ -61,6 +62,7 @@ __all__ = [
     # Mixins
     "GeminiToolHandler",
     "GeminiCredentialManager",
+    "GoogleProjectDiscoveryMixin",
     # Message transformer
     "transform_messages_for_gemini",
     "build_tool_call_id_to_name_mapping",

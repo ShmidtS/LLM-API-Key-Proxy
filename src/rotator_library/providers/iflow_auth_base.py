@@ -5,13 +5,13 @@
 
 import secrets
 import base64
-import json
 import time
 import asyncio
 import logging
 import webbrowser
 import socket
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import ClassVar, Dict, Any, Tuple, Union, Optional, List
 from urllib.parse import urlencode, parse_qs, urlparse
@@ -25,7 +25,7 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.markup import escape as rich_escape
 from ..utils.headless_detection import is_headless_environment
-from ..utils.reauth_coordinator import get_reauth_coordinator
+from ..utils.json_utils import json_loads
 from ..error_handler import CredentialNeedsReauthError
 
 lib_logger = logging.getLogger("rotator_library")
@@ -44,7 +44,6 @@ IFLOW_CLIENT_SECRET = "4Z3YjXycVsQvyGF1etiNlIBB4RsqSDtW"
 CALLBACK_PORT = 11451
 
 
-from .google_oauth_base import CredentialSetupResult
 
 
 def get_callback_port() -> int:
@@ -188,10 +187,12 @@ class IFlowAuthBase(GoogleOAuthBase):
     OAUTH_SCOPES = ["read", "write"]
     ENV_PREFIX = "IFLOW"
     REFRESH_EXPIRY_BUFFER_SECONDS = 24 * 60 * 60
+    _cache_default_ttl: float = 90000.0  # 25hr: aligns with 24hr buffer + 1hr token lifetime
     BUFFER_ON_FAILURE: ClassVar[bool] = False
 
     def __init__(self):
         super().__init__()
+        self._api_key_cache: dict[str, tuple[float, str]] = {}
 
     def _load_from_env(
         self, credential_index: Optional[str] = None
@@ -261,7 +262,7 @@ class IFlowAuthBase(GoogleOAuthBase):
         try:
             lib_logger.debug(f"Reading iFlow credentials from file: {path}")
             with open(path, "r") as f:
-                creds = json.load(f)
+                creds = json_loads(f.read())
             self._credentials_cache[path] = creds
             return creds
         except FileNotFoundError:
@@ -321,19 +322,19 @@ class IFlowAuthBase(GoogleOAuthBase):
         if not expiry_str:
             return True
 
-        try:
-            # Parse ISO 8601 format (e.g., "2025-01-17T12:00:00Z")
-            from datetime import datetime
-
-            expiry_dt = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
-            expiry_timestamp = expiry_dt.timestamp()
-        except (ValueError, AttributeError):
-            # Fallback: treat as numeric timestamp
+        expiry_timestamp = creds.get("_parsed_expiry")
+        if expiry_timestamp is None:
             try:
-                expiry_timestamp = float(expiry_str)
-            except (ValueError, TypeError):
-                lib_logger.warning(f"Could not parse expiry_date: {expiry_str}")
-                return True
+                expiry_dt = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
+                expiry_timestamp = expiry_dt.timestamp()
+                creds["_parsed_expiry"] = expiry_timestamp
+            except (ValueError, AttributeError):
+                # Fallback: treat as numeric timestamp
+                try:
+                    expiry_timestamp = float(expiry_str)
+                except (ValueError, TypeError):
+                    lib_logger.warning(f"Could not parse expiry_date: {expiry_str}")
+                    return True
 
         return expiry_timestamp < time.time() + self.REFRESH_EXPIRY_BUFFER_SECONDS
 
@@ -348,16 +349,17 @@ class IFlowAuthBase(GoogleOAuthBase):
         if not expiry_str:
             return True
 
-        try:
-            from datetime import datetime
-
-            expiry_dt = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
-            expiry_timestamp = expiry_dt.timestamp()
-        except (ValueError, AttributeError):
+        expiry_timestamp = creds.get("_parsed_expiry")
+        if expiry_timestamp is None:
             try:
-                expiry_timestamp = float(expiry_str)
-            except (ValueError, TypeError):
-                return True
+                expiry_dt = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
+                expiry_timestamp = expiry_dt.timestamp()
+                creds["_parsed_expiry"] = expiry_timestamp
+            except (ValueError, AttributeError):
+                try:
+                    expiry_timestamp = float(expiry_str)
+                except (ValueError, TypeError):
+                    return True
 
         return expiry_timestamp < time.time()
 
@@ -449,8 +451,6 @@ class IFlowAuthBase(GoogleOAuthBase):
         user_info = await self._fetch_user_info(access_token)
 
         # Calculate expiry date
-        from datetime import datetime, timedelta
-
         expiry_date = (
             datetime.utcnow() + timedelta(seconds=expires_in)
         ).isoformat() + "Z"
@@ -465,7 +465,7 @@ class IFlowAuthBase(GoogleOAuthBase):
             "scope": scope,
         }
 
-    async def _refresh_token(self, path: str, force: bool = False) -> Dict[str, Any]:
+    async def _refresh_token(self, path: str, creds: Optional[Dict[str, Any]] = None, force: bool = False) -> Dict[str, Any]:
         """
         Refreshes the OAuth tokens and re-fetches the API key.
         CRITICAL: Must re-fetch user info to get potentially updated API key.
@@ -670,7 +670,6 @@ class IFlowAuthBase(GoogleOAuthBase):
             )
 
             expires_in = new_token_data.get("expires_in", 3600)
-            from datetime import datetime, timedelta
 
             creds_from_file["expiry_date"] = (
                 datetime.utcnow() + timedelta(seconds=expires_in)
@@ -685,7 +684,13 @@ class IFlowAuthBase(GoogleOAuthBase):
 
             # CRITICAL: Re-fetch user info to get potentially updated API key
             try:
-                user_info = await self._fetch_user_info(access_token)
+                cached_api_key = self._api_key_cache.get(path)
+                if cached_api_key and (time.time() - cached_api_key[0]) < 86400:
+                    user_info = {"api_key": cached_api_key[1]}
+                else:
+                    user_info = await self._fetch_user_info(access_token)
+                    if user_info.get("api_key"):
+                        self._api_key_cache[path] = (time.time(), user_info["api_key"])
                 if user_info.get("api_key"):
                     creds_from_file["api_key"] = user_info["api_key"]
                 if user_info.get("email"):
@@ -762,134 +767,13 @@ class IFlowAuthBase(GoogleOAuthBase):
 
     # proactively_refresh inherited from GoogleOAuthBase (with IOError handling)
 
-    async def _process_refresh_queue(self):
-        """Background worker that processes normal refresh requests sequentially.
+    def _is_invalid_grant_error(self, error_body: str, status_code: int, error_type: str = "") -> bool:
+        """iFlow uses 'invalid' in error description instead of 'invalid_grant'."""
+        if status_code == 400:
+            return "invalid" in error_body.lower() or error_type == "invalid_request"
+        return False
 
-        Key behaviors:
-        - 15s timeout per refresh operation
-        - 30s delay between processing credentials (prevents thundering herd)
-        - On failure: back of queue, max 3 retries before kicked
-        - If 401/403 detected: routes to re-auth queue
-        - Does NOT mark credentials unavailable (old token still valid)
-        """
-        # lib_logger.info("Refresh queue processor started")
-        while True:
-            path = None
-            try:
-                # Wait for an item with timeout to allow graceful shutdown
-                try:
-                    path, force = await asyncio.wait_for(
-                        self._refresh_queue.get(), timeout=60.0
-                    )
-                except asyncio.TimeoutError:
-                    # Queue is empty and idle for 60s - clean up and exit
-                    async with self._queue_tracking_lock:
-                        # Clear any stale retry counts
-                        self._queue_retry_count.clear()
-                    self._queue_processor_task = None
-                    # lib_logger.debug("Refresh queue processor idle, shutting down")
-                    return
-
-                try:
-                    # Quick check if still expired (optimization to avoid unnecessary refresh)
-                    creds = self._credentials_cache.get(path)
-                    if creds and not self._is_token_expired(creds):
-                        # No longer expired, skip refresh
-                        # lib_logger.debug(
-                        #     f"Credential '{Path(path).name}' no longer expired, skipping refresh"
-                        # )
-                        # Clear retry count on skip (not a failure)
-                        self._queue_retry_count.pop(path, None)
-                        continue
-
-                    # Perform refresh with timeout
-                    try:
-                        async with asyncio.timeout(self._refresh_timeout_seconds):
-                            await self._refresh_token(path, force=force)
-
-                        # SUCCESS: Clear retry count
-                        self._queue_retry_count.pop(path, None)
-                        # lib_logger.info(f"Refresh SUCCESS for '{Path(path).name}'")
-
-                    except asyncio.TimeoutError:
-                        lib_logger.warning(
-                            f"Refresh timeout ({self._refresh_timeout_seconds}s) for '{Path(path).name}'"
-                        )
-                        await self._handle_refresh_failure(path, force, "timeout")
-
-                    except httpx.HTTPStatusError as e:
-                        status_code = e.response.status_code
-                        # Check for invalid refresh token errors (400/401/403)
-                        # These need to be routed to re-auth queue for interactive OAuth
-                        needs_reauth = False
-
-                        if status_code == 400:
-                            # Check if this is an invalid refresh token error
-                            try:
-                                error_data = e.response.json()
-                                error_type = error_data.get("error", "")
-                                error_desc = error_data.get("error_description", "")
-                                if not error_desc:
-                                    error_desc = error_data.get("message", str(e))
-                            except Exception:
-                                error_type = ""
-                                error_desc = str(e)
-
-                            if (
-                                "invalid" in error_desc.lower()
-                                or error_type == "invalid_request"
-                            ):
-                                needs_reauth = True
-                                lib_logger.info(
-                                    f"Credential '{Path(path).name}' needs re-auth (HTTP 400: {error_desc}). "
-                                    f"Routing to re-auth queue."
-                                )
-                        elif status_code in (401, 403):
-                            needs_reauth = True
-                            lib_logger.info(
-                                f"Credential '{Path(path).name}' needs re-auth (HTTP {status_code}). "
-                                f"Routing to re-auth queue."
-                            )
-
-                        if needs_reauth:
-                            self._queue_retry_count.pop(path, None)  # Clear retry count
-                            async with self._queue_tracking_lock:
-                                self._queued_credentials.discard(
-                                    path
-                                )  # Remove from queued
-                            await self._queue_refresh(
-                                path, force=True, needs_reauth=True
-                            )
-                        else:
-                            await self._handle_refresh_failure(
-                                path, force, f"HTTP {status_code}"
-                            )
-
-                    except Exception as e:
-                        await self._handle_refresh_failure(path, force, str(e))
-
-                finally:
-                    # Remove from queued set (unless re-queued by failure handler)
-                    async with self._queue_tracking_lock:
-                        # Only discard if not re-queued (check if still in queue set from retry)
-                        if (
-                            path in self._queued_credentials
-                            and self._queue_retry_count.get(path, 0) == 0
-                        ):
-                            self._queued_credentials.discard(path)
-                    self._refresh_queue.task_done()
-
-                # Wait between credentials to spread load
-                await asyncio.sleep(self._refresh_interval_seconds)
-
-            except asyncio.CancelledError:
-                # lib_logger.debug("Refresh queue processor cancelled")
-                break
-            except Exception as e:
-                lib_logger.error(f"Error in refresh queue processor: {e}")
-                if path:
-                    async with self._queue_tracking_lock:
-                        self._queued_credentials.discard(path)
+    # _process_refresh_queue inherited from GoogleOAuthBase
 
     async def _perform_interactive_oauth(
         self, path: str, creds: Dict[str, Any], display_name: str
@@ -1036,13 +920,7 @@ class IFlowAuthBase(GoogleOAuthBase):
         """
         path = creds_or_path if isinstance(creds_or_path, str) else None
 
-        # Get display name from metadata if available, otherwise derive from path
-        if isinstance(creds_or_path, dict):
-            display_name = creds_or_path.get("_proxy_metadata", {}).get(
-                "display_name", "in-memory object"
-            )
-        else:
-            display_name = Path(path).name if path else "in-memory object"
+        display_name = self._get_display_name(creds_or_path)
 
         lib_logger.debug(f"Initializing iFlow token for '{display_name}'...")
 
@@ -1051,18 +929,18 @@ class IFlowAuthBase(GoogleOAuthBase):
                 await self._load_credentials(creds_or_path) if path else creds_or_path
             )
 
-            reason = ""
-            if force_interactive:
-                reason = (
-                    "re-authentication was explicitly requested (refresh token invalid)"
-                )
-            elif not creds.get("refresh_token"):
-                reason = "refresh token is missing"
-            elif self._is_token_expired(creds):
+            token_expired = self._is_token_expired(creds)
+            needs_interactive, reason = self._should_force_interactive(
+                creds, force_interactive=force_interactive
+            )
+
+            # Expired tokens: try refresh before interactive (unless already
+            # forcing interactive, which means refresh already failed)
+            if token_expired and not needs_interactive:
+                needs_interactive = True
                 reason = "token is expired"
 
-            if reason:
-                # Try automatic refresh first if we have a refresh token
+            if needs_interactive:
                 if reason == "token is expired" and creds.get("refresh_token"):
                     try:
                         return await self._refresh_token(path)
@@ -1071,27 +949,16 @@ class IFlowAuthBase(GoogleOAuthBase):
                             f"Automatic token refresh for '{display_name}' failed: {e}. Proceeding to interactive login."
                         )
 
-                # Interactive OAuth flow
                 lib_logger.warning(
                     f"iFlow OAuth token for '{display_name}' needs setup: {reason}."
                 )
 
-                # [GLOBAL REAUTH COORDINATION] Use the global coordinator to ensure
-                # only one interactive OAuth flow runs at a time across all providers
-                coordinator = get_reauth_coordinator()
-
-                # Define the interactive OAuth function to be executed by coordinator
-                async def _do_interactive_oauth():
-                    return await self._perform_interactive_oauth(
-                        path, creds, display_name
-                    )
-
-                # Execute via global coordinator (ensures only one at a time)
-                return await coordinator.execute_reauth(
-                    credential_path=path or display_name,
+                return await self._execute_interactive_oauth(
+                    path=path,
+                    creds=creds,
+                    display_name=display_name,
                     provider_name="IFLOW",
-                    reauth_func=_do_interactive_oauth,
-                    timeout=300.0,  # 5 minute timeout for user to complete OAuth
+                    timeout=300.0,
                 )
 
             lib_logger.info(f"iFlow OAuth token at '{display_name}' is valid.")
@@ -1155,69 +1022,6 @@ class IFlowAuthBase(GoogleOAuthBase):
     # =========================================================================
     # CREDENTIAL MANAGEMENT METHODS
     # =========================================================================
-
-    async def setup_credential(
-        self, base_dir: Optional[Path] = None
-    ) -> CredentialSetupResult:
-        """
-        Complete credential setup flow: OAuth -> save.
-
-        This is the main entry point for setting up new credentials.
-        """
-        if base_dir is None:
-            base_dir = self._get_oauth_base_dir()
-
-        # Ensure directory exists
-        base_dir.mkdir(exist_ok=True)
-
-        try:
-            # Step 1: Perform OAuth authentication
-            temp_creds = {"_proxy_metadata": {"display_name": "new iFlow credential"}}
-            new_creds = await self.initialize_token(temp_creds)
-
-            # Step 2: Get user info for deduplication
-            email = new_creds.get("email") or new_creds.get("_proxy_metadata", {}).get(
-                "email"
-            )
-
-            if not email:
-                return CredentialSetupResult(
-                    success=False, error="Could not retrieve email from OAuth response"
-                )
-
-            # Step 3: Check for existing credential with same email
-            existing_path = self._find_existing_credential_by_email(email, base_dir)
-            is_update = existing_path is not None
-
-            if is_update:
-                file_path = existing_path
-                lib_logger.info(
-                    f"Found existing credential for {email}, updating {file_path.name}"
-                )
-            else:
-                file_path = self._build_credential_path(base_dir)
-                lib_logger.info(
-                    f"Creating new credential for {email} at {file_path.name}"
-                )
-
-            # Step 4: Save credentials to file
-            if not await self._save_credentials(str(file_path), new_creds):
-                return CredentialSetupResult(
-                    success=False,
-                    error=f"Failed to save credentials to disk at {file_path.name}",
-                )
-
-            return CredentialSetupResult(
-                success=True,
-                file_path=str(file_path),
-                email=email,
-                is_update=is_update,
-                credentials=new_creds,
-            )
-
-        except Exception as e:
-            lib_logger.error(f"Credential setup failed: {e}")
-            return CredentialSetupResult(success=False, error=str(e))
 
     def build_env_lines(self, creds: Dict[str, Any], cred_number: int) -> List[str]:
         """Generate .env file lines for an iFlow credential."""

@@ -4539,6 +4539,7 @@ class RotatingClient:
         request: "AnthropicMessagesRequest",
         raw_request: Optional[Any] = None,
         pre_request_callback: Optional[callable] = None,
+        raw_body_data: Optional[dict] = None,
     ) -> Any:
         """
         Handle Anthropic Messages API requests.
@@ -4581,7 +4582,7 @@ class RotatingClient:
             )
             # Log original Anthropic request
             anthropic_logger.log_request(
-                request.model_dump(exclude_none=True),
+                raw_body_data if raw_body_data is not None else request.model_dump(exclude_none=True),
                 filename="anthropic_request.json",
             )
 

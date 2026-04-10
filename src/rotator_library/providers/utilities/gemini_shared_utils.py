@@ -109,6 +109,28 @@ DEFAULT_GEMINI_SAFETY_SETTINGS_MAP: Dict[str, str] = {
     item["category"]: item["threshold"] for item in DEFAULT_SAFETY_SETTINGS
 }
 
+# =============================================================================
+# SHARED TIER CONFIGURATION (Gemini CLI & Antigravity)
+# =============================================================================
+
+GEMINI_TIER_PRIORITIES: Dict[str, int] = {
+    # Priority 1: Highest paid tier (Google AI Ultra - name unconfirmed)
+    # "google-ai-ultra": 1,  # Uncomment when tier name is confirmed
+    # Priority 2: Standard paid tier
+    "standard-tier": 2,
+    # Priority 3: Free tier
+    "free-tier": 3,
+    # Priority 10: Legacy/Unknown (lowest)
+    "legacy-tier": 10,
+    "unknown": 10,
+}
+
+GEMINI_DEFAULT_TIER_PRIORITY: int = 10
+
+GEMINI_DEFAULT_PRIORITY_MULTIPLIERS: Dict[int, int] = {1: 5, 2: 3}
+
+GEMINI_DEFAULT_SEQUENTIAL_FALLBACK_MULTIPLIER: int = 2
+
 # Shared model alias mappings for Gemini-family public/internal names
 GEMINI_MODEL_ALIAS_MAP: Dict[str, str] = {
     "gemini-3-pro-low": "gemini-3-pro-preview",

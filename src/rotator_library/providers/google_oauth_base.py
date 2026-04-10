@@ -24,9 +24,9 @@ from rich.text import Text
 from rich.markup import escape as rich_escape
 
 from ..utils.headless_detection import is_headless_environment
-from ..utils.reauth_coordinator import get_reauth_coordinator
 from ..utils.resilient_io import safe_write_json
 from ..utils.model_utils import parse_env_credential_path
+from ..utils.json_utils import json_loads
 from ..error_handler import CredentialNeedsReauthError
 
 lib_logger = logging.getLogger("rotator_library")
@@ -71,9 +71,10 @@ class CredentialSetupResult:
 
 from .base_token_manager import BaseTokenManager
 from .auth_queue_mixin import AuthQueueMixin
+from .oauth_mixin import OAuthMixin
 
 
-class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
+class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, BaseTokenManager):
     """
     Base class for Google OAuth2 authentication providers.
 
@@ -343,7 +344,7 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
                     f"Loading {self.ENV_PREFIX} credentials from file: {path}"
                 )
                 with open(path, "r") as f:
-                    creds = json.load(f)
+                    creds = json_loads(f.read())
                 # Handle gcloud-style creds file which nest tokens under "credential"
                 if "credential" in creds:
                     creds = creds["credential"]
@@ -606,6 +607,16 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
             expiry_timestamp = time.mktime(time.strptime(expiry, "%Y-%m-%dT%H:%M:%SZ"))
         return expiry_timestamp < time.time()
 
+    def _is_invalid_grant_error(self, error_body: str, status_code: int, error_type: str = "") -> bool:
+        """Check if an HTTP error indicates an invalid/expired refresh token needing re-auth.
+
+        Default: checks for 'invalid_grant' in error body (Google OAuth).
+        Override in subclasses for provider-specific error patterns.
+        """
+        if status_code == 400:
+            return "invalid_grant" in error_body.lower()
+        return False
+
     async def _process_refresh_queue(self):
         """Background worker that processes normal refresh requests sequentially.
 
@@ -666,12 +677,36 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
 
                     except httpx.HTTPStatusError as e:
                         status_code = e.response.status_code
-                        if status_code in (401, 403):
-                            # Invalid refresh token - route to re-auth queue
-                            lib_logger.warning(
-                                f"Refresh token invalid for '{Path(path).name}' (HTTP {status_code}). "
+                        # Check for invalid refresh token errors (400/401/403)
+                        # These need to be routed to re-auth queue for interactive OAuth
+                        needs_reauth = False
+
+                        if status_code == 400:
+                            # Check if this is an invalid refresh token error
+                            try:
+                                error_data = e.response.json()
+                                error_type = error_data.get("error", "")
+                                error_desc = error_data.get("error_description", "")
+                                if not error_desc:
+                                    error_desc = error_data.get("message", str(e))
+                            except Exception:
+                                error_type = ""
+                                error_desc = str(e)
+
+                            if self._is_invalid_grant_error(error_desc, status_code, error_type):
+                                needs_reauth = True
+                                lib_logger.info(
+                                    f"Credential '{Path(path).name}' needs re-auth (HTTP 400: {error_desc}). "
+                                    f"Routing to re-auth queue."
+                                )
+                        elif status_code in (401, 403):
+                            needs_reauth = True
+                            lib_logger.info(
+                                f"Credential '{Path(path).name}' needs re-auth (HTTP {status_code}). "
                                 f"Routing to re-auth queue."
                             )
+
+                        if needs_reauth:
                             self._queue_retry_count.pop(path, None)  # Clear retry count
                             async with self._queue_tracking_lock:
                                 self._queued_credentials.discard(
@@ -978,12 +1013,7 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
         path = creds_or_path if isinstance(creds_or_path, str) else None
 
         # Get display name from metadata if available, otherwise derive from path
-        if isinstance(creds_or_path, dict):
-            display_name = creds_or_path.get("_proxy_metadata", {}).get(
-                "display_name", "in-memory object"
-            )
-        else:
-            display_name = Path(path).name if path else "in-memory object"
+        display_name = self._get_display_name(creds_or_path)
 
         lib_logger.debug(
             f"Initializing {self.ENV_PREFIX} token for '{display_name}'..."
@@ -992,17 +1022,18 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
             creds = (
                 await self._load_credentials(creds_or_path) if path else creds_or_path
             )
-            reason = ""
-            if force_interactive:
-                reason = (
-                    "re-authentication was explicitly requested (refresh token invalid)"
-                )
-            elif not creds.get("refresh_token"):
-                reason = "refresh token is missing"
-            elif self._is_token_expired(creds):
+            token_expired = self._is_token_expired(creds)
+            needs_interactive, reason = self._should_force_interactive(
+                creds, force_interactive=force_interactive
+            )
+
+            # Expired tokens: try refresh before interactive (unless already
+            # forcing interactive, which means refresh already failed)
+            if token_expired and not needs_interactive:
+                needs_interactive = True
                 reason = "token is expired"
 
-            if reason:
+            if needs_interactive:
                 if reason == "token is expired" and creds.get("refresh_token"):
                     try:
                         return await self._refresh_token(path, creds)
@@ -1015,22 +1046,13 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
                     f"{self.ENV_PREFIX} OAuth token for '{display_name}' needs setup: {reason}."
                 )
 
-                # [GLOBAL REAUTH COORDINATION] Use the global coordinator to ensure
-                # only one interactive OAuth flow runs at a time across all providers
-                coordinator = get_reauth_coordinator()
-
-                # Define the interactive OAuth function to be executed by coordinator
-                async def _do_interactive_oauth():
-                    return await self._perform_interactive_oauth(
-                        path, creds, display_name
-                    )
-
-                # Execute via global coordinator (ensures only one at a time)
-                return await coordinator.execute_reauth(
-                    credential_path=path or display_name,
+                # Use OAuthMixin's coordinated interactive OAuth execution
+                return await self._execute_interactive_oauth(
+                    path=path,
+                    creds=creds,
+                    display_name=display_name,
                     provider_name=self.ENV_PREFIX,
-                    reauth_func=_do_interactive_oauth,
-                    timeout=300.0,  # 5 minute timeout for user to complete OAuth
+                    timeout=300.0,
                 )
 
             lib_logger.info(
@@ -1125,7 +1147,7 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
         try:
             # Load current credentials
             with open(credential_path, "r") as f:
-                creds = json.load(f)
+                creds = json_loads(f.read())
 
             # Update metadata
             if "_proxy_metadata" not in creds:
@@ -1240,11 +1262,11 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
         for cred_file in glob(pattern):
             try:
                 with open(cred_file, "r") as f:
-                    creds = json.load(f)
+                    creds = json_loads(f.read())
                 existing_email = creds.get("email") or creds.get("_proxy_metadata", {}).get("email")
                 if existing_email == email:
                     return Path(cred_file)
-            except (json.JSONDecodeError, IOError) as e:
+            except (ValueError, IOError) as e:
                 lib_logger.debug(f"Could not read credential file {cred_file}: {e}")
                 continue
 
@@ -1370,7 +1392,7 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
                 )
                 # Reload credentials to get discovered metadata
                 with open(file_path, "r") as f:
-                    updated_creds = json.load(f)
+                    updated_creds = json_loads(f.read())
                 tier = updated_creds.get("_proxy_metadata", {}).get("tier")
                 project_id = updated_creds.get("_proxy_metadata", {}).get("project_id")
                 new_creds = updated_creds
@@ -1460,7 +1482,7 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
 
             # Load credential
             with open(cred_path, "r") as f:
-                creds = json.load(f)
+                creds = json_loads(f.read())
 
             # Extract metadata (top-level email for iFlow/Qwen, metadata email for Google)
             email = creds.get("email") or creds.get("_proxy_metadata", {}).get("email", "unknown")
@@ -1515,7 +1537,7 @@ class GoogleOAuthBase(AuthQueueMixin, BaseTokenManager):
         for cred_file in sorted(glob(pattern)):
             try:
                 with open(cred_file, "r") as f:
-                    creds = json.load(f)
+                    creds = json_loads(f.read())
 
                 metadata = creds.get("_proxy_metadata", {})
 

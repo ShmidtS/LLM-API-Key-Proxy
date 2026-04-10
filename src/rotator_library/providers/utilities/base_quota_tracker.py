@@ -102,6 +102,14 @@ class BaseQuotaTracker:
     user_to_api_model_map: Dict[str, str] = {}
     api_to_user_model_map: Dict[str, str] = {}
 
+    # Integer max_requests mode (alternative to float cost percentages)
+    # When True, default_max_requests/default_max_requests_unknown are used
+    # as the source of truth, and costs are derived as 100/max_requests.
+    # File format uses schema_version=2 with "max_requests" key.
+    _use_integer_max_requests: bool = False
+    default_max_requests: Dict[str, Dict[str, int]] = {}
+    default_max_requests_unknown: int = 100
+
     # =========================================================================
     # TYPE HINTS for attributes from provider
     # =========================================================================
@@ -229,19 +237,40 @@ class BaseQuotaTracker:
             return
 
         costs_file = self._get_learned_costs_file()
-        if costs_file.exists():
-            try:
-                with open(costs_file, "r") as f:
-                    data = json.load(f)
-                    # Validate schema
-                    if data.get("schema_version") == 1:
-                        self._learned_costs = data.get("costs", {})
-                        lib_logger.debug(
-                            f"Loaded {sum(len(v) for v in self._learned_costs.values())} "
-                            f"learned {self.cache_subdir} quota costs"
-                        )
-            except Exception as e:
-                lib_logger.warning(f"Failed to load learned quota costs: {e}")
+        if not costs_file.exists():
+            self._learned_costs = {}
+            self._learned_costs_loaded = True
+            return
+
+        try:
+            with open(costs_file, "r") as f:
+                data = json.load(f)
+
+            if self._use_integer_max_requests:
+                raw_costs = data.get("max_requests", data.get("costs", {}))
+                self._learned_costs = {}
+                for tier, models in raw_costs.items():
+                    self._learned_costs[tier] = {}
+                    for model, value in models.items():
+                        if isinstance(value, float) and value < 10:
+                            self._learned_costs[tier][model] = (
+                                int(100.0 / value) if value > 0 else self.default_max_requests_unknown
+                            )
+                        else:
+                            self._learned_costs[tier][model] = int(value)
+                lib_logger.debug(
+                    f"Loaded learned quota limits from {costs_file.name}: "
+                    f"{sum(len(m) for m in self._learned_costs.values())} model entries"
+                )
+            elif data.get("schema_version") == 1:
+                self._learned_costs = data.get("costs", {})
+                lib_logger.debug(
+                    f"Loaded {sum(len(v) for v in self._learned_costs.values())} "
+                    f"learned {self.cache_subdir} quota costs"
+                )
+        except (json.JSONDecodeError, IOError) as e:
+            lib_logger.warning(f"Failed to load learned costs: {e}")
+            self._learned_costs = {}
 
         self._learned_costs_loaded = True
 
@@ -274,20 +303,26 @@ class BaseQuotaTracker:
             return
 
         costs_file = self._get_learned_costs_file()
+        costs_file.parent.mkdir(parents=True, exist_ok=True)
+
+        if self._use_integer_max_requests:
+            data = {
+                "schema_version": 2,
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "max_requests": self._learned_costs,
+            }
+        else:
+            data = {
+                "schema_version": 1,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "costs": self._learned_costs,
+            }
+
         try:
-            costs_file.parent.mkdir(parents=True, exist_ok=True)
             with open(costs_file, "w") as f:
-                json.dump(
-                    {
-                        "schema_version": 1,
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
-                        "costs": self._learned_costs,
-                    },
-                    f,
-                    indent=2,
-                )
+                json.dump(data, f, indent=2)
             lib_logger.debug(f"Saved learned quota costs to {costs_file}")
-        except Exception as e:
+        except IOError as e:
             lib_logger.warning(f"Failed to save learned quota costs: {e}")
 
     def get_quota_cost(self, model: str, tier: str) -> float:
@@ -296,6 +331,9 @@ class BaseQuotaTracker:
 
         Cost is expressed as a PERCENTAGE (0-100 scale).
         E.g., 0.1 means each request uses 0.1% of quota = 1000 max requests.
+
+        When _use_integer_max_requests=True, cost is derived from max_requests:
+        cost = 100 / max_requests (ensures exact round-trip).
 
         Priority: learned costs > default costs > unknown fallback
 
@@ -306,6 +344,12 @@ class BaseQuotaTracker:
         Returns:
             Cost per request as percentage (0.1 = 0.1% per request)
         """
+        if self._use_integer_max_requests:
+            max_requests = self.get_max_requests_for_model(model, tier)
+            if max_requests <= 0:
+                return 100.0
+            return 100.0 / max_requests
+
         self._load_learned_costs()
 
         # Strip provider prefix if present
@@ -325,7 +369,12 @@ class BaseQuotaTracker:
         """
         Calculate the maximum number of requests for a model/tier.
 
-        Based on quota cost: max_requests = 100 / cost_percentage
+        When _use_integer_max_requests=True, directly looks up from
+        default_max_requests dict (source of truth). Learned values
+        override defaults.
+
+        When _use_integer_max_requests=False, calculates from float cost:
+        max_requests = 100 / cost_percentage
 
         Args:
             model: Model name (without provider prefix)
@@ -334,6 +383,22 @@ class BaseQuotaTracker:
         Returns:
             Maximum number of requests (e.g., 1000 for 0.1% cost)
         """
+        if self._use_integer_max_requests:
+            self._load_learned_costs()
+
+            clean_model = model.split("/")[-1] if "/" in model else model
+
+            # Check learned values first (stored as max_requests integers)
+            if tier in self._learned_costs and clean_model in self._learned_costs[tier]:
+                return self._learned_costs[tier][clean_model]
+
+            # Fall back to defaults
+            tier_max = self.default_max_requests.get(tier)
+            if tier_max and clean_model in tier_max:
+                return tier_max[clean_model]
+
+            return self.default_max_requests_unknown
+
         cost = self.get_quota_cost(model, tier)
         if cost <= 0:
             return 0
@@ -343,8 +408,8 @@ class BaseQuotaTracker:
         """
         Update a learned cost for a model/tier combination.
 
-        This can be called after observing actual quota consumption to
-        refine the cost estimates over time.
+        When _use_integer_max_requests=True, stores as max_requests integer.
+        Otherwise stores as float cost percentage.
 
         Args:
             model: Model name (without provider prefix)
@@ -364,7 +429,10 @@ class BaseQuotaTracker:
             )
             return
 
-        self._learned_costs[tier][clean_model] = cost
+        if self._use_integer_max_requests:
+            self._learned_costs[tier][clean_model] = int(round(100.0 / cost))
+        else:
+            self._learned_costs[tier][clean_model] = cost
         self._save_learned_costs()
 
         lib_logger.info(

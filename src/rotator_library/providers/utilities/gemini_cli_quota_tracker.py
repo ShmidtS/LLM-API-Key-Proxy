@@ -116,6 +116,11 @@ class GeminiCliQuotaTracker(BaseQuotaTracker):
     user_to_api_model_map: Dict[str, str] = {}
     api_to_user_model_map: Dict[str, str] = {}
 
+    # Integer max_requests mode (source of truth = integer max, not float cost)
+    _use_integer_max_requests: bool = True
+    default_max_requests: Dict[str, Dict[str, int]] = DEFAULT_MAX_REQUESTS
+    default_max_requests_unknown: int = DEFAULT_MAX_REQUESTS_UNKNOWN
+
     # Type hints for attributes from provider
     _learned_costs: Dict[str, Dict[str, int]]
     _learned_costs_loaded: bool
@@ -140,127 +145,6 @@ class GeminiCliQuotaTracker(BaseQuotaTracker):
     def _get_provider_prefix(self) -> str:
         """Get the provider prefix for model names."""
         return "gemini_cli"
-
-    # =========================================================================
-    # LEARNED COSTS MANAGEMENT (Override for integer max_requests)
-    # =========================================================================
-
-    def _load_learned_costs(self) -> None:
-        """Load learned max_requests values from persistent file."""
-        if self._learned_costs_loaded:
-            return
-
-        costs_file = self._get_learned_costs_file()
-        if not costs_file.exists():
-            self._learned_costs = {}
-            self._learned_costs_loaded = True
-            return
-
-        try:
-            with open(costs_file, "r") as f:
-                data = json.load(f)
-
-            # Support both old format (float costs) and new format (int max_requests)
-            raw_costs = data.get("max_requests", data.get("costs", {}))
-
-            # Convert to int if loading old float format
-            self._learned_costs = {}
-            for tier, models in raw_costs.items():
-                self._learned_costs[tier] = {}
-                for model, value in models.items():
-                    if isinstance(value, float) and value < 10:
-                        # Old format: cost percentage -> convert to max_requests
-                        self._learned_costs[tier][model] = (
-                            int(100.0 / value) if value > 0 else 1000
-                        )
-                    else:
-                        # New format: already max_requests
-                        self._learned_costs[tier][model] = int(value)
-
-            lib_logger.debug(
-                f"Loaded learned quota limits from {costs_file.name}: "
-                f"{sum(len(m) for m in self._learned_costs.values())} model entries"
-            )
-        except (json.JSONDecodeError, IOError) as e:
-            lib_logger.warning(f"Failed to load learned costs: {e}")
-            self._learned_costs = {}
-
-        self._learned_costs_loaded = True
-
-    def _save_learned_costs(self) -> None:
-        """Persist learned max_requests values to file."""
-        costs_file = self._get_learned_costs_file()
-        costs_file.parent.mkdir(parents=True, exist_ok=True)
-
-        data = {
-            "schema_version": 2,
-            "last_updated": datetime.now(timezone.utc).isoformat(),
-            "max_requests": self._learned_costs,
-        }
-
-        try:
-            with open(costs_file, "w") as f:
-                json.dump(data, f, indent=2)
-            lib_logger.debug(f"Saved learned quota limits to {costs_file.name}")
-        except IOError as e:
-            lib_logger.warning(f"Failed to save learned costs: {e}")
-
-    def get_quota_cost(self, model: str, tier: str) -> float:
-        """
-        Get quota cost per request for a model/tier combination.
-
-        Cost is DERIVED from max_requests: cost = 100 / max_requests
-        This ensures exact integer results when calculating max_requests back.
-
-        Args:
-            model: Model name (without provider prefix)
-            tier: Account tier ("standard-tier" or "free-tier")
-
-        Returns:
-            Cost as percentage (e.g., 0.4 for 0.4% per request)
-        """
-        max_requests = self.get_max_requests_for_model(model, tier)
-        if max_requests <= 0:
-            return 100.0  # Fallback: 1 request max
-        return 100.0 / max_requests
-
-    def get_max_requests_for_model(self, model: str, tier: str) -> int:
-        """
-        Get maximum requests per 100% quota for a model/tier.
-
-        This is a direct lookup from DEFAULT_MAX_REQUESTS (source of truth).
-        Learned values override defaults if available.
-        Using integers avoids floating-point precision issues.
-
-        Args:
-            model: Model name
-            tier: Account tier
-
-        Returns:
-            Max requests (e.g., 250 for Pro on standard-tier)
-        """
-        # Ensure learned values are loaded
-        self._load_learned_costs()
-
-        # Strip provider prefix if present
-        clean_model = model.split("/")[-1] if "/" in model else model
-
-        # Check learned values first (stored as max_requests integers)
-        if tier in self._learned_costs:
-            if clean_model in self._learned_costs[tier]:
-                return self._learned_costs[tier][clean_model]
-
-        # Fall back to defaults
-        if tier in DEFAULT_MAX_REQUESTS:
-            if clean_model in DEFAULT_MAX_REQUESTS[tier]:
-                return DEFAULT_MAX_REQUESTS[tier][clean_model]
-
-        # Unknown model - use conservative default
-        lib_logger.debug(
-            f"Unknown max requests for model={clean_model}, tier={tier}. "
-            f"Using default {DEFAULT_MAX_REQUESTS_UNKNOWN}"
-        )
-        return DEFAULT_MAX_REQUESTS_UNKNOWN
 
     # =========================================================================
     # BaseQuotaTracker ABSTRACT METHOD IMPLEMENTATIONS
