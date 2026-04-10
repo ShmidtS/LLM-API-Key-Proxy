@@ -1736,6 +1736,11 @@ class UsageManager:
                 if model_cd > now:
                     continue
 
+                # Skip if quota confirmed exhausted via background refresh
+                baseline = self._get_baseline_remaining(key, normalized_model)
+                if baseline is not None and baseline <= 0:
+                    continue
+
                 available.append(key)
 
         return available
