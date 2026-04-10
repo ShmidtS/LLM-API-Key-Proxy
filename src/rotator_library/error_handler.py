@@ -1636,6 +1636,40 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                 status_code=status_code or 503,
             )
 
+        # Some providers (e.g. ZAI) return quota errors as 400 Bad Request
+        # with messages like "Insufficient balance" or "Please recharge".
+        # Re-check parse_quota_error for BadRequestError cases that the
+        # earlier provider-specific pass may have missed (e.g. missing body).
+        if provider:
+            try:
+                from .providers import get_provider
+                provider_class = get_provider(provider)
+                if provider_class and hasattr(provider_class, "parse_quota_error"):
+                    error_body = None
+                    if hasattr(e, "response") and hasattr(e.response, "text"):
+                        try:
+                            error_body = e.response.text
+                        except Exception:
+                            pass
+                    elif hasattr(e, "body"):
+                        error_body = str(e.body)
+                    # Also try the full string as body fallback
+                    if not error_body:
+                        error_body = str(e)
+                    quota_info = provider_class.parse_quota_error(e, error_body)
+                    if quota_info and quota_info.get("retry_after"):
+                        retry_after = quota_info["retry_after"]
+                        quota_reset_timestamp = quota_info.get("quota_reset_timestamp")
+                        return ClassifiedError(
+                            error_type="quota_exceeded",
+                            original_exception=e,
+                            status_code=status_code or 400,
+                            retry_after=retry_after,
+                            quota_reset_timestamp=quota_reset_timestamp,
+                        )
+            except Exception:
+                pass
+
         return ClassifiedError(
             error_type="invalid_request",
             original_exception=e,

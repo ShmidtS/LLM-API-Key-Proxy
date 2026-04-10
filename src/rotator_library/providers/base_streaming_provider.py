@@ -363,6 +363,21 @@ class QuotaRefreshMixin:
                             f"{usage_data.get('remaining', 0):.0f}/{usage_data.get('quota', 0)} remaining "
                             f"({remaining_fraction * 100:.0f}%)"
                         )
+                    else:
+                        # Fetch failed — mark credential as potentially
+                        # exhausted so baseline filtering skips it rather
+                        # than routing requests to a dead key.
+                        self._quota_cache[api_key] = usage_data
+                        await usage_manager.update_quota_baseline(
+                            api_key,
+                            self._virtual_model_name,
+                            remaining_fraction=0.0,
+                            reset_timestamp=usage_data.get("reset_at"),
+                        )
+                        lib_logger.warning(
+                            f"Failed to refresh {self.provider_name} quota for credential "
+                            f"(error: {usage_data.get('error')}), marking as exhausted"
+                        )
 
                 except Exception as e:
                     lib_logger.warning(

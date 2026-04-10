@@ -177,19 +177,22 @@ class ZaiQuotaTracker:
             return self._error_result(str(e))
 
     def _error_result(self, error: str) -> Dict[str, Any]:
+        # remaining_fraction=0.0 on error: treat unknown state as exhausted
+        # so that baseline filtering skips the credential rather than
+        # routing requests to a potentially dead key.
         return {
             "status": "error",
             "error": error,
             "level": "lite",
-            "hourly_used": 0,
+            "hourly_used": 100,
             "hourly_limit": 100,
-            "hourly_remaining": 100,
-            "remaining_fraction": 1.0,
+            "hourly_remaining": 0,
+            "remaining_fraction": 0.0,
             "pct_5min": 0.0,
             "pct_daily": 0.0,
             "quota": 100,
-            "used": 0.0,
-            "remaining": 100.0,
+            "used": 100.0,
+            "remaining": 0.0,
             "reset_at": 0,
             "fetched_at": time.time(),
         }
