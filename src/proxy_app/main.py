@@ -471,6 +471,19 @@ for key, value in os.environ.items():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage the RotatingClient's lifecycle with the app's lifespan."""
+    # Suppress noisy ConnectionResetError from Windows ProactorEventLoop
+    # High-TPS providers (fireworks, friendli) forcefully close connections
+    # after streaming, causing socket.shutdown() to throw in cleanup callbacks.
+    if sys.platform == "win32":
+        loop = asyncio.get_event_loop()
+
+        def _suppress_connection_reset(loop, context):
+            exc = context.get("exception")
+            if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
+                return  # Silently ignore - remote closed connection, not an error
+            loop.default_exception_handler(context)
+
+        loop.set_exception_handler(_suppress_connection_reset)
     # [MODIFIED] Perform skippable OAuth initialization at startup
     skip_oauth_init = os.getenv("SKIP_OAUTH_INIT_CHECK", "false").lower() == "true"
 

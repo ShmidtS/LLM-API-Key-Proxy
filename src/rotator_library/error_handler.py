@@ -100,6 +100,8 @@ PROXY_PROVIDERS = frozenset(
         "opencode",  # OpenCode AI provider with quota-based rate limits
         "inception",  # Inception Labs - 429 errors should trigger rotation, not IP throttle
         "nvidia",  # NVIDIA NIM routes to multiple backends, 429 should rotate keys
+        "zai",  # ZAI uses shared hourly quota across all credentials; 429 on one key means all keys are likely rate-limited, not IP throttle
+        "friendli",  # FriendliAI serverless backend; 429 should trigger key rotation, not IP-level circuit breaker
     }
 )
 
