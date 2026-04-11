@@ -55,7 +55,7 @@ class NvidiaProvider(ProviderInterface):
                 headers={"Authorization": f"Bearer {api_key}"}
             )
             response.raise_for_status()
-            models = [f"nvidia_nim/{model['id']}" for model in response.json().get("data", [])]
+            models = [f"nvidia/{model['id']}" for model in response.json().get("data", [])]
             return models
         except httpx.RequestError as e:
             lib_logger.error(f"Failed to fetch NVIDIA models: {e}")
@@ -160,15 +160,15 @@ class NvidiaProvider(ProviderInterface):
             - Strips 'cache_control' from all content blocks (Anthropic prompt caching).
             - Collapses list-format system messages into plain strings.
 
-        This method is called from client.py for both 'nvidia_nim' and 'nvidia' providers
+        This method is called from client.py for the 'nvidia' provider
         before the litellm call is made.
 
         Args:
             payload: The litellm_kwargs dict (modified in-place).
-            model: Full model string, e.g. 'nvidia_nim/qwen/qwen3.5-397b-a17b'.
+            model: Full model string, e.g. 'nvidia/qwen/qwen3.5-397b-a17b'.
         """
         # Extract the bare model name without provider prefix
-        # model can be 'nvidia_nim/qwen/qwen3.5-397b-a17b' or 'nvidia/qwen/qwen3.5-397b-a17b'
+        # model can be 'nvidia/qwen/qwen3.5-397b-a17b'
         # Strip the first component (provider prefix) to get the actual model ID
         model_name = model.split('/', 1)[1] if '/' in model else model
 
@@ -232,7 +232,7 @@ class NvidiaProvider(ProviderInterface):
 
         Args:
             credential: Credential identifier
-            model: Model name (e.g., "nvidia_nim/deepseek-ai/deepseek-v3.1")
+            model: Model name (e.g., "nvidia/deepseek-ai/deepseek-v3.1")
         """
         await self._quota_tracker.track_request(credential, model)
 

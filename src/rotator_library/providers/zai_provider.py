@@ -187,6 +187,9 @@ class ZaiProvider(QuotaRefreshMixin, ZaiQuotaTracker, ProviderInterface):
             lib_logger.error(f"Failed to fetch ZAI models: {e}")
             return []
 
+    async def get_auth_header(self, credential_identifier: str) -> Dict[str, str]:
+        return {"Authorization": f"Bearer {credential_identifier}"}
+
     def get_background_job_config(self) -> Optional[Dict[str, Any]]:
         return {
             "interval": self._quota_refresh_interval,

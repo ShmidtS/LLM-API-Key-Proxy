@@ -86,7 +86,7 @@ NATIVE_PROVIDER_PRIORITY = [
 # Multiple aliases are tried in order until a match is found.
 #
 PROVIDER_ALIASES = {
-    "nvidia_nim": ["nvidia"],
+    "nvidia": ["nvidia_nim"],
     "gemini_cli": ["google"],
     "gemini": ["google"],
     "iflow": ["iflow", "iflowcn"],  # iflow may exist as either

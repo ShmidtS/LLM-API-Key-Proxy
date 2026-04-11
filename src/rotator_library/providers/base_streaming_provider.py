@@ -363,10 +363,12 @@ class QuotaRefreshMixin:
                             f"{usage_data.get('remaining', 0):.0f}/{usage_data.get('quota', 0)} remaining "
                             f"({remaining_fraction * 100:.0f}%)"
                         )
+                    elif usage_data.get("status") == "transient_error" or usage_data.get("remaining_fraction") is None:
+                        lib_logger.warning(
+                            f"Transient error refreshing {self.provider_name} quota for credential "
+                            f"(error: {usage_data.get('error')}), preserving previous baseline"
+                        )
                     else:
-                        # Fetch failed — mark credential as potentially
-                        # exhausted so baseline filtering skips it rather
-                        # than routing requests to a dead key.
                         self._quota_cache[api_key] = usage_data
                         await usage_manager.update_quota_baseline(
                             api_key,

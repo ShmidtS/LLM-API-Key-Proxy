@@ -162,6 +162,25 @@ class ZaiQuotaTracker:
                 "fetched_at": time.time(),
             }
 
+        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadTimeout,
+                httpx.WriteTimeout, httpx.PoolTimeout, httpx.ConnectTimeout) as e:
+            lib_logger.warning(f"Transient error fetching ZAI quota: {e}")
+            return {
+                "status": "transient_error",
+                "error": str(e),
+                "level": "lite",
+                "hourly_used": 0,
+                "hourly_limit": 0,
+                "hourly_remaining": 0,
+                "remaining_fraction": None,
+                "pct_5min": 0.0,
+                "pct_daily": 0.0,
+                "quota": 0,
+                "used": 0.0,
+                "remaining": None,
+                "reset_at": 0,
+                "fetched_at": time.time(),
+            }
         except httpx.HTTPStatusError as e:
             error_msg = f"HTTP {e.response.status_code}"
             try:

@@ -11,7 +11,7 @@ PROVIDER_URL_MAP = {
     "deepinfra": "https://api.deepinfra.com/v1/openai",
     "mistral": "https://api.mistral.ai/v1",
     "groq": "https://api.groq.com/openai/v1",
-    "nvidia_nim": "https://integrate.api.nvidia.com/v1",
+    "nvidia": "https://integrate.api.nvidia.com/v1",
     "cerebras": "https://api.cerebras.ai/v1",
     "sambanova": "https://api.sambanova.ai/v1",
     "ai21_chat": "https://api.ai21.com/studio/v1",

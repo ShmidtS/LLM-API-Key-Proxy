@@ -583,7 +583,7 @@ class ModelFetcher:
         # Scan environment for API keys (handles numbered keys like GEMINI_API_KEY_1)
         for key in os.environ:
             if "_API_KEY" in key and "PROXY_API_KEY" not in key:
-                # Extract provider: NVIDIA_NIM_API_KEY_1 -> nvidia_nim
+                # Extract provider: NVIDIA_API_KEY_1 -> nvidia
                 provider = key.split("_API_KEY")[0].lower()
                 providers.add(provider)
 

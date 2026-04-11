@@ -70,7 +70,7 @@ LITELLM_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "kilocode": {
         "category": "popular",
         "extra_vars": [
-            ("KILOCODE_API_BASE", "API Base URL", "https://kilocode.ai/api/openrouter"),
+            ("KILOCODE_API_BASE", "API Base URL", "https://kilo.ai/api/openrouter"),
         ],
     },
     "groq": {
@@ -79,10 +79,10 @@ LITELLM_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "chutes": {
         "category": "popular",
     },
-    "nvidia_nim": {
+    "nvidia": {
         "category": "popular",
         "extra_vars": [
-            ("NVIDIA_NIM_API_BASE", "NIM API Base (optional)", None),
+            ("NVIDIA_API_BASE", "NIM API Base (optional)", None),
         ],
     },
     "perplexity": {
@@ -97,7 +97,11 @@ LITELLM_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "zai": {
         "category": "popular",
         "extra_vars": [
-            ("ZAI_API_BASE", "API Base URL (default: https://api.z.ai/api/coding/paas/v4)", "https://api.z.ai/api/coding/paas/v4"),
+            (
+                "ZAI_API_BASE",
+                "API Base URL (default: https://api.z.ai/api/coding/paas/v4)",
+                "https://api.z.ai/api/coding/paas/v4",
+            ),
         ],
     },
     "opencode": {
@@ -820,7 +824,9 @@ class ProviderConfig:
             if "/" in model_name:
                 kwargs["model"] = model_name  # Use as-is: "openai/gpt-5.4"
             else:
-                kwargs["model"] = f"openai/{model_name}"  # Add prefix: "gpt-4" -> "openai/gpt-4"
+                kwargs["model"] = (
+                    f"openai/{model_name}"  # Add prefix: "gpt-4" -> "openai/gpt-4"
+                )
             kwargs["api_base"] = api_base
             kwargs["custom_llm_provider"] = "openai"
             lib_logger.debug(

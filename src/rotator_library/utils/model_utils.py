@@ -39,15 +39,27 @@ def normalize_model_string(model: str) -> str:
     """
     Normalize incoming model string for consistent routing.
 
+    Remaps legacy provider prefixes (e.g., nvidia_nim/ -> nvidia/) and strips whitespace.
+
     Args:
         model: Raw model string from request.
 
     Returns:
-        Stripped model string, or empty string if not a string.
+        Stripped and normalized model string, or empty string if not a string.
     """
     if not isinstance(model, str):
         return ""
-    return model.strip()
+    normalized = model.strip()
+    # Legacy provider prefix aliases
+    _PROVIDER_PREFIX_ALIASES = {
+        "nvidia_nim": "nvidia",
+    }
+    slash_pos = normalized.find("/")
+    if slash_pos > 0:
+        prefix = normalized[:slash_pos]
+        if prefix in _PROVIDER_PREFIX_ALIASES:
+            normalized = _PROVIDER_PREFIX_ALIASES[prefix] + normalized[slash_pos:]
+    return normalized
 
 
 @functools.lru_cache(maxsize=256)

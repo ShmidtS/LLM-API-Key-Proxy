@@ -107,9 +107,6 @@ _registered_providers: set = set()
 
 def _get_provider_module_name(provider_name: str) -> str:
     """Convert provider name to module name."""
-    # Handle special case: nvidia_nim -> nvidia_provider
-    if provider_name == "nvidia_nim":
-        return "nvidia_provider"
     return f"{provider_name}_provider"
 
 
@@ -175,9 +172,6 @@ def list_providers():
     for _, module_name, _ in pkgutil.iter_modules(__path__):
         if module_name.endswith("_provider"):
             provider_name = module_name[:-9]  # Remove '_provider' suffix
-            # Remap 'nvidia' to 'nvidia_nim' to align with litellm's provider name
-            if provider_name == "nvidia":
-                provider_name = "nvidia_nim"
             providers.add(provider_name)
 
     # Add dynamic providers from environment variables

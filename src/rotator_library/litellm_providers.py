@@ -972,11 +972,11 @@ SCRAPED_PROVIDERS: dict[str, dict] = {
         ],
         "model_count": 3,
     },
-    "nvidia_nim": {
+    "nvidia": {
         "display_name": "Nvidia NIM",
-        "route": "nvidia_nim/",
-        "api_key_env_vars": ["NVIDIA_NIM_API_KEY"],
-        "api_base_env_vars": ["NVIDIA_NIM_API_BASE"],
+        "route": "nvidia/",
+        "api_key_env_vars": ["NVIDIA_API_KEY"],
+        "api_base_env_vars": ["NVIDIA_API_BASE"],
         "api_base_url": "https://integrate.api.nvidia.com/v1/",
         "endpoints": [
             "/chat/completions",

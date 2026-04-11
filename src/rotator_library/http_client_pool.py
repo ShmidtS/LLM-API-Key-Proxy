@@ -480,9 +480,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         """
         if client is None:
             return True
-        # httpx.AsyncClient sets _client to None when closed
-        # We check the internal _client attribute which is the actual transport
-        return getattr(client, "_client", None) is None
+        return client.is_closed
 
     async def _ensure_client(self, streaming: bool) -> httpx.AsyncClient:
         """
@@ -496,22 +494,23 @@ class HttpClientPool(metaclass=SingletonMeta):
         Returns:
         Valid httpx.AsyncClient instance
         """
-        if streaming:
-            client = self._streaming_client
-            if self._is_client_closed(client):
-                lib_logger.warning("Streaming HTTP client was closed, recreating...")
-                self._streaming_client = await self._create_client(streaming=True)
-                self._stats["reconnects"] += 1
-            return self._streaming_client
-        else:
-            client = self._non_streaming_client
-            if self._is_client_closed(client):
-                lib_logger.warning(
-                    "Non-streaming HTTP client was closed, recreating..."
-                )
-                self._non_streaming_client = await self._create_client(streaming=False)
-                self._stats["reconnects"] += 1
-            return self._non_streaming_client
+        async with self._client_lock:
+            if streaming:
+                client = self._streaming_client
+                if self._is_client_closed(client):
+                    lib_logger.warning("Streaming HTTP client was closed, recreating...")
+                    self._streaming_client = await self._create_client(streaming=True)
+                    self._stats["reconnects"] += 1
+                return self._streaming_client
+            else:
+                client = self._non_streaming_client
+                if self._is_client_closed(client):
+                    lib_logger.warning(
+                        "Non-streaming HTTP client was closed, recreating..."
+                    )
+                    self._non_streaming_client = await self._create_client(streaming=False)
+                    self._stats["reconnects"] += 1
+                return self._non_streaming_client
 
     def get_client(self, streaming: bool = False) -> httpx.AsyncClient:
         """

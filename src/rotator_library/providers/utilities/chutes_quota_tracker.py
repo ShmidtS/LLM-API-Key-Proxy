@@ -132,6 +132,20 @@ class ChutesQuotaTracker:
                 "fetched_at": time.time(),
             }
 
+        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadTimeout,
+                httpx.WriteTimeout, httpx.PoolTimeout, httpx.ConnectTimeout) as e:
+            lib_logger.warning(f"Transient error fetching Chutes quota: {e}")
+            return {
+                "status": "transient_error",
+                "error": str(e),
+                "quota": 0,
+                "used": 0.0,
+                "remaining": None,
+                "remaining_fraction": None,
+                "tier": "base",
+                "reset_at": 0,
+                "fetched_at": time.time(),
+            }
         except httpx.HTTPStatusError as e:
             error_msg = f"HTTP {e.response.status_code}"
             try:

@@ -108,7 +108,7 @@ class NvidiaQuotaTracker:
 
         Args:
             credential: Credential identifier
-            model: Model name (e.g., "nvidia_nim/deepseek-ai/deepseek-v3.1")
+            model: Model name (e.g., "nvidia/deepseek-ai/deepseek-v3.1")
         """
         async with self._lock:
             # Strip provider prefix if present

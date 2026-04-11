@@ -870,11 +870,6 @@ class RotatingClient:
             return False
         if client.is_closed:
             return False
-        # Check internal transport - this catches "Cannot send a request, as the client has been closed"
-        # The internal _client attribute is the actual AsyncHTTPTransport
-        internal_client = getattr(client, "_client", None)
-        if internal_client is None:
-            return False
         return True
 
     def _build_credential_priority_cache(
@@ -2512,7 +2507,7 @@ class RotatingClient:
                         provider_instance.handle_thinking_parameter(
                             litellm_kwargs, model
                         )
-                    if provider == "nvidia_nim" and provider_instance:
+                    if provider == "nvidia" and provider_instance:
                         provider_instance.handle_thinking_parameter(
                             litellm_kwargs, model
                         )
@@ -2538,8 +2533,8 @@ class RotatingClient:
                             f"Request rejected to prevent API error."
                         )
 
-                    # If the provider is 'nvidia', set the custom provider to 'nvidia_nim'
-                    # and strip the prefix from the model name for LiteLLM.
+                    # If the provider is 'nvidia', set the custom provider for LiteLLM
+                    # (litellm knows nvidia as 'nvidia_nim') and strip the prefix from the model name.
                     if provider == "nvidia":
                         litellm_kwargs["custom_llm_provider"] = "nvidia_nim"
                         litellm_kwargs["model"] = model.split("/", 1)[1]
@@ -3310,7 +3305,7 @@ class RotatingClient:
                         provider_instance.handle_thinking_parameter(
                             litellm_kwargs, model
                         )
-                    if provider == "nvidia_nim" and provider_instance:
+                    if provider == "nvidia" and provider_instance:
                         provider_instance.handle_thinking_parameter(
                             litellm_kwargs, model
                         )
@@ -3340,6 +3335,12 @@ class RotatingClient:
                     # and strip the prefix from the model name for LiteLLM.
                     if provider == "qwen_code":
                         litellm_kwargs["custom_llm_provider"] = "qwen"
+                        litellm_kwargs["model"] = model.split("/", 1)[1]
+
+                    # If the provider is 'nvidia', set the custom provider for LiteLLM
+                    # (litellm knows nvidia as 'nvidia_nim') and strip the prefix from the model name.
+                    if provider == "nvidia":
+                        litellm_kwargs["custom_llm_provider"] = "nvidia_nim"
                         litellm_kwargs["model"] = model.split("/", 1)[1]
 
                     for attempt in range(self.max_retries):

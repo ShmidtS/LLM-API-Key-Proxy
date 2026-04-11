@@ -409,6 +409,16 @@ for key, value in os.environ.items():
                 api_keys[provider] = []
             api_keys[provider].append(value)
 
+# Legacy provider name aliases: remap old env var prefixes to canonical names
+_PROVIDER_CREDENTIAL_ALIASES = {
+    "nvidia_nim": "nvidia",
+}
+for _old, _new in _PROVIDER_CREDENTIAL_ALIASES.items():
+    if _old in api_keys and _new not in api_keys:
+        api_keys[_new] = api_keys.pop(_old)
+    elif _old in api_keys and _new in api_keys:
+        api_keys[_new].extend(api_keys.pop(_old))
+
 # Load model ignore lists from environment variables
 ignore_models = {}
 for key, value in os.environ.items():
