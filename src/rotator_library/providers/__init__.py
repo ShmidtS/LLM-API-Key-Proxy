@@ -11,6 +11,7 @@ from .qwen_auth_base import QwenAuthBase
 from .iflow_auth_base import IFlowAuthBase
 from .antigravity_auth_base import AntigravityAuthBase
 from .colin_provider import ColinProvider
+from .dynamic_provider import DynamicOpenAICompatibleProvider
 
 # Shared base class for streaming response deduplication
 from .base_streaming_provider import StreamingResponseMixin
@@ -30,66 +31,6 @@ PROVIDER_AUTH_MAP: Dict[str, type] = {
 }
 
 
-class DynamicOpenAICompatibleProvider:
-    """
-    Dynamic provider class for custom OpenAI-compatible providers.
-    Created at runtime for providers with _API_BASE environment variables
-    that are NOT known LiteLLM providers.
-
-    Environment variable pattern:
-    <NAME>_API_BASE - The API base URL (required)
-    <NAME>_API_KEY - The API key
-
-    Example:
-    MYSERVER_API_BASE=http://localhost:8000/v1
-    MYSERVER_API_KEY=sk-xxx
-
-    Note: For known providers (openai, anthropic, etc.), setting _API_BASE
-    will override their default endpoint without creating a custom provider.
-    """
-
-    # Class attribute - no need to instantiate
-    skip_cost_calculation: bool = True
-
-    def __init__(self, provider_name: str):
-        self.provider_name = provider_name
-        # Get API base URL from environment (using _API_BASE pattern)
-        self.api_base = os.getenv(f"{provider_name.upper()}_API_BASE")
-        if not self.api_base:
-            raise ValueError(
-                f"Environment variable {provider_name.upper()}_API_BASE is required for custom OpenAI-compatible provider"
-            )
-
-        # Import model definitions
-        from ..model_definitions import ModelDefinitions
-
-        self.model_definitions = ModelDefinitions()
-
-    async def get_models(self, api_key: str, client):
-        """Delegate to OpenAI-compatible provider implementation."""
-        from .openai_compatible_provider import OpenAICompatibleProvider
-
-        # Create temporary instance to reuse logic
-        temp_provider = OpenAICompatibleProvider(self.provider_name)
-        return await temp_provider.get_models(api_key, client)
-
-    def get_model_options(self, model_name: str) -> Dict[str, any]:
-        """Get model options from static definitions."""
-        # Extract model name without provider prefix if present
-        if "/" in model_name:
-            model_name = model_name.split("/")[-1]
-
-        return self.model_definitions.get_model_options(self.provider_name, model_name)
-
-    def has_custom_logic(self) -> bool:
-        """Returns False since we want to use the standard litellm flow."""
-        return False
-
-    async def get_auth_header(self, credential_identifier: str) -> Dict[str, str]:
-        """Returns the standard Bearer token header."""
-        return {"Authorization": f"Bearer {credential_identifier}"}
-
-
 # --- Pre-register providers with custom logic ---
 # These providers implement has_custom_logic() = True and need early registration
 # to bypass the standard litellm flow
@@ -104,19 +45,10 @@ def _get_provider_module_name(provider_name: str) -> str:
     return f"{provider_name}_provider"
 
 
-def _load_provider(provider_name: str):
-    """
-    Lazily load a single provider by name.
-    Returns the provider class or None if not found.
-    """
-    if provider_name in PROVIDER_PLUGINS:
-        return PROVIDER_PLUGINS[provider_name]
-
-    module_name = _get_provider_module_name(provider_name)
-    full_module_path = f"{__name__}.{module_name}"
-
+def _try_load_from_module(module_path: str, provider_name: str):
+    """Try to load a ProviderInterface subclass from a module."""
     try:
-        module = importlib.import_module(full_module_path)
+        module = importlib.import_module(module_path)
     except ImportError:
         return None
 
@@ -135,6 +67,29 @@ def _load_provider(provider_name: str):
             return attribute
 
     return None
+
+
+def _load_provider(provider_name: str):
+    """
+    Lazily load a single provider by name.
+    Returns the provider class or None if not found.
+
+    Tries two patterns:
+    1. Package: {provider_name}/__init__.py  (e.g., antigravity/)
+    2. Module: {provider_name}_provider.py   (e.g., openai_provider.py)
+    """
+    if provider_name in PROVIDER_PLUGINS:
+        return PROVIDER_PLUGINS[provider_name]
+
+    # Try package-based provider first (e.g., antigravity/)
+    result = _try_load_from_module(f"{__name__}.{provider_name}", provider_name)
+    if result:
+        return result
+
+    # Try module-based provider (e.g., openai_provider.py)
+    module_name = _get_provider_module_name(provider_name)
+    result = _try_load_from_module(f"{__name__}.{module_name}", provider_name)
+    return result
 
 
 def get_provider(name: str):
@@ -159,11 +114,14 @@ def list_providers():
     """
     providers = set()
 
-    # Scan for file-based providers
-    for _, module_name, _ in pkgutil.iter_modules(__path__):
+    # Scan for file-based providers (both packages and modules)
+    for _, module_name, is_pkg in pkgutil.iter_modules(__path__):
         if module_name.endswith("_provider"):
             provider_name = module_name[:-9]  # Remove '_provider' suffix
             providers.add(provider_name)
+        elif is_pkg:
+            # Package-based provider (e.g., antigravity/)
+            providers.add(module_name)
 
     # Add dynamic providers from environment variables
     from ..provider_config import KNOWN_PROVIDERS
@@ -211,6 +169,15 @@ def _ensure_dynamic_providers():
             logging.getLogger("rotator_library").debug(
                 f"Registered dynamic provider: {provider_name}"
             )
+
+
+def __getattr__(name: str):
+    """Lazy module-level attribute access (PEP 562)."""
+    if name == "AntigravityProvider":
+        from .antigravity import AntigravityProvider
+        globals()["AntigravityProvider"] = AntigravityProvider
+        return AntigravityProvider
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def get_all_providers() -> Dict[str, Type[ProviderInterface]]:

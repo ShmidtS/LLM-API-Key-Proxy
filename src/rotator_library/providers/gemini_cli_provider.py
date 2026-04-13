@@ -5,8 +5,8 @@
 
 import json
 import orjson
-from rotator_library.utils.json_utils import json_deep_copy
-from rotator_library.utils.duration import parse_duration as _parse_duration_shared
+from ..utils.json_utils import json_deep_copy
+from ..utils.duration import parse_duration as _parse_duration_shared
 import httpx
 import logging
 import time

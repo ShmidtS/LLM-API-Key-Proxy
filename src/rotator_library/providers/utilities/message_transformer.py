@@ -42,7 +42,7 @@ def transform_messages_for_gemini(
     Transform OpenAI-format messages to Gemini format.
 
     This is the core transformation function used by both gemini_cli_provider
-    and antigravity_provider. It handles the common logic for message conversion.
+    and antigravity provider. It handles the common logic for message conversion.
 
     Args:
         messages: List of OpenAI-format messages to transform.

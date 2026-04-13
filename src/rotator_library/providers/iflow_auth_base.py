@@ -44,8 +44,6 @@ IFLOW_CLIENT_SECRET = "4Z3YjXycVsQvyGF1etiNlIBB4RsqSDtW"
 CALLBACK_PORT = 11451
 
 
-
-
 def get_callback_port() -> int:
     """
     Get the OAuth callback port, checking environment variable first.
@@ -181,14 +179,15 @@ class IFlowAuthBase(GoogleOAuthBase):
     Implements authorization code flow with local callback server.
     """
 
-    # Class attributes required by GoogleOAuthBase
     CLIENT_ID = IFLOW_CLIENT_ID
     CLIENT_SECRET = IFLOW_CLIENT_SECRET
     OAUTH_SCOPES = ["read", "write"]
     ENV_PREFIX = "IFLOW"
+    TOKEN_URI = IFLOW_OAUTH_TOKEN_ENDPOINT
     REFRESH_EXPIRY_BUFFER_SECONDS = 24 * 60 * 60
     _cache_default_ttl: float = 90000.0  # 25hr: aligns with 24hr buffer + 1hr token lifetime
     BUFFER_ON_FAILURE: ClassVar[bool] = False
+    _primary_token_key: str = "api_key"  # iFlow uses api_key for auth, not access_token
 
     def __init__(self):
         super().__init__()
@@ -197,26 +196,7 @@ class IFlowAuthBase(GoogleOAuthBase):
     def _load_from_env(
         self, credential_index: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-        """
-        Load OAuth credentials from environment variables for stateless deployments.
-
-        Supports two formats:
-        1. Legacy (credential_index="0" or None): IFLOW_ACCESS_TOKEN
-        2. Numbered (credential_index="1", "2", etc.): IFLOW_1_ACCESS_TOKEN, etc.
-
-        Expected environment variables (for numbered format with index N):
-        - IFLOW_{N}_ACCESS_TOKEN (required)
-        - IFLOW_{N}_REFRESH_TOKEN (required)
-        - IFLOW_{N}_API_KEY (required - critical for iFlow!)
-        - IFLOW_{N}_EXPIRY_DATE (optional, defaults to empty string)
-        - IFLOW_{N}_EMAIL (optional, defaults to "env-user-{N}")
-        - IFLOW_{N}_TOKEN_TYPE (optional, defaults to "Bearer")
-        - IFLOW_{N}_SCOPE (optional, defaults to "read write")
-
-        Returns:
-            Dict with credential structure if env vars present, None otherwise
-        """
-        # Determine the env var prefix based on credential index
+        # Use parent's generic implementation as base, then add iFlow-specific fields
         if credential_index and credential_index != "0":
             prefix = f"IFLOW_{credential_index}"
             default_email = f"env-user-{credential_index}"
@@ -236,13 +216,12 @@ class IFlowAuthBase(GoogleOAuthBase):
             f"Loading iFlow credentials from environment variables (prefix: {prefix})"
         )
 
-        # Parse expiry_date as string (ISO 8601 format)
         expiry_str = os.getenv(f"{prefix}_EXPIRY_DATE", "")
 
         creds = {
             "access_token": access_token,
             "refresh_token": refresh_token,
-            "api_key": api_key,  # Critical for iFlow!
+            "api_key": api_key,
             "expiry_date": expiry_str,
             "email": os.getenv(f"{prefix}_EMAIL", default_email),
             "token_type": os.getenv(f"{prefix}_TOKEN_TYPE", "Bearer"),
@@ -257,57 +236,8 @@ class IFlowAuthBase(GoogleOAuthBase):
 
         return creds
 
-    async def _read_creds_from_file(self, path: str) -> Dict[str, Any]:
-        """Reads credentials from file and populates the cache. No locking."""
-        try:
-            lib_logger.debug(f"Reading iFlow credentials from file: {path}")
-            with open(path, "r") as f:
-                creds = json_loads(f.read())
-            self._credentials_cache[path] = creds
-            return creds
-        except FileNotFoundError:
-            raise IOError(f"iFlow OAuth credential file not found at '{path}'")
-        except Exception as e:
-            raise IOError(f"Failed to load iFlow OAuth credentials from '{path}': {e}")
-
-    async def _load_credentials(self, path: str) -> Dict[str, Any]:
-        """Loads credentials from cache, environment variables, or file."""
-        if path in self._credentials_cache:
-            return self._credentials_cache[path]
-
-        async with self._get_lock(path):
-            # Re-check cache after acquiring lock
-            if path in self._credentials_cache:
-                return self._credentials_cache[path]
-
-            # Check if this is a virtual env:// path
-            credential_index = self._parse_env_credential_path(path)
-            if credential_index is not None:
-                env_creds = self._load_from_env(credential_index)
-                if env_creds:
-                    lib_logger.info(
-                        f"Using iFlow credentials from environment variables (index: {credential_index})"
-                    )
-                    self._credentials_cache[path] = env_creds
-                    return env_creds
-                else:
-                    raise IOError(
-                        f"Environment variables for iFlow credential index {credential_index} not found"
-                    )
-
-            # Try file-based loading first (preferred for explicit file paths)
-            try:
-                return await self._read_creds_from_file(path)
-            except IOError:
-                # File not found - fall back to legacy env vars for backwards compatibility
-                env_creds = self._load_from_env()
-                if env_creds:
-                    lib_logger.info(
-                        f"File '{path}' not found, using iFlow credentials from environment variables"
-                    )
-                    self._credentials_cache[path] = env_creds
-                    return env_creds
-                raise  # Re-raise the original file not found error
+    # _read_creds_from_file: removed — inherited from GoogleOAuthBase._load_credentials
+    # _load_credentials: removed — inherited from GoogleOAuthBase (calls self._load_from_env)
 
     def _is_token_expired(self, creds: Dict[str, Any]) -> bool:
         """Checks if the token is expired (with buffer for proactive refresh).
@@ -317,7 +247,6 @@ class IFlowAuthBase(GoogleOAuthBase):
         token_expiry strings or numeric milliseconds. The parent's logic would
         attempt string division (/ 1000) and crash on this format.
         """
-        # Try to parse expiry_date as ISO 8601 string
         expiry_str = creds.get("expiry_date")
         if not expiry_str:
             return True
@@ -329,7 +258,6 @@ class IFlowAuthBase(GoogleOAuthBase):
                 expiry_timestamp = expiry_dt.timestamp()
                 creds["_parsed_expiry"] = expiry_timestamp
             except (ValueError, AttributeError):
-                # Fallback: treat as numeric timestamp
                 try:
                     expiry_timestamp = float(expiry_str)
                 except (ValueError, TypeError):
@@ -403,7 +331,6 @@ class IFlowAuthBase(GoogleOAuthBase):
         Exchanges authorization code for access and refresh tokens.
         Uses Basic Auth with client credentials.
         """
-        # Create Basic Auth header
         auth_string = f"{IFLOW_CLIENT_ID}:{IFLOW_CLIENT_SECRET}"
         basic_auth = base64.b64encode(auth_string.encode()).decode()
 
@@ -477,9 +404,12 @@ class IFlowAuthBase(GoogleOAuthBase):
 
             # [ROTATING TOKEN FIX] Always read fresh from disk before refresh.
             # iFlow may use rotating refresh tokens - each refresh could invalidate the previous token.
-            # If we use a stale cached token, refresh will fail.
-            # Reading fresh from disk ensures we have the latest token.
-            await self._read_creds_from_file(path)
+            if path in self._credentials_cache:
+                try:
+                    creds_raw = await asyncio.to_thread(Path(path).read_text, encoding="utf-8")
+                    self._credentials_cache[path] = json_loads(creds_raw)
+                except FileNotFoundError:
+                    pass
             creds_from_file = self._credentials_cache[path]
 
             lib_logger.debug(f"Refreshing iFlow OAuth token for '{Path(path).name}'...")
@@ -528,7 +458,6 @@ class IFlowAuthBase(GoogleOAuthBase):
                         lib_logger.debug(
                             f"iFlow refresh response wrapped in 'data' key, extracting..."
                         )
-                        # Check for error in wrapped response
                         if not new_token_data.get("success", True):
                             error_msg = new_token_data.get(
                                 "message", "Unknown error"
@@ -549,11 +478,8 @@ class IFlowAuthBase(GoogleOAuthBase):
                         f"[REFRESH HTTP ERROR] HTTP {status_code} for '{Path(path).name}': {error_body}"
                     )
 
-                    # [STATUS CODE HANDLING]
                     # [INVALID GRANT HANDLING] Handle 400/401/403 by raising
-                    # Queue for re-auth in background so credential gets fixed automatically
                     if status_code == 400:
-                        # Check if this is an invalid refresh token error
                         try:
                             error_data = e.response.json()
                             error_type = error_data.get("error", "")
@@ -572,20 +498,16 @@ class IFlowAuthBase(GoogleOAuthBase):
                                 f"Credential '{Path(path).name}' needs re-auth (HTTP 400: {error_desc}). "
                                 f"Queued for re-authentication, rotating to next credential."
                             )
-                            # Queue for re-auth in background (non-blocking, fire-and-forget)
-                            # This ensures credential gets fixed even if caller doesn't handle it
                             asyncio.create_task(
                                 self._queue_refresh(
                                     path, force=True, needs_reauth=True
                                 )
                             )
-                            # Raise rotatable error instead of raw HTTPStatusError
                             raise CredentialNeedsReauthError(
                                 credential_path=path,
                                 message=f"Refresh token invalid for '{Path(path).name}'. Re-auth queued.",
                             )
                         else:
-                            # Other 400 error - raise it
                             raise
 
                     elif status_code in (401, 403):
@@ -593,11 +515,9 @@ class IFlowAuthBase(GoogleOAuthBase):
                             f"Credential '{Path(path).name}' needs re-auth (HTTP {status_code}). "
                             f"Queued for re-authentication, rotating to next credential."
                         )
-                        # Queue for re-auth in background (non-blocking, fire-and-forget)
                         asyncio.create_task(
                             self._queue_refresh(path, force=True, needs_reauth=True)
                         )
-                        # Raise rotatable error instead of raw HTTPStatusError
                         raise CredentialNeedsReauthError(
                             credential_path=path,
                             message=f"Token invalid for '{Path(path).name}' (HTTP {status_code}). Re-auth queued.",
@@ -652,7 +572,6 @@ class IFlowAuthBase(GoogleOAuthBase):
             # Update tokens
             access_token = new_token_data.get("access_token")
             if not access_token:
-                # Log response keys for debugging
                 response_keys = (
                     list(new_token_data.keys())
                     if isinstance(new_token_data, dict)
@@ -721,8 +640,6 @@ class IFlowAuthBase(GoogleOAuthBase):
 
             # Save credentials - MUST succeed for rotating token providers
             if not await self._save_credentials(path, creds_from_file):
-                # CRITICAL: If we can't persist the new token, the old token may be
-                # invalidated. This is a critical failure - raise so retry logic kicks in.
                 raise IOError(
                     f"Failed to persist refreshed credentials for '{Path(path).name}'. "
                     f"Disk write failed - refresh will be retried."
@@ -856,8 +773,6 @@ class IFlowAuthBase(GoogleOAuthBase):
                 "[bold green]Waiting for authorization in the browser...[/bold green]",
                 spinner="dots",
             ):
-                # Note: The 300s timeout here is handled by the ReauthCoordinator
-                # We use a slightly longer internal timeout to let the coordinator handle it
                 code = await callback_server.wait_for_callback(timeout=310.0)
 
             lib_logger.info("Received authorization code, exchanging for tokens...")
@@ -900,65 +815,14 @@ class IFlowAuthBase(GoogleOAuthBase):
         finally:
             await callback_server.stop()
 
-    async def get_auth_header(self, credential_path: str) -> Dict[str, str]:
-        """
-        Returns auth header with API key (NOT OAuth access_token).
-        CRITICAL: iFlow API requests use the api_key, not the OAuth tokens.
-        Includes graceful degradation if refresh fails.
-        """
-        try:
-            creds = await self._load_credentials(credential_path)
-            if self._is_token_expired(creds):
-                try:
-                    creds = await self._refresh_token(credential_path, creds)
-                    self._staleness_counter.pop(credential_path, None)
-                except Exception as e:
-                    cached = self._credentials_cache.get(credential_path)
-                    if cached and cached.get("api_key"):
-                        stale_count = self._staleness_counter.get(credential_path, 0)
-                        if stale_count < 1:
-                            self._staleness_counter[credential_path] = stale_count + 1
-                            lib_logger.warning(
-                                f"Token refresh failed for {Path(credential_path).name}: {e}. "
-                                "Using cached api_key (token may be expired)."
-                            )
-                            creds = cached
-                        else:
-                            lib_logger.error(
-                                f"Token refresh failed for {Path(credential_path).name}: {e}. "
-                                "Stale token served too many times, raising."
-                            )
-                            raise
-                    else:
-                        raise
-
-            api_key = creds.get("api_key")
-            if not api_key:
-                raise ValueError("Missing api_key in iFlow credentials")
-
-            return {"Authorization": f"Bearer {api_key}"}
-        except Exception as e:
-            cached = self._credentials_cache.get(credential_path)
-            if cached and cached.get("api_key"):
-                stale_count = self._staleness_counter.get(credential_path, 0)
-                if stale_count < 1:
-                    self._staleness_counter[credential_path] = stale_count + 1
-                    lib_logger.error(
-                        f"Credential load failed for {credential_path}: {e}. "
-                        "Using stale cached api_key as last resort."
-                    )
-                    return {"Authorization": f"Bearer {cached['api_key']}"}
-                else:
-                    lib_logger.error(
-                        f"Credential load failed for {credential_path}: {e}. "
-                        "Stale token served too many times, raising."
-                    )
-            raise
+    # get_auth_header: inherited from GoogleOAuthBase (uses _primary_token_key="api_key")
 
     async def get_user_info(
         self, creds_or_path: Union[Dict[str, Any], str]
     ) -> Dict[str, Any]:
-        """Retrieves user info from the _proxy_metadata in the credential file."""
+        """Retrieves user info from the _proxy_metadata in the credential file.
+        Overrides parent to avoid Google UserInfo API call (iFlow uses metadata only).
+        """
         try:
             path = creds_or_path if isinstance(creds_or_path, str) else None
             creds = (
@@ -979,22 +843,13 @@ class IFlowAuthBase(GoogleOAuthBase):
 
             # Update timestamp in cache only (not disk) to avoid overwriting
             # potentially newer tokens that were saved by another process/refresh.
-            # The timestamp is non-critical metadata - losing it on restart is fine.
             if path and "_proxy_metadata" in creds:
                 creds["_proxy_metadata"]["last_check_timestamp"] = time.time()
-                # Note: We intentionally don't save to disk here because:
-                # 1. The cache may have older tokens than disk (if external refresh occurred)
-                # 2. Saving would overwrite the newer disk tokens with stale cached ones
-                # 3. The timestamp is non-critical and will be updated on next refresh
 
             return {"email": email}
         except Exception as e:
             lib_logger.error(f"Failed to get iFlow user info from credentials: {e}")
             return {"email": None}
-
-    # =========================================================================
-    # CREDENTIAL MANAGEMENT METHODS
-    # =========================================================================
 
     def build_env_lines(self, creds: Dict[str, Any], cred_number: int) -> List[str]:
         """Generate .env file lines for an iFlow credential."""

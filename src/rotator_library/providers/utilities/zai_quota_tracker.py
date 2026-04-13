@@ -19,16 +19,14 @@ Required from provider:
     - self._get_api_key(credential_path) -> str
 """
 
-import asyncio
 import logging
 import time
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import httpx
 
-from ...error_handler import mask_credential
-from ...http_client_pool import get_http_pool
+from .simple_quota_tracker import SimpleQuotaTrackerBase
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -46,17 +44,11 @@ ZAI_UNIT_HOURLY_TIME = 5   # Hourly time-based request count
 ZAI_UNIT_DAILY_TOKENS = 6  # Daily token usage percentage
 
 
-class ZaiQuotaTracker:
+class ZaiQuotaTracker(SimpleQuotaTrackerBase):
     """
     Mixin class providing quota tracking functionality for ZAI provider.
 
-    Usage:
-        class ZaiProvider(QuotaRefreshMixin, ZaiQuotaTracker, ProviderInterface):
-            ...
-
-    The provider class must initialize these instance attributes in __init__:
-        self._quota_cache: Dict[str, Dict[str, Any]] = {}
-        self._quota_refresh_interval: int = 300
+    Inherits shared cache/pool boilerplate from SimpleQuotaTrackerBase.
     """
 
     _quota_cache: Dict[str, Dict[str, Any]]
@@ -90,21 +82,10 @@ class ZaiQuotaTracker:
             }
         """
         try:
-            headers = {
-                "accept": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            }
-
-            if client is not None:
-                response = await client.get(
-                    ZAI_QUOTA_API_URL, headers=headers, timeout=30
-                )
-            else:
-                pool = await get_http_pool()
-                new_client = await pool.get_client_async()
-                response = await new_client.get(
-                    ZAI_QUOTA_API_URL, headers=headers, timeout=30
-                )
+            headers = self._make_bearer_header(api_key)
+            response = await self._fetch_via_pool(
+                ZAI_QUOTA_API_URL, headers, client
+            )
             response.raise_for_status()
             data = response.json()
 

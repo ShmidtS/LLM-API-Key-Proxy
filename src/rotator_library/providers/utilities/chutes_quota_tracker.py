@@ -18,42 +18,28 @@ Required from provider:
     - self._get_api_key(credential_path) -> str
 """
 
-import asyncio
 import logging
 import time
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import httpx
 
-from ...http_client_pool import get_http_pool
+from .simple_quota_tracker import SimpleQuotaTrackerBase
 
-# Use the shared rotator_library logger
 lib_logger = logging.getLogger("rotator_library")
 
 # Chutes API endpoint
 CHUTES_QUOTA_API_URL = "https://api.chutes.ai/users/me/quota_usage/me"
 
 
-class ChutesQuotaTracker:
+class ChutesQuotaTracker(SimpleQuotaTrackerBase):
     """
     Mixin class providing quota tracking functionality for Chutes provider.
 
-    This mixin adds the following capabilities:
-    - Fetch quota usage from the Chutes API
-    - Track daily credit limits
-    - Determine subscription tier from quota value
-
-    Usage:
-        class ChutesProvider(ChutesQuotaTracker, ProviderInterface):
-            ...
-
-    The provider class must initialize these instance attributes in __init__:
-        self._quota_cache: Dict[str, Dict[str, Any]] = {}
-        self._quota_refresh_interval: int = 300  # 5 min default
+    Inherits shared cache/pool boilerplate from SimpleQuotaTrackerBase.
     """
 
-    # Type hints for attributes from provider
     _quota_cache: Dict[str, Dict[str, Any]]
     _quota_refresh_interval: int
 
@@ -90,21 +76,10 @@ class ChutesQuotaTracker:
             }
         """
         try:
-            headers = {
-                "accept": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            }
-
-            if client is not None:
-                response = await client.get(
-                    CHUTES_QUOTA_API_URL, headers=headers, timeout=30
-                )
-            else:
-                pool = await get_http_pool()
-                new_client = await pool.get_client_async()
-                response = await new_client.get(
-                    CHUTES_QUOTA_API_URL, headers=headers, timeout=30
-                )
+            headers = self._make_bearer_header(api_key)
+            response = await self._fetch_via_pool(
+                CHUTES_QUOTA_API_URL, headers, client
+            )
             response.raise_for_status()
             data = response.json()
 

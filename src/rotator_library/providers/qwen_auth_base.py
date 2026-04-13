@@ -41,11 +41,11 @@ from .google_oauth_base import GoogleOAuthBase
 
 
 class QwenAuthBase(GoogleOAuthBase):
-    # Class attributes required by GoogleOAuthBase
     CLIENT_ID = "f0304373b74a44d2b584a3fb70ca9e56"
     CLIENT_SECRET = ""  # Qwen uses public client (no secret)
     OAUTH_SCOPES = ["openid", "profile", "email", "model.completion"]
     ENV_PREFIX = "QWEN_CODE"
+    TOKEN_URI = TOKEN_ENDPOINT
     REFRESH_EXPIRY_BUFFER_SECONDS = 3 * 60 * 60  # 3 hours buffer
     _cache_default_ttl: float = 14400.0  # 4hr: aligns with 3hr buffer + 1hr token lifetime
     BUFFER_ON_FAILURE: ClassVar[bool] = False
@@ -56,120 +56,30 @@ class QwenAuthBase(GoogleOAuthBase):
     def _load_from_env(
         self, credential_index: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-        """
-        Load OAuth credentials from environment variables for stateless deployments.
-
-        Supports two formats:
-        1. Legacy (credential_index="0" or None): QWEN_CODE_ACCESS_TOKEN
-        2. Numbered (credential_index="1", "2", etc.): QWEN_CODE_1_ACCESS_TOKEN, etc.
-
-        Expected environment variables (for numbered format with index N):
-        - QWEN_CODE_{N}_ACCESS_TOKEN (required)
-        - QWEN_CODE_{N}_REFRESH_TOKEN (required)
-        - QWEN_CODE_{N}_EXPIRY_DATE (optional, defaults to 0)
-        - QWEN_CODE_{N}_RESOURCE_URL (optional, defaults to https://portal.qwen.ai/v1)
-        - QWEN_CODE_{N}_EMAIL (optional, defaults to "env-user-{N}")
-
-        Returns:
-            Dict with credential structure if env vars present, None otherwise
-        """
-        # Determine the env var prefix based on credential index
-        if credential_index and credential_index != "0":
-            prefix = f"QWEN_CODE_{credential_index}"
-            default_email = f"env-user-{credential_index}"
-        else:
-            prefix = "QWEN_CODE"
-            default_email = "env-user"
-
-        access_token = os.getenv(f"{prefix}_ACCESS_TOKEN")
-        refresh_token = os.getenv(f"{prefix}_REFRESH_TOKEN")
-
-        # Both access and refresh tokens are required
-        if not (access_token and refresh_token):
+        # Use parent's generic implementation, then add Qwen-specific fields
+        creds = super()._load_from_env(credential_index)
+        if creds is None:
             return None
 
-        lib_logger.debug(
-            f"Loading Qwen Code credentials from environment variables (prefix: {prefix})"
+        if credential_index and credential_index != "0":
+            prefix = f"QWEN_CODE_{credential_index}"
+        else:
+            prefix = "QWEN_CODE"
+
+        # Add Qwen-specific fields not present in generic Google OAuth creds
+        creds["resource_url"] = os.getenv(
+            f"{prefix}_RESOURCE_URL", "https://portal.qwen.ai/v1"
         )
-
-        # Parse expiry_date as float, default to 0 if not present
-        expiry_str = os.getenv(f"{prefix}_EXPIRY_DATE", "0")
-        try:
-            expiry_date = float(expiry_str)
-        except ValueError:
-            lib_logger.warning(
-                f"Invalid {prefix}_EXPIRY_DATE value: {expiry_str}, using 0"
-            )
-            expiry_date = 0
-
-        creds = {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "expiry_date": expiry_date,
-            "resource_url": os.getenv(
-                f"{prefix}_RESOURCE_URL", "https://portal.qwen.ai/v1"
-            ),
-            "_proxy_metadata": {
-                "email": os.getenv(f"{prefix}_EMAIL", default_email),
-                "last_check_timestamp": time.time(),
-                "loaded_from_env": True,
-                "env_credential_index": credential_index or "0",
-            },
-        }
+        # Remove Google-specific fields that don't apply to Qwen
+        creds.pop("client_id", None)
+        creds.pop("client_secret", None)
+        creds.pop("token_uri", None)
+        creds.pop("universe_domain", None)
 
         return creds
 
-    async def _read_creds_from_file(self, path: str) -> Dict[str, Any]:
-        """Reads credentials from file and populates the cache. No locking."""
-        try:
-            lib_logger.debug(f"Reading Qwen credentials from file: {path}")
-            with open(path, "r") as f:
-                creds = json_loads(f.read())
-            self._credentials_cache[path] = creds
-            return creds
-        except FileNotFoundError:
-            raise IOError(f"Qwen OAuth credential file not found at '{path}'")
-        except Exception as e:
-            raise IOError(f"Failed to load Qwen OAuth credentials from '{path}': {e}")
-
-    async def _load_credentials(self, path: str) -> Dict[str, Any]:
-        """Loads credentials from cache, environment variables, or file."""
-        if path in self._credentials_cache:
-            return self._credentials_cache[path]
-
-        async with self._get_lock(path):
-            # Re-check cache after acquiring lock
-            if path in self._credentials_cache:
-                return self._credentials_cache[path]
-
-            # Check if this is a virtual env:// path
-            credential_index = self._parse_env_credential_path(path)
-            if credential_index is not None:
-                env_creds = self._load_from_env(credential_index)
-                if env_creds:
-                    lib_logger.info(
-                        f"Using Qwen Code credentials from environment variables (index: {credential_index})"
-                    )
-                    self._credentials_cache[path] = env_creds
-                    return env_creds
-                else:
-                    raise IOError(
-                        f"Environment variables for Qwen Code credential index {credential_index} not found"
-                    )
-
-            # Try file-based loading first (preferred for explicit file paths)
-            try:
-                return await self._read_creds_from_file(path)
-            except IOError:
-                # File not found - fall back to legacy env vars for backwards compatibility
-                env_creds = self._load_from_env()
-                if env_creds:
-                    lib_logger.info(
-                        f"File '{path}' not found, using Qwen Code credentials from environment variables"
-                    )
-                    self._credentials_cache[path] = env_creds
-                    return env_creds
-                raise  # Re-raise the original file not found error
+    # _read_creds_from_file: removed — inherited from GoogleOAuthBase._load_credentials
+    # _load_credentials: removed — inherited from GoogleOAuthBase (calls self._load_from_env)
 
     async def _refresh_token(self, path: str, creds: Optional[Dict[str, Any]] = None, force: bool = False) -> Dict[str, Any]:
         async with self._get_lock(path):
@@ -179,9 +89,12 @@ class QwenAuthBase(GoogleOAuthBase):
 
             # [ROTATING TOKEN FIX] Always read fresh from disk before refresh.
             # Qwen uses rotating refresh tokens - each refresh invalidates the previous token.
-            # If we use a stale cached token, refresh will fail with HTTP 400.
-            # Reading fresh from disk ensures we have the latest token.
-            await self._read_creds_from_file(path)
+            if path in self._credentials_cache:
+                try:
+                    creds_raw = await asyncio.to_thread(Path(path).read_text, encoding="utf-8")
+                    self._credentials_cache[path] = json_loads(creds_raw)
+                except FileNotFoundError:
+                    pass
             creds_from_file = self._credentials_cache[path]
 
             lib_logger.debug(f"Refreshing Qwen OAuth token for '{Path(path).name}'...")
@@ -601,57 +514,14 @@ class QwenAuthBase(GoogleOAuthBase):
         )
         return creds
 
-    async def get_auth_header(self, credential_path: str) -> Dict[str, str]:
-        """Get auth header with graceful degradation if refresh fails."""
-        try:
-            creds = await self._load_credentials(credential_path)
-            if self._is_token_expired(creds):
-                try:
-                    creds = await self._refresh_token(credential_path, creds)
-                    self._staleness_counter.pop(credential_path, None)
-                except Exception as e:
-                    cached = self._credentials_cache.get(credential_path)
-                    if cached and cached.get("access_token"):
-                        stale_count = self._staleness_counter.get(credential_path, 0)
-                        if stale_count < 1:
-                            self._staleness_counter[credential_path] = stale_count + 1
-                            lib_logger.warning(
-                                f"Token refresh failed for {Path(credential_path).name}: {e}. "
-                                "Using cached token (may be expired)."
-                            )
-                            creds = cached
-                        else:
-                            lib_logger.error(
-                                f"Token refresh failed for {Path(credential_path).name}: {e}. "
-                                "Stale token served too many times, raising."
-                            )
-                            raise
-                    else:
-                        raise
-            return {"Authorization": f"Bearer {creds['access_token']}"}
-        except Exception as e:
-            cached = self._credentials_cache.get(credential_path)
-            if cached and cached.get("access_token"):
-                stale_count = self._staleness_counter.get(credential_path, 0)
-                if stale_count < 1:
-                    self._staleness_counter[credential_path] = stale_count + 1
-                    lib_logger.error(
-                        f"Credential load failed for {credential_path}: {e}. "
-                        "Using stale cached token as last resort."
-                    )
-                    return {"Authorization": f"Bearer {cached['access_token']}"}
-                else:
-                    lib_logger.error(
-                        f"Credential load failed for {credential_path}: {e}. "
-                        "Stale token served too many times, raising."
-                    )
-            raise
+    # get_auth_header: inherited from GoogleOAuthBase (uses _primary_token_key="access_token" by default)
 
     async def get_user_info(
         self, creds_or_path: Union[Dict[str, Any], str]
     ) -> Dict[str, Any]:
         """
         Retrieves user info from the _proxy_metadata in the credential file.
+        Overrides parent to avoid Google UserInfo API call (Qwen uses metadata only).
         """
         try:
             path = creds_or_path if isinstance(creds_or_path, str) else None
@@ -679,10 +549,6 @@ class QwenAuthBase(GoogleOAuthBase):
             # The timestamp is non-critical metadata - losing it on restart is fine.
             if path and "_proxy_metadata" in creds:
                 creds["_proxy_metadata"]["last_check_timestamp"] = time.time()
-                # Note: We intentionally don't save to disk here because:
-                # 1. The cache may have older tokens than disk (if external refresh occurred)
-                # 2. Saving would overwrite the newer disk tokens with stale cached ones
-                # 3. The timestamp is non-critical and will be updated on next refresh
 
             return {"email": email}
         except Exception as e:
@@ -710,4 +576,3 @@ class QwenAuthBase(GoogleOAuthBase):
         ]
 
         return lines
-

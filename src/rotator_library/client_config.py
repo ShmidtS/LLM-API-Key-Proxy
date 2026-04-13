@@ -22,8 +22,8 @@ lib_logger = logging.getLogger("rotator_library")
 
 
 def _get_env_cache() -> dict:
-    """Lazy access to the provider env cache (avoids circular import at module level)."""
-    from .client import _provider_env_cache
+    """Access the provider env cache from env_cache module."""
+    from .env_cache import _provider_env_cache
     return _provider_env_cache
 
 

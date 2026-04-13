@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 
-from rotator_library.utils.json_utils import json_deep_copy, json_loads
+from ...utils.json_utils import json_deep_copy, json_loads
 import logging
 from typing import Any, Dict, List, Optional
 

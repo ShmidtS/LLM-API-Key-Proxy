@@ -158,15 +158,15 @@ COOLDOWN_RATE_LIMIT_DEFAULT: int = 10
 # Connection timeout in seconds
 # Reduced from 30s to 10s for faster fail on unreachable hosts
 # Override: HTTP_CONNECT_TIMEOUT=<seconds>
-HTTP_CONNECT_TIMEOUT: int = int(os.getenv("HTTP_CONNECT_TIMEOUT", "10"))
+HTTP_CONNECT_TIMEOUT: int = env_int("HTTP_CONNECT_TIMEOUT", 10)
 
 # Read timeout in seconds (time to receive response)
 # Override: HTTP_READ_TIMEOUT=<seconds>
-HTTP_READ_TIMEOUT: int = int(os.getenv("HTTP_READ_TIMEOUT", "120"))
+HTTP_READ_TIMEOUT: int = env_int("HTTP_READ_TIMEOUT", 120)
 
 # Write timeout in seconds (time to send request body for streaming)
 # Override: HTTP_WRITE_TIMEOUT=<seconds>
-HTTP_WRITE_TIMEOUT: int = int(os.getenv("HTTP_WRITE_TIMEOUT", "300"))
+HTTP_WRITE_TIMEOUT: int = env_int("HTTP_WRITE_TIMEOUT", 300)
 
 # =============================================================================
 # OAUTH QUEUE TIMEOUT DEFAULTS
@@ -175,11 +175,11 @@ HTTP_WRITE_TIMEOUT: int = int(os.getenv("HTTP_WRITE_TIMEOUT", "300"))
 
 # OAuth queue wait timeout in seconds
 # Override: OAUTH_QUEUE_TIMEOUT=<seconds>
-OAUTH_QUEUE_TIMEOUT: int = int(os.getenv("OAUTH_QUEUE_TIMEOUT", "120"))
+OAUTH_QUEUE_TIMEOUT: int = env_int("OAUTH_QUEUE_TIMEOUT", 120)
 
 # OAuth authentication timeout in seconds
 # Override: OAUTH_AUTH_TIMEOUT=<seconds>
-OAUTH_AUTH_TIMEOUT: int = int(os.getenv("OAUTH_AUTH_TIMEOUT", "90"))
+OAUTH_AUTH_TIMEOUT: int = env_int("OAUTH_AUTH_TIMEOUT", 90)
 
 # =============================================================================
 # RETRY CONFIGURATION DEFAULTS
@@ -188,16 +188,16 @@ OAUTH_AUTH_TIMEOUT: int = int(os.getenv("OAUTH_AUTH_TIMEOUT", "90"))
 
 # Base delay for exponential backoff in seconds
 # Override: RETRY_BASE_DELAY=<seconds>
-RETRY_BASE_DELAY: float = float(os.getenv("RETRY_BASE_DELAY", "1.0"))
+RETRY_BASE_DELAY: float = env_float("RETRY_BASE_DELAY", 1.0)
 
 # Maximum delay cap for exponential backoff in seconds
 # Override: RETRY_MAX_DELAY=<seconds>
-RETRY_MAX_DELAY: float = float(os.getenv("RETRY_MAX_DELAY", "60.0"))
+RETRY_MAX_DELAY: float = env_float("RETRY_MAX_DELAY", 60.0)
 
 # Jitter factor for retry delay randomization (0.0-1.0)
 # Helps prevent thundering herd on coordinated retries
 # Override: RETRY_JITTER_FACTOR=<factor>
-RETRY_JITTER_FACTOR: float = float(os.getenv("RETRY_JITTER_FACTOR", "0.1"))
+RETRY_JITTER_FACTOR: float = env_float("RETRY_JITTER_FACTOR", 0.1)
 
 # =============================================================================
 # DNS CONFIGURATION DEFAULTS
@@ -206,15 +206,15 @@ RETRY_JITTER_FACTOR: float = float(os.getenv("RETRY_JITTER_FACTOR", "0.1"))
 
 # DNS cache TTL in seconds
 # Override: DNS_CACHE_TTL=<seconds>
-DNS_CACHE_TTL: int = int(os.getenv("DNS_CACHE_TTL", "300"))
+DNS_CACHE_TTL: int = env_int("DNS_CACHE_TTL", 300)
 
 # DNS query timeout in seconds
 # Override: DNS_QUERY_TIMEOUT=<seconds>
-DNS_QUERY_TIMEOUT: int = int(os.getenv("DNS_QUERY_TIMEOUT", "10"))
+DNS_QUERY_TIMEOUT: int = env_int("DNS_QUERY_TIMEOUT", 10)
 
 # DNS over HTTPS (DoH) query timeout in seconds
 # Override: HTTP_DOH_TIMEOUT=<seconds>
-HTTP_DOH_TIMEOUT: int = int(os.getenv("HTTP_DOH_TIMEOUT", "5"))
+HTTP_DOH_TIMEOUT: int = env_int("HTTP_DOH_TIMEOUT", 5)
 
 # =============================================================================
 # HTTP COMPRESSION DEFAULTS
@@ -223,11 +223,11 @@ HTTP_DOH_TIMEOUT: int = int(os.getenv("HTTP_DOH_TIMEOUT", "5"))
 
 # Minimum request body size in bytes to trigger gzip compression
 # Override: HTTP_COMPRESS_MIN_SIZE=<bytes>
-HTTP_COMPRESS_MIN_SIZE: int = int(os.getenv("HTTP_COMPRESS_MIN_SIZE", "10240"))
+HTTP_COMPRESS_MIN_SIZE: int = env_int("HTTP_COMPRESS_MIN_SIZE", 10240)
 
 # Enable gzip compression for outgoing requests
 # Override: HTTP_COMPRESS_REQUESTS=true/false
-HTTP_COMPRESS_REQUESTS: bool = os.getenv("HTTP_COMPRESS_REQUESTS", "true").lower() == "true"
+HTTP_COMPRESS_REQUESTS: bool = env_bool("HTTP_COMPRESS_REQUESTS", True)
 
 # =============================================================================
 # OAUTH USER FLOW TIMEOUT DEFAULTS
@@ -235,11 +235,11 @@ HTTP_COMPRESS_REQUESTS: bool = os.getenv("HTTP_COMPRESS_REQUESTS", "true").lower
 
 # OAuth user flow timeout in seconds (time for user to complete OAuth)
 # Override: OAUTH_USER_TIMEOUT=<seconds>
-OAUTH_USER_TIMEOUT: int = int(os.getenv("OAUTH_USER_TIMEOUT", "300"))
+OAUTH_USER_TIMEOUT: int = env_int("OAUTH_USER_TIMEOUT", 300)
 
 # OAuth callback wait timeout in seconds
 # Override: OAUTH_CALLBACK_TIMEOUT=<seconds>
-OAUTH_CALLBACK_TIMEOUT: int = int(os.getenv("OAUTH_CALLBACK_TIMEOUT", "310"))
+OAUTH_CALLBACK_TIMEOUT: int = env_int("OAUTH_CALLBACK_TIMEOUT", 310)
 
 # =============================================================================
 # UI DELAY DEFAULTS
@@ -247,11 +247,11 @@ OAUTH_CALLBACK_TIMEOUT: int = int(os.getenv("OAUTH_CALLBACK_TIMEOUT", "310"))
 
 # UI refresh delay in seconds (for TUI consistency)
 # Override: UI_REFRESH_DELAY=<seconds>
-UI_REFRESH_DELAY: float = float(os.getenv("UI_REFRESH_DELAY", "0.3"))
+UI_REFRESH_DELAY: float = env_float("UI_REFRESH_DELAY", 0.3)
 
 # UI brief pause delay in seconds
 # Override: UI_BRIEF_PAUSE=<seconds>
-UI_BRIEF_PAUSE: float = float(os.getenv("UI_BRIEF_PAUSE", "0.1"))
+UI_BRIEF_PAUSE: float = env_float("UI_BRIEF_PAUSE", 0.1)
 
 # =============================================================================
 # RETRY DELAY DEFAULTS
@@ -259,11 +259,11 @@ UI_BRIEF_PAUSE: float = float(os.getenv("UI_BRIEF_PAUSE", "0.1"))
 
 # Brief retry delay in seconds (for quick retries)
 # Override: RETRY_BRIEF_DELAY=<seconds>
-RETRY_BRIEF_DELAY: float = float(os.getenv("RETRY_BRIEF_DELAY", "1.0"))
+RETRY_BRIEF_DELAY: float = env_float("RETRY_BRIEF_DELAY", 1.0)
 
 # OAuth token refresh delay in seconds
 # Override: OAUTH_REFRESH_DELAY=<seconds>
-OAUTH_REFRESH_DELAY: float = float(os.getenv("OAUTH_REFRESH_DELAY", "2.0"))
+OAUTH_REFRESH_DELAY: float = env_float("OAUTH_REFRESH_DELAY", 2.0)
 
 # =============================================================================
 # CIRCUIT BREAKER DEFAULTS

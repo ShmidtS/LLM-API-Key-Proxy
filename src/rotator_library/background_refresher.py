@@ -45,6 +45,7 @@ class BackgroundRefresher:
         self._client = client
         self._task: Optional[asyncio.Task] = None
         self._provider_job_tasks: Dict[str, asyncio.Task] = {}  # provider -> task
+        self._usage_reset_task: Optional[asyncio.Task] = None
         self._initialized = False
         try:
             interval_str = os.getenv(
@@ -79,6 +80,15 @@ class BackgroundRefresher:
                 lib_logger.debug(f"Stopped background job for '{provider}'")
 
         self._provider_job_tasks.clear()
+
+        # Cancel usage reset task
+        if self._usage_reset_task and not self._usage_reset_task.done():
+            self._usage_reset_task.cancel()
+            try:
+                await self._usage_reset_task
+            except asyncio.CancelledError:
+                pass
+        self._usage_reset_task = None
 
         # Cancel main task
         if self._task:
@@ -268,6 +278,23 @@ class BackgroundRefresher:
             except Exception as e:
                 lib_logger.error(f"Error in {provider_name} {job_name}: {e}")
 
+    async def _run_usage_reset(self) -> None:
+        """Periodically check and reset daily/window usage stats.
+
+        Moved out of acquire_key hot path to avoid per-request overhead.
+        Runs every 60 seconds — resets are time-based, not request-based.
+        """
+        while True:
+            try:
+                await asyncio.sleep(60)
+                usage_manager = self._client.usage_manager
+                if usage_manager and usage_manager._initialized.is_set():
+                    await usage_manager._reset_daily_stats_if_needed()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                lib_logger.error(f"Error in usage reset background task: {e}")
+
     async def _run(self):
         """The main loop for OAuth token refresh."""
         # Initialize credentials (load persisted tiers) before starting
@@ -275,6 +302,9 @@ class BackgroundRefresher:
 
         # Start provider-specific background jobs with their own timers
         self._start_provider_background_jobs()
+
+        # Start periodic usage stats reset (moved out of acquire_key hot path)
+        self._usage_reset_task = asyncio.create_task(self._run_usage_reset())
 
         # Main OAuth refresh loop
         while True:

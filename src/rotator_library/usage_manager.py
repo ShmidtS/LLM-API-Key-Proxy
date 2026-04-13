@@ -2404,7 +2404,6 @@ class UsageManager:
             NoAvailableKeysError: If no key could be acquired within the deadline
         """
         await self._lazy_init()
-        await self._reset_daily_stats_if_needed()
         self._initialize_key_states(available_keys)
 
         # FAST PATH: Single credential case - skip complex logic

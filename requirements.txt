@@ -13,6 +13,7 @@ python-dotenv
 # See: https://github.com/BerriAI/litellm/issues/24512
 litellm<=1.82.6
 
+cachetools
 filelock
 httpx
 aiofiles

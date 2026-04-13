@@ -69,10 +69,7 @@ class CredentialSetupResult:
     credentials: Optional[Dict[str, Any]] = field(default=None, repr=False)
 
 
-from .base_token_manager import BaseTokenManager
-from .auth_queue_mixin import AuthQueueMixin
-from .oauth_mixin import OAuthMixin
-from .oauth_flow_mixin import OAuthFlowMixin
+from .oauth_base import BaseTokenManager, AuthQueueMixin, OAuthMixin, OAuthFlowMixin
 
 
 class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManager):
@@ -104,6 +101,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
     CALLBACK_PORT: int = DEFAULT_OAUTH_CALLBACK_PORT
     CALLBACK_PATH: str = DEFAULT_OAUTH_CALLBACK_PATH
     REFRESH_EXPIRY_BUFFER_SECONDS: int = DEFAULT_REFRESH_EXPIRY_BUFFER
+    _primary_token_key: str = "access_token"  # Key used for auth header and staleness checks
 
     # =========================================================================
     # PKCE (Proof Key for Code Exchange) SUPPORT
@@ -1003,18 +1001,22 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
         return new_creds
 
     async def get_auth_header(self, credential_path: str) -> Dict[str, str]:
-        """Get auth header with graceful degradation if refresh fails."""
+        """Get auth header with graceful degradation if refresh fails.
+
+        Uses _primary_token_key to determine which credential field holds
+        the bearer token. Default is 'access_token'; subclasses like iFlow
+        override to 'api_key'.
+        """
+        token_key = self._primary_token_key
         try:
             creds = await self._load_credentials(credential_path)
             if self._is_token_expired(creds):
                 try:
                     creds = await self._refresh_token(credential_path, creds)
-                    # Successful refresh: reset staleness counter
                     self._staleness_counter.pop(credential_path, None)
                 except Exception as e:
-                    # Check if we have a cached token that might still work
                     cached = self._credentials_cache.get(credential_path)
-                    if cached and cached.get("access_token"):
+                    if cached and cached.get(token_key):
                         stale_count = self._staleness_counter.get(credential_path, 0)
                         if stale_count < 1:
                             self._staleness_counter[credential_path] = stale_count + 1
@@ -1024,7 +1026,6 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                             )
                             creds = cached
                         else:
-                            # Too many stale serves, mark unavailable to prevent retry storm
                             self._staleness_counter.pop(credential_path, None)
                             self._unavailable_credentials[credential_path] = time.time()
                             lib_logger.error(
@@ -1034,11 +1035,10 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                             raise
                     else:
                         raise
-            return {"Authorization": f"Bearer {creds['access_token']}"}
+            return {"Authorization": f"Bearer {creds[token_key]}"}
         except Exception as e:
-            # Check if any cached credential exists as last resort
             cached = self._credentials_cache.get(credential_path)
-            if cached and cached.get("access_token"):
+            if cached and cached.get(token_key):
                 stale_count = self._staleness_counter.get(credential_path, 0)
                 if stale_count < 1:
                     self._staleness_counter[credential_path] = stale_count + 1
@@ -1046,9 +1046,8 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                         f"Credential load failed for {credential_path}: {e}. "
                         "Using stale cached token as last resort."
                     )
-                    return {"Authorization": f"Bearer {cached['access_token']}"}
+                    return {"Authorization": f"Bearer {cached[token_key]}"}
                 else:
-                    # Too many stale serves, mark unavailable to prevent retry storm
                     self._staleness_counter.pop(credential_path, None)
                     self._unavailable_credentials[credential_path] = time.time()
                     lib_logger.error(

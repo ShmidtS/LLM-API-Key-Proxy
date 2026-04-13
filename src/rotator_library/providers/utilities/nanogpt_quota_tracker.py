@@ -23,16 +23,15 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from ...http_client_pool import get_http_pool
+from .simple_quota_tracker import SimpleQuotaTrackerBase
 
-# Use the shared rotator_library logger
 lib_logger = logging.getLogger("rotator_library")
 
 # NanoGPT API base URL
 NANOGPT_API_BASE = "https://nano-gpt.com"
 
 
-class NanoGptQuotaTracker:
+class NanoGptQuotaTracker(SimpleQuotaTrackerBase):
     """
     Mixin class providing quota tracking functionality for NanoGPT provider.
 
@@ -94,22 +93,11 @@ class NanoGptQuotaTracker:
         """
         try:
             url = f"{NANOGPT_API_BASE}/api/subscription/v1/usage"
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Accept": "application/json",
-            }
+            headers = self._make_bearer_header(api_key)
 
-            # Use provided client or create a new one
-            if client is not None:
-                response = await client.get(url, headers=headers, timeout=30)
-                response.raise_for_status()
-                data = response.json()
-            else:
-                pool = await get_http_pool()
-                new_client = await pool.get_client_async()
-                response = await new_client.get(url, headers=headers, timeout=30)
-                response.raise_for_status()
-                data = response.json()
+            response = await self._fetch_via_pool(url, headers, client)
+            response.raise_for_status()
+            data = response.json()
 
             # Parse response
             daily = data.get("daily", {})

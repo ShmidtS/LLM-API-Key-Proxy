@@ -14,7 +14,7 @@ import logging
 import re
 from typing import Dict, Any, Optional, Tuple
 
-from rotator_library.utils.json_utils import json_dumps_str
+from .utils.json_utils import json_dumps_str
 
 from litellm.litellm_core_utils.token_counter import token_counter
 

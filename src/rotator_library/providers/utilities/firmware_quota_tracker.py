@@ -23,32 +23,19 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import httpx
-from ...http_client_pool import get_http_pool
 
-# Use the shared rotator_library logger
+from .simple_quota_tracker import SimpleQuotaTrackerBase
+
 lib_logger = logging.getLogger("rotator_library")
 
 
-class FirmwareQuotaTracker:
+class FirmwareQuotaTracker(SimpleQuotaTrackerBase):
     """
     Mixin class providing quota tracking functionality for Firmware.ai provider.
 
-    This mixin adds the following capabilities:
-    - Fetch quota usage from the Firmware.ai API
-    - Track 5-hour rolling window quota limits
-    - Parse ISO 8601 reset timestamps
-
-    Usage:
-        class FirmwareProvider(FirmwareQuotaTracker, ProviderInterface):
-            ...
-
-    The provider class must initialize these instance attributes in __init__:
-        self.api_base: str = "https://app.firmware.ai/api/v1"
-        self._quota_cache: Dict[str, Dict[str, Any]] = {}
-        self._quota_refresh_interval: int = 300  # 5 min default
+    Inherits shared cache/pool boilerplate from SimpleQuotaTrackerBase.
     """
 
-    # Type hints for attributes from provider
     api_base: str
     _quota_cache: Dict[str, Dict[str, Any]]
     _quota_refresh_interval: int
@@ -85,23 +72,11 @@ class FirmwareQuotaTracker:
             }
         """
         try:
-            headers = {
-                "accept": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            }
-
+            headers = self._make_bearer_header(api_key)
             quota_url = self._get_quota_url()
-
-            if client is not None:
-                response = await client.get(
-                    quota_url, headers=headers, timeout=30
-                )
-            else:
-                pool = await get_http_pool()
-                new_client = await pool.get_client_async()
-                response = await new_client.get(
-                    quota_url, headers=headers, timeout=30
-                )
+            response = await self._fetch_via_pool(
+                quota_url, headers, client
+            )
             response.raise_for_status()
             data = response.json()
 
