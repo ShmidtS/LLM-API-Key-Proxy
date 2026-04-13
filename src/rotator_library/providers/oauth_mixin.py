@@ -18,7 +18,6 @@ Providers using this mixin:
 - QwenAuthBase
 """
 
-import asyncio
 import logging
 import webbrowser
 from pathlib import Path

@@ -18,7 +18,7 @@ import orjson
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import aiofiles
 

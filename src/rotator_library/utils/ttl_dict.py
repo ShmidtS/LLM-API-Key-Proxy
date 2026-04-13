@@ -21,7 +21,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Iterator, Optional
+from typing import Any, Optional
 
 
 class TTLDict:

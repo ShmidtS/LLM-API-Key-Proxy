@@ -12,8 +12,6 @@ import os
 os.environ["AIOHTTP_NO_EXTENSIONS"] = "1"
 
 import time
-import uuid
-
 import orjson
 
 # Phase 1: Minimal imports for arg parsing and TUI

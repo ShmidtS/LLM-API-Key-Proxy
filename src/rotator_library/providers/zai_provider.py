@@ -3,7 +3,6 @@
 
 import httpx
 import os
-import re
 from ..utils.json_utils import json_loads
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, TYPE_CHECKING

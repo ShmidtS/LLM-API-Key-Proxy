@@ -17,8 +17,6 @@ from rotator_library.utils.json_utils import json_deep_copy, json_loads
 import logging
 from typing import Any, Dict, List, Optional
 
-from ...config import env_bool, env_int
-
 lib_logger = logging.getLogger("rotator_library")
 
 

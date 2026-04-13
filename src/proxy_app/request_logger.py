@@ -2,7 +2,7 @@
 # Copyright (c) 2026 ShmidtS
 
 from datetime import datetime
-from typing import Literal, Dict
+from typing import Dict
 import logging
 
 from .provider_urls import get_provider_endpoint

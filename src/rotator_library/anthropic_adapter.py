@@ -6,6 +6,8 @@ from typing import Any, Optional
 
 import orjson
 
+from .anthropic_compat import AnthropicMessagesRequest, AnthropicCountTokensRequest
+
 lib_logger = logging.getLogger("rotator_library")
 
 

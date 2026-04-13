@@ -25,7 +25,7 @@ import asyncio
 import time
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import logging
 
 from .utils.provider_locks import ProviderLockManager

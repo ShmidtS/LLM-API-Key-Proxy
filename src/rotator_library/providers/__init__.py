@@ -193,7 +193,7 @@ def _ensure_dynamic_providers():
                 continue
 
             # Skip if this provider already exists (file-based plugin)
-            if provider_name in _provider_registry or provider_name in _registered_providers:
+            if provider_name in PROVIDER_PLUGINS:
                 continue
 
             # Create a dynamic plugin class
@@ -206,9 +206,7 @@ def _ensure_dynamic_providers():
 
             # Create and register the plugin class
             plugin_class = create_plugin_class(provider_name)
-            _provider_registry[provider_name] = plugin_class
             PROVIDER_PLUGINS[provider_name] = plugin_class
-            _registered_providers.add(provider_name)
             import logging
             logging.getLogger("rotator_library").debug(
                 f"Registered dynamic provider: {provider_name}"
@@ -228,7 +226,7 @@ def get_all_providers() -> Dict[str, Type[ProviderInterface]]:
 
     # Load any file-based providers that haven't been loaded yet
     for provider_name in list_providers():
-        if provider_name not in _provider_registry:
+        if provider_name not in PROVIDER_PLUGINS:
             _load_provider(provider_name)
 
     return PROVIDER_PLUGINS

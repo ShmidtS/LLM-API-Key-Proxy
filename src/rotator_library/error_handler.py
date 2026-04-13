@@ -6,7 +6,6 @@ import json
 import os
 import logging
 import random
-import functools
 from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING
 import httpx
 
@@ -1319,31 +1318,6 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
     )
 
 
-def is_rate_limit_error(e: Exception) -> bool:
-    """Checks if the exception is a rate limit error."""
-    return isinstance(e, RateLimitError)
-
-
-def is_server_error(e: Exception) -> bool:
-    """Checks if the exception is a temporary server-side error."""
-    return isinstance(
-        e,
-        (ServiceUnavailableError, APIConnectionError, InternalServerError),
-    )
-
-
-def is_unrecoverable_error(e: Exception) -> bool:
-    """
-    Checks if the exception is a non-retriable client-side error.
-    These are errors that will not resolve on their own.
-
-    NOTE: We no longer treat BadRequestError/InvalidRequestError as unrecoverable
-    because "invalid_request" can come from provider-side issues (e.g., "Provider returned error")
-    and should trigger rotation rather than immediate failure.
-    """
-    return False  # All errors are potentially recoverable via rotation
-
-
 def should_rotate_on_error(classified_error: ClassifiedError) -> bool:
     """
     Determines if an error should trigger key rotation.
@@ -1394,81 +1368,3 @@ def should_retry_same_key(classified_error: ClassifiedError) -> bool:
     return classified_error.error_type in retryable_errors
 
 
-def classify_429_with_throttle_detection(
-    e: Exception,
-    provider: str,
-    credential: str,
-    error_body: Optional[str] = None,
-) -> ClassifiedError:
-    """
-    Classify a 429 error with IP throttle detection via correlation analysis.
-
-    This function records the 429 event in the IP throttle detector and
-    returns a ClassifiedError with throttle assessment if IP-level throttling
-    is detected.
-
-    Use this function instead of classify_error() when you have access to
-    the credential identifier and want IP throttle correlation.
-
-    Args:
-        e: The exception (should be a 429 error)
-        provider: Provider name (e.g., "openai", "anthropic")
-        credential: Credential identifier for correlation
-        error_body: Optional error response body
-
-    Returns:
-        ClassifiedError with throttle_assessment populated if IP throttle detected
-    """
-    retry_after = get_retry_after(e)
-
-    # For PROXY_PROVIDERS, skip IP throttle correlation entirely
-    if provider and provider in PROXY_PROVIDERS:
-        error_body_lower = (error_body or "").lower()
-        if "quota" in error_body_lower or "resource_exhausted" in error_body_lower:
-            error_type = "quota_exceeded"
-        else:
-            error_type = "rate_limit"
-        return ClassifiedError(
-            error_type=error_type,
-            original_exception=e,
-            status_code=429,
-            retry_after=retry_after,
-        )
-
-    detector = get_ip_throttle_detector()
-
-    # Record the 429 and get throttle assessment
-    assessment = detector.record_429(
-        provider=provider,
-        credential=credential,
-        error_body=error_body,
-        retry_after=retry_after,
-    )
-
-    # Determine error type based on assessment
-    if assessment.scope == ThrottleScope.IP:
-        error_type = "ip_rate_limit"
-        lib_logger.warning(
-            f"IP-level throttle detected for {provider}: "
-            f"{len(assessment.affected_credentials)} credentials affected, "
-            f"confidence={assessment.confidence:.2f}, "
-            f"cooldown={assessment.suggested_cooldown}s"
-        )
-    else:
-        # Check if it's a quota error
-        error_body_lower = (error_body or "").lower()
-        if "quota" in error_body_lower or "resource_exhausted" in error_body_lower:
-            error_type = "quota_exceeded"
-        else:
-            error_type = "rate_limit"
-
-    # Use the larger of retry_after or suggested_cooldown
-    final_cooldown = max(retry_after or 0, assessment.suggested_cooldown)
-
-    return ClassifiedError(
-        error_type=error_type,
-        original_exception=e,
-        status_code=429,
-        retry_after=final_cooldown if final_cooldown > 0 else None,
-        throttle_assessment=assessment,
-    )

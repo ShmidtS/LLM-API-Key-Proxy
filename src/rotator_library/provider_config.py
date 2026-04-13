@@ -15,12 +15,7 @@ import os
 import logging
 from typing import Dict, Any, Set, Optional
 
-from .litellm_providers import (
-    SCRAPED_PROVIDERS,
-    get_provider_route,
-    get_provider_api_key_var,
-    get_provider_display_name,
-)
+from .litellm_providers import SCRAPED_PROVIDERS
 
 lib_logger = logging.getLogger("rotator_library")
 

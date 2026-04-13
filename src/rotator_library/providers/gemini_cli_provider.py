@@ -10,23 +10,18 @@ from rotator_library.utils.duration import parse_duration as _parse_duration_sha
 import httpx
 import logging
 import time
-import asyncio
 from typing import List, Dict, Any, AsyncGenerator, Union, Optional, Tuple
 from .provider_interface import ProviderInterface, QuotaGroupMap, UsageResetConfigDef
 from .base_streaming_provider import parse_sse_stream, StreamingResponseMixin
 from .gemini_auth_base import GeminiAuthBase
 from .provider_cache import ProviderCache
 from .utilities.gemini_cli_quota_tracker import GeminiCliQuotaTracker
+from ..config import env_bool, env_int
 from .utilities.gemini_shared_utils import (
-    env_bool,
-    env_int,
     inline_schema_refs,
     clean_gemini_schema,
     recursively_parse_json_strings,
     GEMINI3_TOOL_RENAMES,
-    GEMINI3_TOOL_RENAMES_REVERSE,
-    FINISH_REASON_MAP,
-    CODE_ASSIST_ENDPOINT,
     GEMINI_CLI_ENDPOINT_FALLBACKS,
     GEMINI_TIER_PRIORITIES,
     GEMINI_DEFAULT_TIER_PRIORITY,

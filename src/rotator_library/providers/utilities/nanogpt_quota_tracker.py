@@ -20,7 +20,6 @@ Required from provider:
 import asyncio
 import logging
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -216,20 +215,6 @@ class NanoGptQuotaTracker:
 
         return min(1.0, max(0.0, daily_remaining / daily_limit))
 
-    def get_reset_timestamp(self, usage_data: Dict[str, Any]) -> Optional[float]:
-        """
-        Get the next reset timestamp from usage data.
-
-        Args:
-            usage_data: Response from fetch_subscription_usage()
-
-        Returns:
-            Unix timestamp when quota resets, or None
-        """
-        daily = usage_data.get("daily", {})
-        reset_at = daily.get("reset_at", 0)
-        return reset_at if reset_at > 0 else None
-
     # =========================================================================
     # BACKGROUND JOB SUPPORT
     # =========================================================================
@@ -265,93 +250,3 @@ class NanoGptQuotaTracker:
             )
 
         return usage_data
-
-    def get_cached_usage(self, credential_identifier: str) -> Optional[Dict[str, Any]]:
-        """
-        Get cached subscription usage for a credential.
-
-        Args:
-            credential_identifier: Identifier used in caching
-
-        Returns:
-            Cached usage data or None
-        """
-        return self._subscription_cache.get(credential_identifier)
-
-    async def get_all_quota_info(
-        self,
-        api_keys: List[Tuple[str, str]],  # List of (identifier, api_key) tuples
-    ) -> Dict[str, Any]:
-        """
-        Get quota info for all credentials.
-
-        Args:
-            api_keys: List of (identifier, api_key) tuples
-
-        Returns:
-            {
-                "credentials": {
-                    "identifier": {
-                        "identifier": str,
-                        "tier": str,
-                        "status": "success" | "error",
-                        "error": str | None,
-                        "daily": { ... },
-                        "monthly": { ... },
-                        "limits": { ... },
-                    }
-                },
-                "summary": {
-                    "total_credentials": int,
-                    "active_subscriptions": int,
-                },
-                "timestamp": float,
-            }
-        """
-        results = {}
-        active_count = 0
-
-        # Fetch quota for all credentials in parallel
-        semaphore = asyncio.Semaphore(5)
-
-        async def fetch_with_semaphore(identifier: str, api_key: str):
-            async with semaphore:
-                return identifier, await self.fetch_subscription_usage(api_key)
-
-        tasks = [fetch_with_semaphore(ident, key) for ident, key in api_keys]
-        fetch_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        for result in fetch_results:
-            if isinstance(result, Exception):
-                lib_logger.warning(f"Quota fetch failed: {result}")
-                continue
-
-            identifier, usage_data = result
-
-            if usage_data.get("active"):
-                active_count += 1
-
-            tier = self.get_tier_from_state(usage_data.get("state", "inactive"))
-
-            results[identifier] = {
-                "identifier": identifier,
-                "tier": tier,
-                "status": usage_data.get("status", "error"),
-                "error": usage_data.get("error"),
-                "active": usage_data.get("active", False),
-                "state": usage_data.get("state"),
-                "daily": usage_data.get("daily"),
-                "monthly": usage_data.get("monthly"),
-                "limits": usage_data.get("limits"),
-                "remaining_fraction": self.get_remaining_fraction(usage_data),
-                "fetched_at": usage_data.get("fetched_at"),
-            }
-
-        return {
-            "credentials": results,
-            "summary": {
-                "total_credentials": len(api_keys),
-                "active_subscriptions": active_count,
-            },
-            "timestamp": time.time(),
-        }

@@ -22,7 +22,7 @@ from .utils.resilient_io import ResilientStateWriter
 from .utils.provider_locks import ProviderLockManager
 from .batched_persistence import UsagePersistenceManager
 from .utils.paths import get_data_file
-from .utils.model_utils import extract_provider_from_model, normalize_model_string, get_or_create_provider_instance
+from .utils.model_utils import extract_provider_from_model, get_or_create_provider_instance
 from .utils.provider_registry import get_provider_registry
 from .config import (
     DEFAULT_FAIR_CYCLE_DURATION,

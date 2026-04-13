@@ -31,7 +31,6 @@ from .utils.json_utils import json_loads
 import ssl
 import threading
 import time
-import asyncio
 from typing import List, Tuple, Optional, Dict
 
 # Try to use httpx for DoH, fallback to urllib
@@ -104,64 +103,6 @@ def get_dns_query_timeout() -> int:
     except ImportError:
         return 10  # 10 seconds fallback
 
-
-async def resolve_dns_async(hostname: str) -> List[str]:
-    """
-    Async DNS resolution with caching.
-
-    Args:
-        hostname: Hostname to resolve
-
-    Returns:
-        List of IP addresses
-
-    Raises:
-        Exception: If DNS resolution fails and no cached value available
-    """
-    # Check cache first
-    cached = _get_cached_ips(hostname)
-    if cached is not None:
-        return cached
-
-    # Use asyncio executor for blocking getaddrinfo
-    loop = asyncio.get_event_loop()
-    timeout = get_dns_query_timeout()
-    try:
-        result = await asyncio.wait_for(
-            loop.run_in_executor(None, lambda: socket.getaddrinfo(hostname, None)),
-            timeout=timeout,
-        )
-        ips = list(set(r[4][0] for r in result if r[0] == socket.AF_INET))
-        if ips:
-            _cache_ips(hostname, ips)
-        return ips
-    except Exception:
-        # Fallback to cached value even if expired
-        with _dns_cache_lock:
-            entry = _dns_cache.get(hostname)
-        if entry is not None:
-            return entry[0]
-        raise
-
-
-def clear_dns_cache() -> None:
-    """Clear all cached DNS entries."""
-    with _dns_cache_lock:
-        _dns_cache.clear()
-
-
-def get_dns_cache_stats() -> Dict[str, int]:
-    """Get DNS cache statistics."""
-    with _dns_cache_lock:
-        now = time.time()
-        snapshot = list(_dns_cache.items())
-    valid_entries = sum(1 for _, (_, expiry) in snapshot if now < expiry)
-    return {
-        "total_entries": len(snapshot),
-        "valid_entries": valid_entries,
-        "expired_entries": len(snapshot) - valid_entries,
-        "hostnames": [h for h, _ in snapshot],
-    }
 
 
 # List of hosts that should use custom DNS

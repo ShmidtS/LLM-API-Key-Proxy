@@ -81,7 +81,6 @@ from .error_handler import (
     should_rotate_on_error,
     should_retry_same_key,
     get_retry_backoff,
-    is_provider_abort,
 )
 from .provider_config import ProviderConfig
 from .http_client_pool import HttpClientPool, get_http_pool, close_http_pool
@@ -104,15 +103,12 @@ from .model_definitions import ModelDefinitions
 from .transaction_logger import TransactionLogger
 from .utils.paths import get_default_root, get_logs_dir, get_oauth_dir
 from .utils.suppress_litellm_warnings import suppress_litellm_serialization_warnings
-from .utils.model_utils import extract_provider_from_model, normalize_model_string, get_or_create_provider_instance
+from .utils.model_utils import extract_provider_from_model, get_or_create_provider_instance, normalize_model_string
 from .utils.provider_registry import get_provider_registry
 from .config import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_GLOBAL_TIMEOUT,
     DEFAULT_ROTATION_TOLERANCE,
-    CIRCUIT_BREAKER_FAILURE_THRESHOLD,
-    CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
-    CIRCUIT_BREAKER_HALF_OPEN_REQUESTS,
     CIRCUIT_BREAKER_PROVIDER_OVERRIDES,
 )
 

@@ -44,17 +44,14 @@ Credential Details:
 - [ ] Disable/enable individual credentials
 """
 
-import os
 import re
-import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, TextColumn
 from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text

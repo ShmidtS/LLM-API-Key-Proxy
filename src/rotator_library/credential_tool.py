@@ -24,11 +24,7 @@ from rich.text import Text
 from .utils.paths import get_oauth_dir, get_data_file
 from .utils.terminal_utils import clear_screen
 from .provider_config import LITELLM_PROVIDERS, PROVIDER_CATEGORIES, PROVIDER_BLACKLIST
-from .litellm_providers import (
-    SCRAPED_PROVIDERS,
-    get_provider_api_key_var,
-    get_provider_display_name,
-)
+from .litellm_providers import SCRAPED_PROVIDERS
 
 
 def _get_oauth_base_dir() -> Path:

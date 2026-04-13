@@ -7,9 +7,8 @@ from .antigravity_quota_tracker import AntigravityQuotaTracker
 from .gemini_cli_quota_tracker import GeminiCliQuotaTracker
 
 # Shared utilities for Gemini-based providers
+from ...config import env_bool, env_int
 from .gemini_shared_utils import (
-    env_bool,
-    env_int,
     inline_schema_refs,
     normalize_type_arrays,
     clean_gemini_schema,

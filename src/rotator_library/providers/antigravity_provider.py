@@ -31,8 +31,7 @@ import os
 import random
 import time
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import datetime
 from typing import (
     Any,
     AsyncGenerator,
@@ -51,9 +50,8 @@ from .provider_interface import ProviderInterface, UsageResetConfigDef, QuotaGro
 from .antigravity_auth_base import AntigravityAuthBase
 from .provider_cache import ProviderCache
 from .utilities.antigravity_quota_tracker import AntigravityQuotaTracker
+from ..config import env_bool, env_int
 from .utilities.gemini_shared_utils import (
-    env_bool,
-    env_int,
     alias_to_internal_model,
     internal_to_alias_model,
     map_finish_reason,
@@ -75,7 +73,7 @@ from .utilities.gemini_credential_manager import GeminiCredentialManager
 from ..model_definitions import ModelDefinitions
 from ..timeout_config import TimeoutConfig
 from ..error_handler import EmptyResponseError, TransientQuotaError
-from ..utils.paths import get_logs_dir, get_cache_dir
+from ..utils.paths import get_cache_dir
 
 if TYPE_CHECKING:
     from ..usage_manager import UsageManager
