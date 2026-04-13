@@ -110,9 +110,6 @@ from .config import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_GLOBAL_TIMEOUT,
     DEFAULT_ROTATION_TOLERANCE,
-    DEFAULT_FAIR_CYCLE_DURATION,
-    DEFAULT_EXHAUSTION_COOLDOWN_THRESHOLD,
-    DEFAULT_SEQUENTIAL_FALLBACK_MULTIPLIER,
     CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
     CIRCUIT_BREAKER_HALF_OPEN_REQUESTS,
@@ -289,312 +286,11 @@ class RotatingClient:
         self._provider_plugins = PROVIDER_PLUGINS
         self._provider_instances = get_provider_registry()
 
-        # Build provider rotation modes map
-        # Each provider can specify its preferred rotation mode ("balanced" or "sequential")
-        provider_rotation_modes = {}
-        for provider in self.all_credentials.keys():
-            provider_class = self._provider_plugins.get(provider)
-            if provider_class and hasattr(provider_class, "get_rotation_mode"):
-                # Use class method to get rotation mode (checks env var + class default)
-                mode = provider_class.get_rotation_mode(provider)
-            else:
-                # Fallback: check environment variable directly
-                env_key = f"ROTATION_MODE_{provider.upper()}"
-                mode = _provider_env_cache.get(env_key, "balanced")
-
-            provider_rotation_modes[provider] = mode
-            if mode != "balanced":
-                lib_logger.info(f"Provider '{provider}' using rotation mode: {mode}")
-
-        # Build priority-based concurrency multiplier maps
-        # These are universal multipliers based on credential tier/priority
-        priority_multipliers: Dict[str, Dict[int, int]] = {}
-        priority_multipliers_by_mode: Dict[str, Dict[str, Dict[int, int]]] = {}
-        sequential_fallback_multipliers: Dict[str, int] = {}
-
-        for provider in self.all_credentials.keys():
-            provider_class = self._provider_plugins.get(provider)
-
-            # Start with provider class defaults
-            if provider_class:
-                # Get default priority multipliers from provider class
-                if hasattr(provider_class, "default_priority_multipliers"):
-                    default_multipliers = provider_class.default_priority_multipliers
-                    if default_multipliers:
-                        priority_multipliers[provider] = dict(default_multipliers)
-
-                # Get sequential fallback from provider class
-                if hasattr(provider_class, "default_sequential_fallback_multiplier"):
-                    fallback = provider_class.default_sequential_fallback_multiplier
-                    if (
-                        fallback != DEFAULT_SEQUENTIAL_FALLBACK_MULTIPLIER
-                    ):  # Only store if different from global default
-                        sequential_fallback_multipliers[provider] = fallback
-
-            # Override with environment variables
-            # Format: CONCURRENCY_MULTIPLIER_<PROVIDER>_PRIORITY_<N>=<multiplier>
-            # Format: CONCURRENCY_MULTIPLIER_<PROVIDER>_PRIORITY_<N>_<MODE>=<multiplier>
-            for key, value in _provider_env_cache.items():
-                prefix = f"CONCURRENCY_MULTIPLIER_{provider.upper()}_PRIORITY_"
-                if key.startswith(prefix):
-                    remainder = key[len(prefix) :]
-                    try:
-                        multiplier = int(value)
-                        if multiplier < 1:
-                            lib_logger.warning(f"Invalid {key}: {value}. Must be >= 1.")
-                            continue
-
-                        # Check if mode-specific (e.g., _PRIORITY_1_SEQUENTIAL)
-                        if "_" in remainder:
-                            parts = remainder.rsplit("_", 1)
-                            priority = int(parts[0])
-                            mode = parts[1].lower()
-                            if mode in ("sequential", "balanced"):
-                                # Mode-specific override
-                                if provider not in priority_multipliers_by_mode:
-                                    priority_multipliers_by_mode[provider] = {}
-                                if mode not in priority_multipliers_by_mode[provider]:
-                                    priority_multipliers_by_mode[provider][mode] = {}
-                                priority_multipliers_by_mode[provider][mode][
-                                    priority
-                                ] = multiplier
-                                lib_logger.info(
-                                    f"Provider '{provider}' priority {priority} ({mode} mode) multiplier: {multiplier}x"
-                                )
-                            else:
-                                # Assume it's part of the priority number (unlikely but handle gracefully)
-                                lib_logger.warning(f"Unknown mode in {key}: {mode}")
-                        else:
-                            # Universal priority multiplier
-                            priority = int(remainder)
-                            if provider not in priority_multipliers:
-                                priority_multipliers[provider] = {}
-                            priority_multipliers[provider][priority] = multiplier
-                            lib_logger.info(
-                                f"Provider '{provider}' priority {priority} multiplier: {multiplier}x"
-                            )
-                    except ValueError:
-                        lib_logger.warning(
-                            f"Invalid {key}: {value}. Could not parse priority or multiplier."
-                        )
-
-        # Log configured multipliers
-        for provider, multipliers in priority_multipliers.items():
-            if multipliers:
-                lib_logger.info(
-                    f"Provider '{provider}' priority multipliers: {multipliers}"
-                )
-        for provider, fallback in sequential_fallback_multipliers.items():
-            lib_logger.info(
-                f"Provider '{provider}' sequential fallback multiplier: {fallback}x"
-            )
-
-        # Build fair cycle configuration
-        fair_cycle_enabled: Dict[str, bool] = {}
-        fair_cycle_tracking_mode: Dict[str, str] = {}
-        fair_cycle_cross_tier: Dict[str, bool] = {}
-        fair_cycle_duration: Dict[str, int] = {}
-
-        for provider in self.all_credentials.keys():
-            provider_class = self._provider_plugins.get(provider)
-            rotation_mode = provider_rotation_modes.get(provider, "balanced")
-
-            # Fair cycle enabled - check env, then provider default, then derive from rotation mode
-            env_key = f"FAIR_CYCLE_{provider.upper()}"
-            env_val = _provider_env_cache.get(env_key)
-            if env_val is not None:
-                fair_cycle_enabled[provider] = env_val.lower() in ("true", "1", "yes")
-            elif provider_class and hasattr(
-                provider_class, "default_fair_cycle_enabled"
-            ):
-                default_val = provider_class.default_fair_cycle_enabled
-                if default_val is not None:
-                    fair_cycle_enabled[provider] = default_val
-                # None means use global default (enabled for all modes)
-            # Default: enabled for all rotation modes (not stored, handled in UsageManager)
-
-            # Tracking mode - check env, then provider default
-            env_key = f"FAIR_CYCLE_TRACKING_MODE_{provider.upper()}"
-            env_val = _provider_env_cache.get(env_key)
-            if env_val is not None and env_val.lower() in ("model_group", "credential"):
-                fair_cycle_tracking_mode[provider] = env_val.lower()
-            elif provider_class and hasattr(
-                provider_class, "default_fair_cycle_tracking_mode"
-            ):
-                fair_cycle_tracking_mode[provider] = (
-                    provider_class.default_fair_cycle_tracking_mode
-                )
-
-            # Cross-tier - check env, then provider default
-            env_key = f"FAIR_CYCLE_CROSS_TIER_{provider.upper()}"
-            env_val = _provider_env_cache.get(env_key)
-            if env_val is not None:
-                fair_cycle_cross_tier[provider] = env_val.lower() in (
-                    "true",
-                    "1",
-                    "yes",
-                )
-            elif provider_class and hasattr(
-                provider_class, "default_fair_cycle_cross_tier"
-            ):
-                if provider_class.default_fair_cycle_cross_tier:
-                    fair_cycle_cross_tier[provider] = True
-
-            # Duration - check provider-specific env, then provider default
-            env_key = f"FAIR_CYCLE_DURATION_{provider.upper()}"
-            env_val = _provider_env_cache.get(env_key)
-            if env_val is not None:
-                try:
-                    fair_cycle_duration[provider] = int(env_val)
-                except ValueError:
-                    lib_logger.warning(
-                        f"Invalid {env_key}: {env_val}. Must be integer."
-                    )
-            elif provider_class and hasattr(
-                provider_class, "default_fair_cycle_duration"
-            ):
-                duration = provider_class.default_fair_cycle_duration
-                if (
-                    duration != DEFAULT_FAIR_CYCLE_DURATION
-                ):  # Only store if different from global default
-                    fair_cycle_duration[provider] = duration
-
-        # Build exhaustion cooldown threshold per provider
-        # Check global env first, then per-provider env, then provider class default
-        exhaustion_cooldown_threshold: Dict[str, int] = {}
-        global_threshold_str = _provider_env_cache.get("EXHAUSTION_COOLDOWN_THRESHOLD")
-        global_threshold = DEFAULT_EXHAUSTION_COOLDOWN_THRESHOLD
-        if global_threshold_str:
-            try:
-                global_threshold = int(global_threshold_str)
-            except ValueError:
-                lib_logger.warning(
-                    f"Invalid EXHAUSTION_COOLDOWN_THRESHOLD: {global_threshold_str}. Using default {DEFAULT_EXHAUSTION_COOLDOWN_THRESHOLD}."
-                )
-
-        for provider in self.all_credentials.keys():
-            provider_class = self._provider_plugins.get(provider)
-
-            # Check per-provider env var first
-            env_key = f"EXHAUSTION_COOLDOWN_THRESHOLD_{provider.upper()}"
-            env_val = _provider_env_cache.get(env_key)
-            if env_val is not None:
-                try:
-                    exhaustion_cooldown_threshold[provider] = int(env_val)
-                except ValueError:
-                    lib_logger.warning(
-                        f"Invalid {env_key}: {env_val}. Must be integer."
-                    )
-            elif provider_class and hasattr(
-                provider_class, "default_exhaustion_cooldown_threshold"
-            ):
-                threshold = provider_class.default_exhaustion_cooldown_threshold
-                if (
-                    threshold != DEFAULT_EXHAUSTION_COOLDOWN_THRESHOLD
-                ):  # Only store if different from global default
-                    exhaustion_cooldown_threshold[provider] = threshold
-            elif global_threshold != DEFAULT_EXHAUSTION_COOLDOWN_THRESHOLD:
-                # Use global threshold if set and different from default
-                exhaustion_cooldown_threshold[provider] = global_threshold
-
-        # Log fair cycle configuration
-        for provider, enabled in fair_cycle_enabled.items():
-            if not enabled:
-                lib_logger.info(f"Provider '{provider}' fair cycle: disabled")
-        for provider, mode in fair_cycle_tracking_mode.items():
-            if mode != "model_group":
-                lib_logger.info(
-                    f"Provider '{provider}' fair cycle tracking mode: {mode}"
-                )
-        for provider, cross_tier in fair_cycle_cross_tier.items():
-            if cross_tier:
-                lib_logger.info(f"Provider '{provider}' fair cycle cross-tier: enabled")
-
-        # Build custom caps configuration
-        # Format: CUSTOM_CAP_{PROVIDER}_T{TIER}_{MODEL_OR_GROUP}=<value>
-        # Format: CUSTOM_CAP_COOLDOWN_{PROVIDER}_T{TIER}_{MODEL_OR_GROUP}=<mode>:<value>
-        custom_caps: Dict[
-            str, Dict[Union[int, Tuple[int, ...], str], Dict[str, Dict[str, Any]]]
-        ] = {}
-
-        for provider in self.all_credentials.keys():
-            provider_class = self._provider_plugins.get(provider)
-            provider_upper = provider.upper()
-
-            # Start with provider class defaults
-            if provider_class and hasattr(provider_class, "default_custom_caps"):
-                default_caps = provider_class.default_custom_caps
-                if default_caps:
-                    custom_caps[provider] = {}
-                    for tier_key, models_config in default_caps.items():
-                        custom_caps[provider][tier_key] = dict(models_config)
-
-            # Parse environment variable overrides
-            cap_prefix = f"CUSTOM_CAP_{provider_upper}_T"
-            cooldown_prefix = f"CUSTOM_CAP_COOLDOWN_{provider_upper}_T"
-
-            for env_key, env_value in _provider_env_cache.items():
-                if env_key.startswith(cap_prefix) and not env_key.startswith(
-                    cooldown_prefix
-                ):
-                    # Parse cap value
-                    remainder = env_key[len(cap_prefix) :]
-                    tier_key, model_key = self._parse_custom_cap_env_key(remainder)
-                    if tier_key is None:
-                        continue
-
-                    if provider not in custom_caps:
-                        custom_caps[provider] = {}
-                    if tier_key not in custom_caps[provider]:
-                        custom_caps[provider][tier_key] = {}
-                    if model_key not in custom_caps[provider][tier_key]:
-                        custom_caps[provider][tier_key][model_key] = {}
-
-                    # Store max_requests value
-                    custom_caps[provider][tier_key][model_key][
-                        "max_requests"
-                    ] = env_value
-
-                elif env_key.startswith(cooldown_prefix):
-                    # Parse cooldown config
-                    remainder = env_key[len(cooldown_prefix) :]
-                    tier_key, model_key = self._parse_custom_cap_env_key(remainder)
-                    if tier_key is None:
-                        continue
-
-                    # Parse mode:value format
-                    if ":" in env_value:
-                        mode, value_str = env_value.split(":", 1)
-                        try:
-                            value = int(value_str)
-                        except ValueError:
-                            lib_logger.warning(
-                                f"Invalid cooldown value in {env_key}: {env_value}"
-                            )
-                            continue
-                    else:
-                        mode = env_value
-                        value = 0
-
-                    if provider not in custom_caps:
-                        custom_caps[provider] = {}
-                    if tier_key not in custom_caps[provider]:
-                        custom_caps[provider][tier_key] = {}
-                    if model_key not in custom_caps[provider][tier_key]:
-                        custom_caps[provider][tier_key][model_key] = {}
-
-                    custom_caps[provider][tier_key][model_key]["cooldown_mode"] = mode
-                    custom_caps[provider][tier_key][model_key]["cooldown_value"] = value
-
-        # Log custom caps configuration
-        for provider, tier_configs in custom_caps.items():
-            for tier_key, models_config in tier_configs.items():
-                for model_key, config in models_config.items():
-                    max_req = config.get("max_requests", "default")
-                    cooldown = config.get("cooldown_mode", "quota_reset")
-                    lib_logger.info(
-                        f"Custom cap: {provider}/T{tier_key}/{model_key} = {max_req}, cooldown={cooldown}"
-                    )
+        # Build all provider-specific configuration via extracted module
+        from .client_config import build_all_provider_configs
+        provider_configs = build_all_provider_configs(
+            self.all_credentials, self._provider_plugins
+        )
 
         # Resolve usage file path - use provided path or default to data_dir
         if usage_file_path is not None:
@@ -605,17 +301,17 @@ class RotatingClient:
         self.usage_manager = UsageManager(
             file_path=resolved_usage_path,
             rotation_tolerance=rotation_tolerance,
-            provider_rotation_modes=provider_rotation_modes,
+            provider_rotation_modes=provider_configs["provider_rotation_modes"],
             provider_plugins=PROVIDER_PLUGINS,
-            priority_multipliers=priority_multipliers,
-            priority_multipliers_by_mode=priority_multipliers_by_mode,
-            sequential_fallback_multipliers=sequential_fallback_multipliers,
-            fair_cycle_enabled=fair_cycle_enabled,
-            fair_cycle_tracking_mode=fair_cycle_tracking_mode,
-            fair_cycle_cross_tier=fair_cycle_cross_tier,
-            fair_cycle_duration=fair_cycle_duration,
-            exhaustion_cooldown_threshold=exhaustion_cooldown_threshold,
-            custom_caps=custom_caps,
+            priority_multipliers=provider_configs["priority_multipliers"],
+            priority_multipliers_by_mode=provider_configs["priority_multipliers_by_mode"],
+            sequential_fallback_multipliers=provider_configs["sequential_fallback_multipliers"],
+            fair_cycle_enabled=provider_configs["fair_cycle_enabled"],
+            fair_cycle_tracking_mode=provider_configs["fair_cycle_tracking_mode"],
+            fair_cycle_cross_tier=provider_configs["fair_cycle_cross_tier"],
+            fair_cycle_duration=provider_configs["fair_cycle_duration"],
+            exhaustion_cooldown_threshold=provider_configs["exhaustion_cooldown_threshold"],
+            custom_caps=provider_configs["custom_caps"],
             credential_to_provider=self._build_credential_to_provider_map(),
         )
         self._model_list_cache = {}
@@ -1047,57 +743,9 @@ class RotatingClient:
     def _parse_custom_cap_env_key(
         self, remainder: str
     ) -> Tuple[Optional[Union[int, Tuple[int, ...], str]], Optional[str]]:
-        """
-        Parse the tier and model/group from a custom cap env var remainder.
-
-        Args:
-            remainder: String after "CUSTOM_CAP_{PROVIDER}_T" prefix
-                       e.g., "2_CLAUDE" or "2_3_CLAUDE" or "DEFAULT_CLAUDE"
-
-        Returns:
-            (tier_key, model_key) tuple, or (None, None) if parse fails
-        """
-        if not remainder:
-            return None, None
-
-        remaining_parts = remainder.split("_")
-        if len(remaining_parts) < 2:
-            return None, None
-
-        tier_key: Union[int, Tuple[int, ...], str, None] = None
-        model_key: Optional[str] = None
-
-        # Tiers are numeric or "DEFAULT"
-        tier_parts: List[int] = []
-
-        for i, part in enumerate(remaining_parts):
-            if part == "DEFAULT":
-                tier_key = "default"
-                model_key = "_".join(remaining_parts[i + 1 :])
-                break
-            elif part.isdigit():
-                tier_parts.append(int(part))
-            else:
-                # First non-numeric part is start of model name
-                if len(tier_parts) == 0:
-                    return None, None
-                elif len(tier_parts) == 1:
-                    tier_key = tier_parts[0]
-                else:
-                    tier_key = tuple(tier_parts)
-                model_key = "_".join(remaining_parts[i:])
-                break
-        else:
-            # All parts were tier parts, no model
-            return None, None
-
-        if model_key:
-            # Convert model_key back to original format (for matching)
-            # Env vars use underscores, but we store with original names
-            # The matching in UsageManager will handle this
-            model_key = model_key.lower().replace("_", "-")
-
-        return tier_key, model_key
+        """Delegate to client_config.parse_custom_cap_env_key."""
+        from .client_config import parse_custom_cap_env_key
+        return parse_custom_cap_env_key(remainder)
 
     def _is_model_ignored(self, provider: str, model_id: str) -> bool:
         """
