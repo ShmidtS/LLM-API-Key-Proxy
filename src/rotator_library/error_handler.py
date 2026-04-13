@@ -217,78 +217,6 @@ def extract_retry_after_from_body(error_body: Optional[str]) -> Optional[int]:
 
 
 
-class AllProviders:
-    """
-    Handles provider-specific settings and custom API bases.
-    Supports custom OpenAI-compatible providers via PROVIDERNAME_API_BASE env vars.
-
-    Usage:
-        export KILOCODE_API_BASE=https://kilo.ai/api/openrouter
-        # Then model "kilocode/z-ai/glm-5:free" will use this API base
-
-    Known providers are skipped (they have native LiteLLM support):
-        openai, anthropic, google, gemini, nvidia, mistral, cohere, groq, openrouter
-    """
-
-    KNOWN_PROVIDERS = frozenset(
-        {
-            "openai",
-            "anthropic",
-            "google",
-            "gemini",
-            "nvidia",
-            "mistral",
-            "cohere",
-            "groq",
-            "openrouter",
-        }
-    )
-
-    def __init__(self):
-        self.providers: Dict[str, Dict[str, Any]] = {}
-        self._load_custom_providers()
-
-    def _load_custom_providers(self) -> None:
-        """Load custom providers from PROVIDERNAME_API_BASE env vars."""
-        for env_var, value in os.environ.items():
-            if env_var.endswith("_API_BASE") and value:
-                provider = env_var[:-9].lower()  # Remove "_API_BASE"
-                if provider not in self.KNOWN_PROVIDERS:
-                    self.providers[provider] = {
-                        "api_base": value.rstrip("/"),
-                        "model_prefix": None,  # No prefix transformation
-                    }
-                    lib_logger.info(
-                        f"AllProviders: registered custom provider '{provider}' "
-                        f"with api_base={value.rstrip('/')}"
-                    )
-
-    def get_provider_kwargs(self, **kwargs) -> Dict[str, Any]:
-        """
-        Inject provider-specific settings into kwargs.
-
-        Called before LiteLLM request to override api_base for custom providers.
-        """
-        model = kwargs.get("model", "")
-        if "/" in model:
-            provider = model.split("/")[0]
-            settings = self.providers.get(provider, {})
-            if "api_base" in settings:
-                kwargs["api_base"] = settings["api_base"]
-                lib_logger.debug(
-                    f"AllProviders: using custom api_base={settings['api_base']} "
-                    f"for provider={provider}"
-                )
-        return kwargs
-
-    def is_custom_provider(self, model: str) -> bool:
-        """Check if model uses a custom provider."""
-        if "/" in model:
-            provider = model.split("/")[0]
-            return provider in self.providers
-        return False
-
-
 # Pre-compiled retry-after patterns for get_retry_after() (module-level, not per-call)
 _RETRY_AFTER_PATTERNS = [
     re.compile(r"retry[-_\s]after:?\s*(\d+)"),
@@ -300,18 +228,6 @@ _RETRY_AFTER_PATTERNS = [
     re.compile(r"reset after\s*([\dhms.]+)"),
     re.compile(r'"quotaresetdelay":\s*"([\dhms.]+)"'),
 ]
-
-# Singleton instance
-_all_providers_instance: Optional["AllProviders"] = None
-
-
-def get_all_providers() -> "AllProviders":
-    """Get the global AllProviders instance."""
-    global _all_providers_instance
-    if _all_providers_instance is None:
-        _all_providers_instance = AllProviders()
-    return _all_providers_instance
-
 
 def _extract_retry_from_json_body(json_text: str) -> Optional[int]:
     """

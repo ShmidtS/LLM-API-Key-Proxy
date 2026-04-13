@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 ShmidtS
 
-from typing import TYPE_CHECKING, Dict, Type
+from typing import TYPE_CHECKING, Dict
 
 from .client import RotatingClient
 from .utils.json_utils import STREAM_DONE
@@ -42,9 +42,6 @@ __all__ = [
     "IPThrottleDetector",
     "ThrottleScope",
     "get_retry_backoff",
-    # Custom provider support
-    "AllProviders",
-    "get_all_providers",
     "is_provider_abort",
     "classify_stream_error",
 ]
@@ -68,8 +65,6 @@ _LAZY_IMPORTS = {
     "IPThrottleDetector": (".ip_throttle_detector", "IPThrottleDetector"),
     "ThrottleScope": (".ip_throttle_detector", "ThrottleScope"),
     "get_retry_backoff": (".error_handler", "get_retry_backoff"),
-    "AllProviders": (".error_handler", "AllProviders"),
-    "get_all_providers": (".error_handler", "get_all_providers"),
     "is_provider_abort": (".error_handler", "is_provider_abort"),
     "classify_stream_error": (".error_handler", "classify_stream_error"),
 }

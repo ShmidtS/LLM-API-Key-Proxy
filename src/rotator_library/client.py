@@ -2145,24 +2145,6 @@ class RotatingClient:
                                 **litellm_kwargs
                             )
 
-                            # Inject custom provider settings (e.g., KILOCODE_API_BASE)
-                            if self.provider_config.is_custom_provider(model):
-                                final_kwargs = self.provider_config.get_provider_kwargs(
-                                    **final_kwargs
-                                )
-                                # Force OpenAI-compatible mode for custom providers
-                                if "api_base" in final_kwargs:
-                                    # LiteLLM routing: use openai/ prefix for custom OpenAI-compatible APIs
-                                    current_model = final_kwargs.get("model", model)
-                                    if not current_model.startswith("openai/"):
-                                        final_kwargs["model"] = (
-                                            f"openai/{current_model}"
-                                        )
-                                        lib_logger.info(
-                                            f"Routing custom provider {model.split('/')[0]} through openai: "
-                                            f"model={final_kwargs['model']}, api_base={final_kwargs['api_base']}"
-                                        )
-
                             response = await api_call(
                                 **final_kwargs,
                                 logger_fn=self._litellm_logger_callback,
@@ -2906,24 +2888,6 @@ class RotatingClient:
                             final_kwargs = self.provider_config.convert_for_litellm(
                                 **litellm_kwargs
                             )
-
-                            # Inject custom provider settings (e.g., KILOCODE_API_BASE)
-                            if self.provider_config.is_custom_provider(model):
-                                final_kwargs = self.provider_config.get_provider_kwargs(
-                                    **final_kwargs
-                                )
-                                # Force OpenAI-compatible mode for custom providers
-                                if "api_base" in final_kwargs:
-                                    # LiteLLM routing: use openai/ prefix for custom OpenAI-compatible APIs
-                                    current_model = final_kwargs.get("model", model)
-                                    if not current_model.startswith("openai/"):
-                                        final_kwargs["model"] = (
-                                            f"openai/{current_model}"
-                                        )
-                                        lib_logger.info(
-                                            f"Routing custom provider {model.split('/')[0]} through openai: "
-                                            f"model={final_kwargs['model']}, api_base={final_kwargs['api_base']}"
-                                        )
 
                             response = await litellm.acompletion(
                                 **final_kwargs,
