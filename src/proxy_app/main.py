@@ -180,6 +180,7 @@ with _console.status("[dim]Initializing proxy core...", spinner="dots"):
     from rotator_library.credential_manager import CredentialManager
     from rotator_library.background_refresher import BackgroundRefresher
     from rotator_library.dns_fix import close_doh_client
+    from rotator_library.http_client_pool import close_http_pool
     from rotator_library.model_info_service import init_model_info_service
     from proxy_app.request_logger import log_request_to_console
     from proxy_app.batch_manager import EmbeddingBatcher
@@ -732,6 +733,24 @@ async def lifespan(app: FastAPI):
     if app.state.embedding_batcher:
         await app.state.embedding_batcher.stop()
     await client.close()
+    await close_http_pool()
+
+    # Close litellm's internal aiohttp/httpx sessions to prevent
+    # "Unclosed client session" warnings on shutdown
+    try:
+        await litellm.close_litellm_async_clients()
+    except Exception:
+        pass
+    if hasattr(litellm, "aclient_session") and litellm.aclient_session is not None:
+        try:
+            await litellm.aclient_session.aclose()
+        except Exception:
+            pass
+    if hasattr(litellm, "client_session") and litellm.client_session is not None:
+        try:
+            litellm.client_session.close()
+        except Exception:
+            pass
 
     # Stop model info service
     if hasattr(app.state, "model_info_service") and app.state.model_info_service:
