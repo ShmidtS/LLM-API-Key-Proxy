@@ -184,6 +184,63 @@ def _make_message_stop_event() -> str:
     return 'event: message_stop\ndata: {"type": "message_stop"}\n\n'
 
 
+async def _finalize_anthropic_stream(
+    batcher: ChunkBatcher,
+    thinking_block_started: bool,
+    content_block_started: bool,
+    current_block_index: int,
+    tool_block_indices: dict,
+    tool_calls_by_index: dict,
+    output_tokens: int,
+    cached_tokens: int,
+    cache_creation_tokens: int,
+    transaction_logger: Optional["TransactionLogger"],
+    request_id: str,
+    original_model: str,
+    _thinking_parts: list,
+    _text_parts: list,
+    input_tokens: int,
+) -> AsyncGenerator[str, None]:
+    """Close all open content blocks and send final Anthropic stream events."""
+    if thinking_block_started:
+        event_str = _make_content_block_stop_event(current_block_index)
+        if event := batcher.add(event_str):
+            yield event
+        current_block_index += 1
+
+    if content_block_started:
+        event_str = _make_content_block_stop_event(current_block_index)
+        if event := batcher.add(event_str):
+            yield event
+        current_block_index += 1
+
+    for tc_index in sorted(tool_block_indices.keys()):
+        block_idx = tool_block_indices[tc_index]
+        event_str = _make_content_block_stop_event(block_idx)
+        if event := batcher.add(event_str):
+            yield event
+
+    stop_reason = "tool_use" if tool_calls_by_index else "end_turn"
+
+    event_str = _make_message_delta_event(stop_reason, output_tokens, cached_tokens, cache_creation_tokens)
+    if event := batcher.add(event_str):
+        yield event
+    event_str = _make_message_stop_event()
+    if event := batcher.add(event_str):
+        yield event
+
+    if remaining := batcher.flush():
+        yield remaining
+
+    if transaction_logger:
+        _log_anthropic_response(
+            transaction_logger, request_id, original_model,
+            "".join(_thinking_parts), "".join(_text_parts),
+            tool_calls_by_index, input_tokens, output_tokens,
+            cached_tokens, cache_creation_tokens, stop_reason
+        )
+
+
 async def anthropic_streaming_wrapper_fast(
     openai_stream: AsyncGenerator[Any, None],
     original_model: str,
@@ -263,53 +320,15 @@ async def anthropic_streaming_wrapper_fast(
 
             # STREAM_DONE sentinel: stream is complete
             if raw_chunk is STREAM_DONE:
-                # Close any open thinking block
-                if thinking_block_started:
-                    event_str = _make_content_block_stop_event(current_block_index)
-                    if event := batcher.add(event_str):
-                        yield event
-                    current_block_index += 1
-                    thinking_block_started = False
-
-                # Close any open text block
-                if content_block_started:
-                    event_str = _make_content_block_stop_event(current_block_index)
-                    if event := batcher.add(event_str):
-                        yield event
-                    current_block_index += 1
-                    content_block_started = False
-
-                # Close all open tool_use blocks
-                for tc_index in sorted(tool_block_indices.keys()):
-                    block_idx = tool_block_indices[tc_index]
-                    event_str = _make_content_block_stop_event(block_idx)
-                    if event := batcher.add(event_str):
-                        yield event
-
-                # Determine stop_reason
-                stop_reason = "tool_use" if tool_calls_by_index else "end_turn"
-                stop_reason_final = stop_reason
-
-                # Send final events
-                event_str = _make_message_delta_event(stop_reason, output_tokens, cached_tokens, cache_creation_tokens)
-                if event := batcher.add(event_str):
+                async for event in _finalize_anthropic_stream(
+                    batcher, thinking_block_started, content_block_started,
+                    current_block_index, tool_block_indices, tool_calls_by_index,
+                    output_tokens, cached_tokens, cache_creation_tokens,
+                    transaction_logger, request_id, original_model,
+                    _thinking_parts, _text_parts, input_tokens,
+                ):
                     yield event
-                event_str = _make_message_stop_event()
-                if event := batcher.add(event_str):
-                    yield event
-
-                # Flush any remaining events
-                if remaining := batcher.flush():
-                    yield remaining
-
-                # Log if needed
-                if transaction_logger:
-                    _log_anthropic_response(
-                        transaction_logger, request_id, original_model,
-                        "".join(_thinking_parts), "".join(_text_parts),
-                        tool_calls_by_index, input_tokens, output_tokens,
-                        cached_tokens, cache_creation_tokens, stop_reason_final
-                    )
+                stop_reason_final = "tool_use" if tool_calls_by_index else "end_turn"
                 break
 
             # Dict chunk (new internal pipeline format)
@@ -321,50 +340,15 @@ async def anthropic_streaming_wrapper_fast(
                     continue
                 data_content = raw_chunk[5:].strip()
                 if data_content == "[DONE]":
-                    # Re-yield STREAM_DONE path (reuse logic above by continuing loop after yielding)
-                    # Synthesize a STREAM_DONE and re-enter loop
-                    # Easier: just set raw_chunk and continue won't work, so inline the [DONE] handling
-                    # Close any open thinking block
-                    if thinking_block_started:
-                        event_str = _make_content_block_stop_event(current_block_index)
-                        if event := batcher.add(event_str):
-                            yield event
-                        current_block_index += 1
-                        thinking_block_started = False
-
-                    if content_block_started:
-                        event_str = _make_content_block_stop_event(current_block_index)
-                        if event := batcher.add(event_str):
-                            yield event
-                        current_block_index += 1
-                        content_block_started = False
-
-                    for tc_index in sorted(tool_block_indices.keys()):
-                        block_idx = tool_block_indices[tc_index]
-                        event_str = _make_content_block_stop_event(block_idx)
-                        if event := batcher.add(event_str):
-                            yield event
-
-                    stop_reason = "tool_use" if tool_calls_by_index else "end_turn"
-                    stop_reason_final = stop_reason
-
-                    event_str = _make_message_delta_event(stop_reason, output_tokens, cached_tokens, cache_creation_tokens)
-                    if event := batcher.add(event_str):
+                    async for event in _finalize_anthropic_stream(
+                        batcher, thinking_block_started, content_block_started,
+                        current_block_index, tool_block_indices, tool_calls_by_index,
+                        output_tokens, cached_tokens, cache_creation_tokens,
+                        transaction_logger, request_id, original_model,
+                        _thinking_parts, _text_parts, input_tokens,
+                    ):
                         yield event
-                    event_str = _make_message_stop_event()
-                    if event := batcher.add(event_str):
-                        yield event
-
-                    if remaining := batcher.flush():
-                        yield remaining
-
-                    if transaction_logger:
-                        _log_anthropic_response(
-                            transaction_logger, request_id, original_model,
-                            "".join(_thinking_parts), "".join(_text_parts),
-                            tool_calls_by_index, input_tokens, output_tokens,
-                            cached_tokens, cache_creation_tokens, stop_reason_final
-                        )
+                    stop_reason_final = "tool_use" if tool_calls_by_index else "end_turn"
                     break
 
                 try:

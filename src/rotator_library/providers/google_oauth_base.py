@@ -27,7 +27,7 @@ from ..utils.headless_detection import is_headless_environment
 from ..utils.resilient_io import safe_write_json
 from ..utils.model_utils import parse_env_credential_path
 from ..utils.json_utils import json_loads, json_dumps_str
-from ..error_handler import CredentialNeedsReauthError
+from ..error_types import CredentialNeedsReauthError
 
 lib_logger = logging.getLogger("rotator_library")
 

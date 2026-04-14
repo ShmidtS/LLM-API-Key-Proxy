@@ -25,7 +25,7 @@ from rich.markup import escape as rich_escape
 
 from ..utils.headless_detection import is_headless_environment
 from ..utils.json_utils import json_loads
-from ..error_handler import CredentialNeedsReauthError
+from ..error_types import CredentialNeedsReauthError
 
 lib_logger = logging.getLogger("rotator_library")
 

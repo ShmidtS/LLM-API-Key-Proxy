@@ -43,7 +43,7 @@ async def agent_chat(
                           litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
             raise handle_litellm_error(e, error_format="openai")
         logging.error(f"Agent chat request failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/v1/agents/file-upload")
@@ -68,8 +68,13 @@ async def agent_file_upload(
         )
 
     except Exception as e:
-        logging.error(f"Agent file upload failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if isinstance(e, (litellm.InvalidRequestError, ValueError,
+                          litellm.AuthenticationError, litellm.RateLimitError,
+                          litellm.ServiceUnavailableError, litellm.APIConnectionError,
+                          litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
+            raise handle_litellm_error(e, error_format="openai")
+        logging.error(f"Agent file upload failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/v1/agents/async-result")
@@ -86,8 +91,13 @@ async def agent_async_result(
         )
 
     except Exception as e:
-        logging.error(f"Agent async result retrieval failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if isinstance(e, (litellm.InvalidRequestError, ValueError,
+                          litellm.AuthenticationError, litellm.RateLimitError,
+                          litellm.ServiceUnavailableError, litellm.APIConnectionError,
+                          litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
+            raise handle_litellm_error(e, error_format="openai")
+        logging.error(f"Agent async result retrieval failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/v1/agents/conversation")
@@ -112,5 +122,10 @@ async def agent_conversation(
         )
 
     except Exception as e:
-        logging.error(f"Agent conversation request failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if isinstance(e, (litellm.InvalidRequestError, ValueError,
+                          litellm.AuthenticationError, litellm.RateLimitError,
+                          litellm.ServiceUnavailableError, litellm.APIConnectionError,
+                          litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
+            raise handle_litellm_error(e, error_format="openai")
+        logging.error(f"Agent conversation request failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")

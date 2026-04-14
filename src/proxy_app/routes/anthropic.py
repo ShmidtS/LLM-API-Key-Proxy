@@ -13,7 +13,7 @@ from rotator_library.anthropic_compat import (
     AnthropicMessagesRequest,
     AnthropicCountTokensRequest,
 )
-from proxy_app.dependencies import get_rotating_client, verify_anthropic_api_key
+from proxy_app.dependencies import get_rotating_client, verify_anthropic_api_key, make_error_response, track_stream
 from proxy_app.streaming import handle_litellm_error
 from proxy_app.detailed_logger import RawIOLogger
 from proxy_app.request_logger import log_request_to_console
@@ -72,7 +72,7 @@ async def anthropic_messages(
         if body.stream:
             # Streaming response
             return StreamingResponse(
-                result,
+                track_stream(request, result),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -105,7 +105,7 @@ async def anthropic_messages(
             )
         error_response = {
             "type": "error",
-            "error": {"type": "api_error", "message": str(e)},
+            "error": make_error_response(str(e), "api_error"),
         }
         raise HTTPException(status_code=500, detail=error_response)
 
@@ -137,19 +137,19 @@ async def anthropic_count_tokens(
     ) as e:
         error_response = {
             "type": "error",
-            "error": {"type": "invalid_request_error", "message": str(e)},
+            "error": make_error_response(str(e), "invalid_request_error"),
         }
         raise HTTPException(status_code=400, detail=error_response)
     except litellm.AuthenticationError as e:
         error_response = {
             "type": "error",
-            "error": {"type": "authentication_error", "message": str(e)},
+            "error": make_error_response(str(e), "authentication_error"),
         }
         raise HTTPException(status_code=401, detail=error_response)
     except Exception as e:
         logging.error(f"Anthropic count_tokens endpoint error: {e}")
         error_response = {
             "type": "error",
-            "error": {"type": "api_error", "message": str(e)},
+            "error": make_error_response(str(e), "api_error"),
         }
         raise HTTPException(status_code=500, detail=error_response)

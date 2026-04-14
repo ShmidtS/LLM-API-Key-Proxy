@@ -320,8 +320,8 @@ def _extract_quota_details(json_text: str) -> Tuple[Optional[str], Optional[str]
                 quota_id = violation.get("quotaId")
                 if quota_value or quota_id:
                     return str(quota_value) if quota_value else None, quota_id
-    except Exception:
-        pass
+    except (KeyError, TypeError, ValueError):
+        lib_logger.debug("Failed to extract quota details from error body", exc_info=True)
     return None, None
 
 
@@ -347,7 +347,7 @@ def get_retry_after(error: Exception) -> Optional[int]:
                 if result is not None:
                     return result
         except Exception:
-            pass  # Response body may not be available
+            lib_logger.debug("Response body unavailable for retry-after extraction", exc_info=True)
 
         # Fallback to HTTP headers
         headers = error.response.headers
@@ -886,8 +886,8 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                 if hasattr(e, "response") and hasattr(e.response, "text"):
                     try:
                         error_body = e.response.text
-                    except Exception:
-                        pass
+                    except (AttributeError, OSError):
+                        lib_logger.debug("Could not read error response text", exc_info=True)
                 elif hasattr(e, "body"):
                     error_body = str(e.body)
 
@@ -944,7 +944,8 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
         # Try to get error body for better classification
         try:
             error_body = e.response.text.lower() if hasattr(e.response, "text") else ""
-        except Exception:
+        except (AttributeError, OSError):
+            lib_logger.debug("Could not read httpx error response body", exc_info=True)
             error_body = ""
 
         if status_code == 401:
@@ -972,8 +973,8 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                     response_text = e.response.text if hasattr(e.response, "text") else ""
                     if response_text:
                         quota_value, quota_id = _extract_quota_details(response_text)
-                except Exception:
-                    pass
+                except (AttributeError, OSError):
+                    lib_logger.debug("Could not read error response for quota details", exc_info=True)
                 return ClassifiedError(
                     error_type="quota_exceeded",
                     original_exception=e,
@@ -1169,8 +1170,8 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                     if hasattr(e, "response") and hasattr(e.response, "text"):
                         try:
                             error_body = e.response.text
-                        except Exception:
-                            pass
+                        except (AttributeError, OSError):
+                            lib_logger.debug("Could not read error response text for quota parse", exc_info=True)
                     elif hasattr(e, "body"):
                         error_body = str(e.body)
                     # Also try the full string as body fallback
@@ -1187,8 +1188,8 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                             retry_after=retry_after,
                             quota_reset_timestamp=quota_reset_timestamp,
                         )
-            except Exception:
-                pass
+            except (KeyError, TypeError, ValueError):
+                lib_logger.debug(f"Provider-specific quota parse failed for '{provider}'", exc_info=True)
 
         return ClassifiedError(
             error_type="invalid_request",

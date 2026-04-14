@@ -14,13 +14,16 @@ REM This must be set BEFORE Python imports aiohttp
 set AIOHTTP_NO_EXTENSIONS=1
 
 echo.
-echo Запуск прокси-сервера на http://127.0.0.1:8000
+if "%PROXY_HOST%"=="" set PROXY_HOST=127.0.0.1
+if "%PROXY_PORT%"=="" set PROXY_PORT=8000
+
+echo Запуск прокси-сервера на http://%PROXY_HOST%:%PROXY_PORT%
 echo.
 echo.
 echo Для остановки нажмите Ctrl+C
 echo ========================================
 echo.
 
-python src/proxy_app/main.py --host 127.0.0.1 --port 8000
+python src/proxy_app/main.py --host %PROXY_HOST% --port %PROXY_PORT%
 
 pause

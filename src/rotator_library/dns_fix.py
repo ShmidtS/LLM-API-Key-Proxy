@@ -364,6 +364,3 @@ def apply_dns_fix():
         f"[DNS-FIX] Patched socket.getaddrinfo to use custom DNS: {dns_host}:{dns_port}"
     )
 
-
-# Auto-apply when module is imported
-apply_dns_fix()

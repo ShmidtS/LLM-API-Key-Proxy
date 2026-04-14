@@ -7,9 +7,12 @@
 # When aiodns is installed, aiohttp uses it by default but it may fail to resolve
 # domains that work fine with system DNS (ping works but aiohttp fails)
 import os
+import sys
 
-# Always disable aiodns to use system DNS resolver
-os.environ["AIOHTTP_NO_EXTENSIONS"] = "1"
+# Disable aiodns C extensions on Windows only (breaks DNS resolution there).
+# Linux/macOS keep C extensions for performance.
+if sys.platform == "win32":
+    os.environ["AIOHTTP_NO_EXTENSIONS"] = "1"
 
 import time
 import orjson
@@ -17,7 +20,6 @@ import orjson
 # Phase 1: Minimal imports for arg parsing and TUI
 import asyncio
 from pathlib import Path
-import sys
 import argparse
 import logging
 import re
@@ -197,6 +199,7 @@ from proxy_app.dependencies import (
     get_embedding_batcher,
     verify_api_key,
     verify_anthropic_api_key,
+    _streams_lock,
 )
 from proxy_app.streaming import streaming_response_wrapper, handle_litellm_error
 
@@ -246,6 +249,7 @@ print(
 # Import path utilities here (after loading screen) to avoid triggering heavy imports early
 from rotator_library.utils.paths import get_logs_dir, get_data_file
 from rotator_library.utils.json_utils import sse_data_event
+from rotator_library.utils.terminal_utils import clear_screen
 
 LOG_DIR = get_logs_dir(_root_dir)
 
@@ -322,6 +326,7 @@ _BEARER_PROXY_API_KEY = f"Bearer {PROXY_API_KEY}" if PROXY_API_KEY else None
 
 # Inject API key config into dependencies module so route handlers can use it
 from proxy_app import dependencies as _deps
+
 _deps.PROXY_API_KEY = PROXY_API_KEY
 _deps._BEARER_PROXY_API_KEY = _BEARER_PROXY_API_KEY
 
@@ -330,15 +335,18 @@ OVERRIDE_TEMP_ZERO = os.getenv("OVERRIDE_TEMPERATURE_ZERO", "false").lower()
 
 # Inject into chat route module
 from proxy_app.routes import chat as _chat_mod
+
 _chat_mod.OVERRIDE_TEMP_ZERO = OVERRIDE_TEMP_ZERO
 _chat_mod.ENABLE_RAW_LOGGING = ENABLE_RAW_LOGGING
 
 # Inject into embeddings route module
 from proxy_app.routes import embeddings as _emb_mod
+
 _emb_mod.USE_EMBEDDING_BATCHER = USE_EMBEDDING_BATCHER
 
 # Inject into anthropic route module
 from proxy_app.routes import anthropic as _anthro_mod
+
 _anthro_mod.ENABLE_RAW_LOGGING = ENABLE_RAW_LOGGING
 
 # Discover API keys from environment variables
@@ -419,12 +427,14 @@ async def lifespan(app: FastAPI):
     # High-TPS providers (fireworks, friendli) forcefully close connections
     # after streaming, causing socket.shutdown() to throw in cleanup callbacks.
     if sys.platform == "win32":
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _suppress_connection_reset(loop, context):
             exc = context.get("exception")
             if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
-                return  # Silently ignore - remote closed connection, not an error
+                msg = str(exc).lower()
+                if "send" in msg or "socket" in msg:
+                    return  # Disconnected client, not a provider auth failure
             loop.default_exception_handler(context)
 
         loop.set_exception_handler(_suppress_connection_reset)
@@ -639,6 +649,7 @@ async def lifespan(app: FastAPI):
     # Log loaded credentials summary (compact, always visible for deployment verification)
     client.background_refresher.start()  # Start the background task
     app.state.rotating_client = client
+    app.state.active_streams = 0
 
     # Warn if no provider credentials are configured
     if not client.all_credentials:
@@ -670,6 +681,21 @@ async def lifespan(app: FastAPI):
         )
 
     yield
+
+    # Grace period: allow in-flight streaming responses to complete
+    try:
+        logging.info("Shutdown requested, waiting up to 5s for active streams...")
+        for _ in range(50):
+            with _streams_lock:
+                if not getattr(app.state, "active_streams", 0):
+                    break
+            await asyncio.sleep(0.1)
+        with _streams_lock:
+            remaining = getattr(app.state, "active_streams", 0)
+        if remaining:
+            logging.warning("Forcing shutdown with %d active streams", remaining)
+    except Exception:
+        pass
 
     await client.background_refresher.stop()  # Stop the background task on shutdown
     close_doh_client()  # Close persistent DoH httpx.Client
@@ -763,9 +789,7 @@ if __name__ == "__main__":
 
     def show_onboarding_message():
         """Display clear explanatory message for why onboarding is needed."""
-        os.system(
-            "cls" if os.name == "nt" else "clear"
-        )  # Clear terminal for clean presentation
+        clear_screen()
         console.print(
             Panel.fit(
                 "[bold cyan]🚀 LLM API Key Proxy - First Time Setup[/bold cyan]",

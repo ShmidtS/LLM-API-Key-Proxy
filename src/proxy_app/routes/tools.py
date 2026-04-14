@@ -104,8 +104,8 @@ async def web_search(
                           litellm.ServiceUnavailableError, litellm.APIConnectionError,
                           litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
             raise handle_litellm_error(e, error_format="openai")
-        logging.error(f"Web search request failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error(f"Tool operation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/v1/tools/tokenizer")
@@ -130,8 +130,10 @@ async def tool_tokenizer(
         )
 
     except Exception as e:
-        logging.error(f"Tokenizer tool request failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if isinstance(e, (litellm.InvalidRequestError, ValueError, litellm.AuthenticationError, litellm.RateLimitError, litellm.ServiceUnavailableError, litellm.APIConnectionError, litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
+            raise handle_litellm_error(e, error_format="openai")
+        logging.error(f"Tool operation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/v1/tools/layout-parsing")
@@ -156,8 +158,10 @@ async def tool_layout_parsing(
         )
 
     except Exception as e:
-        logging.error(f"Layout parsing tool request failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if isinstance(e, (litellm.InvalidRequestError, ValueError, litellm.AuthenticationError, litellm.RateLimitError, litellm.ServiceUnavailableError, litellm.APIConnectionError, litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
+            raise handle_litellm_error(e, error_format="openai")
+        logging.error(f"Tool operation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/v1/tools/web-reader")
@@ -182,5 +186,7 @@ async def tool_web_reader(
         )
 
     except Exception as e:
-        logging.error(f"Web reader tool request failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if isinstance(e, (litellm.InvalidRequestError, ValueError, litellm.AuthenticationError, litellm.RateLimitError, litellm.ServiceUnavailableError, litellm.APIConnectionError, litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
+            raise handle_litellm_error(e, error_format="openai")
+        logging.error(f"Tool operation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")

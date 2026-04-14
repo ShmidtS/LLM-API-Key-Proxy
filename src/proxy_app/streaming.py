@@ -8,6 +8,7 @@ from typing import AsyncGenerator, Any, Optional
 from fastapi import HTTPException, Request
 from rotator_library import STREAM_DONE
 from rotator_library.utils.json_utils import sse_data_event
+from proxy_app.dependencies import _inc_streams, _dec_streams
 from proxy_app.detailed_logger import RawIOLogger
 
 import litellm
@@ -36,6 +37,12 @@ async def streaming_response_wrapper(
     first_chunk_meta = None  # {id, created, model} from first chunk
     _chunk_count = 0
     _last_disconnect_check = time.monotonic()
+
+    # Track active streaming connections for graceful shutdown
+    try:
+        _inc_streams(request)
+    except AttributeError:
+        pass
 
     try:
         async for chunk in response_stream:
@@ -157,6 +164,10 @@ async def streaming_response_wrapper(
             )
         return  # Stop further processing
     finally:
+        try:
+            _dec_streams(request)
+        except AttributeError:
+            pass
         if logger:
             if first_chunk_meta is not None:
                 # --- Join accumulated string parts ---

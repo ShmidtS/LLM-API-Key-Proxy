@@ -1103,9 +1103,6 @@ async def _edit_oauth_credential_menu():
         console.print(f"[bold red]Error: {e}[/bold red]")
 
 
-
-
-
 def ensure_env_defaults():
     """
     Ensures the .env file exists and contains essential default values like PROXY_API_KEY.
@@ -2688,9 +2685,7 @@ def run_credential_tool(from_launcher=False):
 
         _elapsed = time.time() - _start_time
         _, _plugins = _ensure_providers_loaded()
-        print(
-            f"✓ Tool ready in {_elapsed:.2f}s ({len(_plugins)} providers available)"
-        )
+        print(f"✓ Tool ready in {_elapsed:.2f}s ({len(_plugins)} providers available)")
 
         # Small delay to let user see the ready message
         time.sleep(0.5)

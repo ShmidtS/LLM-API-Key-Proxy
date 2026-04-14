@@ -19,7 +19,6 @@ import asyncio
 import atexit
 import orjson
 import os
-import shutil
 import tempfile
 import threading
 import time
@@ -201,14 +200,13 @@ class BufferedWriteRegistry(metaclass=SingletonMeta):
                     f.write(content)
                     tmp_fd = None
 
-                # Set secure permissions if requested
-                if options.get("secure_permissions"):
+                if options.get("secure_permissions") and os.name != "nt":
                     try:
                         os.chmod(tmp_path, 0o600)
                     except (OSError, AttributeError):
                         pass
 
-                shutil.move(tmp_path, path)
+                os.replace(tmp_path, path)
                 tmp_path = None
 
             finally:
@@ -437,8 +435,7 @@ class ResilientStateWriter:
                     f.write(content)
                     tmp_fd = None  # fdopen closes the fd
 
-                # Atomic move
-                shutil.move(tmp_path, self.path)
+                os.replace(tmp_path, self.path)
                 tmp_path = None
 
             finally:
@@ -562,15 +559,13 @@ def safe_write_json(
                     f.write(content)
                     tmp_fd = None
 
-                # Set secure permissions if requested (before move for security)
-                if secure_permissions:
+                if secure_permissions and os.name != "nt":
                     try:
                         os.chmod(tmp_path, 0o600)
                     except (OSError, AttributeError):
-                        # Windows may not support chmod, ignore
                         pass
 
-                shutil.move(tmp_path, path)
+                os.replace(tmp_path, path)
                 tmp_path = None
             finally:
                 if tmp_fd is not None:
@@ -587,8 +582,7 @@ def safe_write_json(
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
 
-            # Set secure permissions if requested
-            if secure_permissions:
+            if secure_permissions and os.name != "nt":
                 try:
                     os.chmod(path, 0o600)
                 except (OSError, AttributeError):

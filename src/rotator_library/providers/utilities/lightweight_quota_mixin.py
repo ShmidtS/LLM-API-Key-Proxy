@@ -39,10 +39,14 @@ class LightweightQuotaMixin:
     """
 
     _virtual_model_name: str = ""
-    _quota_cache: Dict[str, Dict[str, Any]] = {}
+    _quota_cache: Dict[str, Dict[str, Any]] = None
     _quota_refresh_interval: int = 300
     provider_name: str = ""
     _include_max_requests: bool = True
+
+    def __init__(self, **kwargs):
+        self._quota_cache = {}
+        super().__init__(**kwargs)
 
     # =====================================================================
     # HTTP HELPERS (from SimpleQuotaTrackerBase)

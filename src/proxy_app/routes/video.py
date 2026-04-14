@@ -42,8 +42,8 @@ async def video_generate(
                           litellm.ServiceUnavailableError, litellm.APIConnectionError,
                           litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
             raise handle_litellm_error(e, error_format="openai")
-        logging.error(f"Video generation request failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error(f"Video operation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/v1/video/{video_id}/status")
@@ -60,5 +60,7 @@ async def video_status(
         )
 
     except Exception as e:
-        logging.error(f"Video status check failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if isinstance(e, (litellm.InvalidRequestError, ValueError, litellm.AuthenticationError, litellm.RateLimitError, litellm.ServiceUnavailableError, litellm.APIConnectionError, litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
+            raise handle_litellm_error(e, error_format="openai")
+        logging.error(f"Video operation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")

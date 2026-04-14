@@ -9,7 +9,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from rotator_library import RotatingClient
-from proxy_app.dependencies import get_rotating_client, verify_api_key
+from proxy_app.dependencies import get_rotating_client, verify_api_key, make_error_response
 from proxy_app.streaming import streaming_response_wrapper, handle_litellm_error
 from proxy_app.detailed_logger import RawIOLogger
 from proxy_app.request_logger import log_request_to_console
@@ -138,4 +138,4 @@ async def chat_completions(
                 raw_logger.log_final_response(
                     status_code=500, headers=None, body={"error": str(e)}
                 )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=make_error_response(str(e), "api_error"))

@@ -387,24 +387,6 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                 f"Quota failure counter reset for {mask_credential(credential_id)}"
             )
 
-    def _is_client_usable(self, client: Optional[httpx.AsyncClient]) -> bool:
-        """
-        Check if an HTTP client is usable for requests.
-
-        This is more thorough than just checking is_closed - it also checks
-        the internal transport state which can be closed independently.
-
-        Args:
-            client: The client to check
-
-        Returns:
-            True if the client is usable, False otherwise
-        """
-        if client is None:
-            return False
-        if client.is_closed:
-            return False
-        return True
 
     async def _ensure_http_pool(self) -> HttpClientPool:
         """
@@ -517,12 +499,6 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         """Property that returns client from pool (non-streaming by default)."""
         return self._get_http_client(streaming=False)
 
-    def _parse_custom_cap_env_key(
-        self, remainder: str
-    ) -> Tuple[Optional[Union[int, Tuple[int, ...], str]], Optional[str]]:
-        """Delegate to client_config.parse_custom_cap_env_key."""
-        from ..client_config import parse_custom_cap_env_key
-        return parse_custom_cap_env_key(remainder)
 
     def _is_model_ignored(self, provider: str, model_id: str) -> bool:
         """
