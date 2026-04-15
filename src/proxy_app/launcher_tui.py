@@ -16,6 +16,8 @@ import sys
 if sys.platform == "win32":
     os.environ["AIOHTTP_NO_EXTENSIONS"] = "1"
 
+import orjson
+
 import json
 import logging
 
@@ -241,7 +243,7 @@ class SettingsDetector:
             if key.endswith("_MODELS"):
                 provider = key.replace("_MODELS", "").lower()
                 try:
-                    parsed = json.loads(value)
+                    parsed = orjson.loads(value)
                     if isinstance(parsed, dict):
                         models[provider] = len(parsed)
                     elif isinstance(parsed, list):

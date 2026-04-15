@@ -18,6 +18,13 @@ import time
 # Phase 1: Minimal imports for arg parsing and TUI
 import asyncio
 from pathlib import Path
+
+# Set Windows Selector event loop policy BEFORE any async operations.
+# ProactorEventLoop (default on Windows Python 3.12+) causes:
+# - ConnectionResetError spam after streaming
+# - File descriptor issues with selector-based libraries (aiohttp)
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 import argparse
 import logging
 import re
@@ -178,7 +185,7 @@ print("  → Initializing proxy core...")
 with _console.status("[dim]Initializing proxy core...", spinner="dots"):
     from rotator_library import RotatingClient
     from rotator_library.credential_manager import CredentialManager
-    from rotator_library.dns_fix import close_doh_client
+    from rotator_library.dns_fix import close_doh_client, close_dns_executor
     from rotator_library.model_info_service import init_model_info_service
     from proxy_app.batch_manager import EmbeddingBatcher
 
@@ -208,7 +215,8 @@ print(
 
 # Clear screen and reprint header for clean startup view
 # This pushes loading messages up (still in scroll history) but shows a clean final screen
-os.system("cls" if os.name == "nt" else "clear")
+sys.stdout.write("\033[2J\033[H")
+sys.stdout.flush()
 
 # Reprint header
 print("━" * 70)
@@ -683,11 +691,11 @@ async def lifespan(app: FastAPI):
     try:
         logging.info("Shutdown requested, waiting up to 5s for active streams...")
         for _ in range(50):
-            with _streams_lock:
+            async with _streams_lock:
                 if not getattr(app.state, "active_streams", 0):
                     break
             await asyncio.sleep(0.1)
-        with _streams_lock:
+        async with _streams_lock:
             remaining = getattr(app.state, "active_streams", 0)
         if remaining:
             logging.warning("Cancelling %d remaining active streams", remaining)
@@ -706,6 +714,7 @@ async def lifespan(app: FastAPI):
 
     await client.background_refresher.stop()  # Stop the background task on shutdown
     close_doh_client()  # Close persistent DoH httpx.Client
+    close_dns_executor()  # Shutdown DNS thread pool
     if app.state.embedding_batcher:
         await app.state.embedding_batcher.stop()
     await client.close()  # Also calls close_http_pool()

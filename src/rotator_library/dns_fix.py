@@ -66,6 +66,10 @@ _original_getaddrinfo = socket.getaddrinfo
 _dns_cache: Dict[str, Tuple[List[str], float]] = {}
 _dns_cache_lock = threading.RLock()
 
+# Module-level singleton executor for async-context DNS resolution.
+# Avoids creating/destroying a ThreadPoolExecutor on every call.
+_dns_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="dns-resolver")
+
 
 def get_dns_cache_ttl() -> int:
     """Get DNS cache TTL from config."""
@@ -154,6 +158,14 @@ def close_doh_client() -> None:
     if _doh_client is not None:
         _doh_client.close()
         _doh_client = None
+
+
+def close_dns_executor() -> None:
+    """Shut down the module-level DNS ThreadPoolExecutor (call during shutdown)."""
+    global _dns_executor
+    if _dns_executor is not None:
+        _dns_executor.shutdown(wait=False)
+        _dns_executor = None
 
 
 def _doh_query(host: str, doh_url: str) -> Optional[str]:
@@ -357,17 +369,20 @@ def _custom_getaddrinfo(
         # No running loop — sync context, call directly
         return _custom_getaddrinfo_sync(host, port, family, type, proto, flags)
 
+    # Cache-first: avoid threading overhead for already-resolved hosts.
+    if host in CUSTOM_DNS_HOSTS:
+        cached = _get_cached_ips(host)
+        if cached:
+            ip = cached[0]
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
+
     # Inside an async event loop — run in thread to avoid blocking the loop.
     # We block the calling sync thread until the executor finishes, which is
     # fine because the event loop continues running on other threads.
-    _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-    try:
-        future = _executor.submit(
-            _custom_getaddrinfo_sync, host, port, family, type, proto, flags
-        )
-        return future.result(timeout=10)
-    finally:
-        _executor.shutdown(wait=False)
+    future = _dns_executor.submit(
+        _custom_getaddrinfo_sync, host, port, family, type, proto, flags
+    )
+    return future.result(timeout=10)
 
 
 def apply_dns_fix():

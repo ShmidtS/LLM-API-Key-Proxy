@@ -4,7 +4,6 @@
 import hmac
 import asyncio
 import logging
-import threading
 from typing import AsyncGenerator, Any
 
 logger = logging.getLogger(__name__)
@@ -25,30 +24,30 @@ anthropic_api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 PROXY_API_KEY: str = None
 _BEARER_PROXY_API_KEY: str = None
 
-_streams_lock = threading.Lock()
+_streams_lock = asyncio.Lock()
 
 
-def _inc_streams(request):
-    with _streams_lock:
+async def _inc_streams(request):
+    async with _streams_lock:
         request.app.state.active_streams += 1
 
 
-def _dec_streams(request):
-    with _streams_lock:
+async def _dec_streams(request):
+    async with _streams_lock:
         request.app.state.active_streams -= 1
 
 
-def _register_stream_gen(request, gen):
+async def _register_stream_gen(request, gen):
     """Register a stream generator for graceful shutdown cancellation."""
-    with _streams_lock:
+    async with _streams_lock:
         if not hasattr(request.app.state, "active_stream_gens"):
             request.app.state.active_stream_gens = []
         request.app.state.active_stream_gens.append(gen)
 
 
-def _unregister_stream_gen(request, gen):
+async def _unregister_stream_gen(request, gen):
     """Unregister a stream generator after completion."""
-    with _streams_lock:
+    async with _streams_lock:
         gens = getattr(request.app.state, "active_stream_gens", None)
         if gens and gen in gens:
             gens.remove(gen)
@@ -75,10 +74,10 @@ def make_error_response(message: str, error_type: str = "api_error", code: str |
 async def track_stream(request: Request, stream: AsyncGenerator[Any, None]) -> AsyncGenerator[Any, None]:
     """Wrap an async generator to track active streaming connections for graceful shutdown."""
     try:
-        _inc_streams(request)
+        await _inc_streams(request)
     except AttributeError:
         logger.debug("track_stream: request lacks stream counter attribute")
-    _register_stream_gen(request, stream)
+    await _register_stream_gen(request, stream)
     try:
         async for chunk in stream:
             yield chunk
@@ -87,9 +86,9 @@ async def track_stream(request: Request, stream: AsyncGenerator[Any, None]) -> A
             await stream.aclose()
         raise
     finally:
-        _unregister_stream_gen(request, stream)
+        await _unregister_stream_gen(request, stream)
         try:
-            _dec_streams(request)
+            await _dec_streams(request)
         except AttributeError:
             logger.debug("track_stream: request lacks stream counter attribute on decrement")
 

@@ -14,6 +14,8 @@ from typing import (
     Tuple,
 )
 import re
+import orjson
+
 import json
 import logging
 import os
@@ -277,7 +279,7 @@ class ProviderInterface(ABC):
         try:
             json_match = re.search(r"\{[\s\S]*\}", body)
             if json_match:
-                data = json.loads(json_match.group(0))
+                data = orjson.loads(json_match.group(0))
         except (json.JSONDecodeError, ValueError):
             pass
 

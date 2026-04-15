@@ -206,7 +206,7 @@ class ModelDefinitionManager:
         value = os.getenv(key)
         if value:
             try:
-                return json.loads(value)
+                return orjson.loads(value)
             except (json.JSONDecodeError, ValueError):
                 return None
         return None
@@ -218,7 +218,7 @@ class ModelDefinitionManager:
             if key.endswith("_MODELS"):
                 provider = key.replace("_MODELS", "").lower()
                 try:
-                    parsed = json.loads(value)
+                    parsed = orjson.loads(value)
                     if isinstance(parsed, dict):
                         providers[provider] = len(parsed)
                     elif isinstance(parsed, list):
@@ -995,7 +995,7 @@ class SettingsTool:
                     # Get new model count from pending
                     new_val = self.settings.pending_changes[key]
                     try:
-                        parsed = json.loads(new_val)
+                        parsed = orjson.loads(new_val)
                         new_count = (
                             len(parsed) if isinstance(parsed, (dict, list)) else 0
                         )
@@ -1020,7 +1020,7 @@ class SettingsTool:
                     if provider not in all_models:
                         new_val = self.settings.pending_changes[key]
                         try:
-                            parsed = json.loads(new_val)
+                            parsed = orjson.loads(new_val)
                             new_count = (
                                 len(parsed) if isinstance(parsed, (dict, list)) else 0
                             )
