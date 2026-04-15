@@ -60,6 +60,11 @@ DEFAULT_ROTATION_TOLERANCE: float = 3.0
 # Maximum retries per credential before rotating
 DEFAULT_MAX_RETRIES: int = 2
 
+# Maximum total API call attempts across ALL credentials before failing
+# Caps N_credentials * max_retries to prevent excessive API calls (e.g. 50 creds * 2 = 100 calls)
+# Override via environment variable: MAX_TOTAL_ATTEMPTS=<count>
+MAX_TOTAL_ATTEMPTS: int = env_int("MAX_TOTAL_ATTEMPTS", 10)
+
 # Global request timeout in seconds
 # This controls how long a request can wait for an available credential.
 # If all credentials are on cooldown and the soonest one won't be available
@@ -338,6 +343,34 @@ IP_THROTTLE_DETECTION_DISABLED: bool = False
 # Override via environment: KILOCODE_BACKOFF_BASE, KILOCODE_MAX_BACKOFF
 KILOCODE_BACKOFF_BASE: float = 1.0  # Base multiplier for server errors
 KILOCODE_MAX_BACKOFF: float = 30.0  # Maximum backoff in seconds
+
+# =============================================================================
+# ADAPTIVE RATE LIMITER DEFAULTS
+# =============================================================================
+# Proactive per-provider request pacing with AIMD rate adjustment.
+# Disabled by default. Enable via ADAPTIVE_RATE_LIMIT_ENABLED=true.
+
+# Enable adaptive rate limiter
+# Override: ADAPTIVE_RATE_LIMIT_ENABLED=true
+ADAPTIVE_RATE_LIMIT_ENABLED: bool = env_bool("ADAPTIVE_RATE_LIMIT_ENABLED", False)
+
+# Initial requests per second per provider
+ADAPTIVE_RATE_LIMIT_INITIAL_RPS: float = 10.0
+
+# Minimum rps floor (never decrease below this)
+ADAPTIVE_RATE_LIMIT_MIN_RPS: float = 1.0
+
+# Maximum rps ceiling
+ADAPTIVE_RATE_LIMIT_MAX_RPS: float = 100.0
+
+# Multiplicative decrease factor on 429 (0.5 = halve rate)
+ADAPTIVE_RATE_LIMIT_DECREASE_FACTOR: float = 0.5
+
+# Additive increase per interval (rps)
+ADAPTIVE_RATE_LIMIT_INCREASE_RPS: float = 1.0
+
+# Seconds between rate increases
+ADAPTIVE_RATE_LIMIT_INCREASE_INTERVAL: float = 30.0
 
 # =============================================================================
 # COOLDOWN DISABLE FLAGS (from theblazehen fork)

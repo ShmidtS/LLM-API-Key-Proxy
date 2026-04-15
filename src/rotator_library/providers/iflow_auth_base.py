@@ -78,8 +78,8 @@ class OAuthCallbackServer:
         self.result_future: Optional[asyncio.Future] = None
         self.expected_state: Optional[str] = None
 
-    def _is_port_available(self) -> bool:
-        """Checks if the callback port is available."""
+    def _is_port_available_sync(self) -> bool:
+        """Checks if the callback port is available (blocking)."""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.bind(("", self.port))
@@ -88,9 +88,14 @@ class OAuthCallbackServer:
         except OSError:
             return False
 
+    async def _is_port_available(self) -> bool:
+        """Checks if the callback port is available (non-blocking on Windows ProactorEventLoop)."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._is_port_available_sync)
+
     async def start(self, expected_state: str):
         """Starts the OAuth callback server."""
-        if not self._is_port_available():
+        if not await self._is_port_available():
             raise RuntimeError(f"Port {self.port} is already in use")
 
         self.expected_state = expected_state

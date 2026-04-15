@@ -87,7 +87,11 @@ from ..anthropic_compat.models import (
 from ..model_definitions import ModelDefinitions
 from ..utils.paths import get_default_root, get_logs_dir, get_oauth_dir
 from ..utils.suppress_litellm_warnings import suppress_litellm_serialization_warnings
-from ..utils.model_utils import extract_provider_from_model, get_or_create_provider_instance, normalize_model_string
+from ..utils.model_utils import (
+    extract_provider_from_model,
+    get_or_create_provider_instance,
+    normalize_model_string,
+)
 from ..utils.provider_registry import get_provider_registry
 from ..config import (
     DEFAULT_MAX_RETRIES,
@@ -223,6 +227,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
 
         # Build all provider-specific configuration via extracted module
         from ..client_config import build_all_provider_configs
+
         provider_configs = build_all_provider_configs(
             self.all_credentials, self._provider_plugins
         )
@@ -239,13 +244,19 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
             provider_rotation_modes=provider_configs["provider_rotation_modes"],
             provider_plugins=PROVIDER_PLUGINS,
             priority_multipliers=provider_configs["priority_multipliers"],
-            priority_multipliers_by_mode=provider_configs["priority_multipliers_by_mode"],
-            sequential_fallback_multipliers=provider_configs["sequential_fallback_multipliers"],
+            priority_multipliers_by_mode=provider_configs[
+                "priority_multipliers_by_mode"
+            ],
+            sequential_fallback_multipliers=provider_configs[
+                "sequential_fallback_multipliers"
+            ],
             fair_cycle_enabled=provider_configs["fair_cycle_enabled"],
             fair_cycle_tracking_mode=provider_configs["fair_cycle_tracking_mode"],
             fair_cycle_cross_tier=provider_configs["fair_cycle_cross_tier"],
             fair_cycle_duration=provider_configs["fair_cycle_duration"],
-            exhaustion_cooldown_threshold=provider_configs["exhaustion_cooldown_threshold"],
+            exhaustion_cooldown_threshold=provider_configs[
+                "exhaustion_cooldown_threshold"
+            ],
             custom_caps=provider_configs["custom_caps"],
             credential_to_provider=self._build_credential_to_provider_map(),
         )
@@ -258,6 +269,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
 
         # Credential priority cache for fast lookups (TTL=300s, auto-expiry)
         from cachetools import TTLCache
+
         self._credential_priority_cache: TTLCache = TTLCache(maxsize=64, ttl=300)
 
         self.provider_config = ProviderConfig()
@@ -268,6 +280,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         self.cooldown_manager = self._resilience.cooldown
         self.ip_throttle_detector = self._resilience.ip_throttle
         self.circuit_breaker = self._resilience.circuit_breaker
+        self.rate_limiter = self._resilience.rate_limiter
         self.litellm_provider_params = litellm_provider_params or {}
         self.ignore_models = ignore_models or {}
         self.whitelist_models = whitelist_models or {}
@@ -335,39 +348,6 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                         litellm_kwargs[key] = value
 
         return litellm_kwargs
-
-    def increment_quota_failures(self, credential_id: str) -> bool:
-        """
-        Increment consecutive quota failure counter for a credential.
-
-        Args:
-            credential_id: The credential identifier
-
-        Returns:
-            True if rotation is needed (>= 3 consecutive failures), False otherwise
-        """
-        self._consecutive_quota_failures[credential_id] = (
-            self._consecutive_quota_failures.get(credential_id, 0) + 1
-        )
-        count = self._consecutive_quota_failures[credential_id]
-        lib_logger.debug(
-            f"Quota failure increment for {mask_credential(credential_id)}: {count}/3"
-        )
-        return count >= 3
-
-    def reset_quota_failures(self, credential_id: str) -> None:
-        """
-        Reset consecutive quota failure counter for a credential on success.
-
-        Args:
-            credential_id: The credential identifier
-        """
-        if credential_id in self._consecutive_quota_failures:
-            del self._consecutive_quota_failures[credential_id]
-            lib_logger.debug(
-                f"Quota failure counter reset for {mask_credential(credential_id)}"
-            )
-
 
     async def _ensure_http_pool(self) -> HttpClientPool:
         """
@@ -438,9 +418,9 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
 
         return list(set(endpoints))[:5]  # Dedupe and limit
 
-    def _get_http_client(self, streaming: bool = False) -> httpx.AsyncClient:
+    async def _get_http_client(self, streaming: bool = False) -> httpx.AsyncClient:
         """
-        Get HTTP client from the pool (sync version for compatibility).
+        Get HTTP client from the pool (async version with lock protection).
 
         Prefer _get_http_client_async() for production use.
 
@@ -455,7 +435,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         if self._http_pool is None:
             lib_logger.warning("HTTP pool accessed before initialization")
             self._http_pool = HttpClientPool()
-        return self._http_pool.get_client(streaming=streaming)
+        return await self._http_pool.get_client_async(streaming=streaming)
 
     async def _get_http_client_async(
         self, streaming: bool = False
@@ -475,11 +455,9 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         pool = await self._ensure_http_pool()
         return await pool.get_client_async(streaming=streaming)
 
-    @property
-    def http_client(self) -> httpx.AsyncClient:
-        """Property that returns client from pool (non-streaming by default)."""
-        return self._get_http_client(streaming=False)
-
+    async def http_client(self) -> httpx.AsyncClient:
+        """Async property that returns client from pool (non-streaming by default)."""
+        return await self._get_http_client(streaming=False)
 
     def _is_model_ignored(self, provider: str, model_id: str) -> bool:
         """
@@ -899,7 +877,9 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         shuffled_credentials = list(credentials_for_provider)
         offset = self._cred_offset.get(provider, 0)
         self._cred_offset[provider] = (offset + 1) % len(shuffled_credentials)
-        shuffled_credentials = shuffled_credentials[offset:] + shuffled_credentials[:offset]
+        shuffled_credentials = (
+            shuffled_credentials[offset:] + shuffled_credentials[:offset]
+        )
 
         provider_instance = self._get_provider_instance(provider)
         if provider_instance:
@@ -985,7 +965,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
 
     @property
     def quota_reporter(self):
-        if not hasattr(self, '_quota_reporter_instance'):
+        if not hasattr(self, "_quota_reporter_instance"):
             self._quota_reporter_instance = QuotaReporter(
                 self.usage_manager,
                 self._provider_plugins,
@@ -1071,7 +1051,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
 
     @property
     def anthropic_adapter(self):
-        if not hasattr(self, '_anthropic_adapter_instance'):
+        if not hasattr(self, "_anthropic_adapter_instance"):
             self._anthropic_adapter_instance = AnthropicAdapter(
                 self.acompletion,
                 self.token_count,

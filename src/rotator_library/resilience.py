@@ -15,12 +15,13 @@ from .circuit_breaker import ProviderCircuitBreaker
 from .cooldown_manager import CooldownManager
 from .error_handler import ThrottleActionType, handle_429_error
 from .ip_throttle_detector import IPThrottleDetector
+from .adaptive_rate_limiter import AdaptiveRateLimiter
 
 
 class ResilienceOrchestrator:
     """Delegate-only facade for client-facing resilience operations."""
 
-    __slots__ = ("cooldown", "circuit_breaker", "ip_throttle")
+    __slots__ = ("cooldown", "circuit_breaker", "ip_throttle", "rate_limiter")
 
     def __init__(
         self,
@@ -31,6 +32,7 @@ class ResilienceOrchestrator:
     ):
         self.cooldown = CooldownManager()
         self.ip_throttle = IPThrottleDetector()
+        self.rate_limiter = AdaptiveRateLimiter()
         self.circuit_breaker = ProviderCircuitBreaker(
             failure_threshold=failure_threshold,
             recovery_timeout=recovery_timeout,
@@ -75,3 +77,15 @@ class ResilienceOrchestrator:
         becomes stuck in HALF_OPEN once half_open_active reaches half_open_max.
         """
         await self.circuit_breaker.release_half_open_slot(provider)
+
+    async def acquire_rate(self, provider: str) -> float:
+        """Acquire rate limiter token. Returns wait time (0 if immediate)."""
+        return await self.rate_limiter.acquire(provider)
+
+    def record_rate_429(self, provider: str, retry_after: int = None) -> None:
+        """Record 429 in rate limiter for AIMD decrease."""
+        self.rate_limiter.record_429(provider, retry_after)
+
+    def record_rate_success(self, provider: str) -> None:
+        """Record success in rate limiter for AIMD increase."""
+        self.rate_limiter.record_success(provider)

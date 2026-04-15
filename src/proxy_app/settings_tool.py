@@ -6,6 +6,7 @@ Advanced settings configuration tool for the LLM API Key Proxy.
 Provides interactive configuration for custom providers, model definitions, and concurrency limits.
 """
 
+import orjson
 import json
 import logging
 import os
@@ -229,7 +230,7 @@ class ModelDefinitionManager:
     def set_models(self, provider: str, models: Dict[str, Dict[str, Any]]):
         """Set PROVIDER_MODELS"""
         key = f"{provider.upper()}_MODELS"
-        value = json.dumps(models)
+        value = orjson.dumps(models).decode()
         self.settings.set(key, value)
 
     def remove_models(self, provider: str):

@@ -388,9 +388,9 @@ class HelpersMixin:
 
         return list(set(endpoints))[:5]  # Dedupe and limit
 
-    def _get_http_client(self, streaming: bool = False) -> httpx.AsyncClient:
+    async def _get_http_client(self, streaming: bool = False) -> httpx.AsyncClient:
         """
-        Get HTTP client from the pool (sync version for compatibility).
+        Get HTTP client from the pool (async version with lock protection).
 
         Prefer _get_http_client_async() for production use.
 
@@ -405,7 +405,7 @@ class HelpersMixin:
         if self._http_pool is None:
             lib_logger.warning("HTTP pool accessed before initialization")
             self._http_pool = HttpClientPool()
-        return self._http_pool.get_client(streaming=streaming)
+        return await self._http_pool.get_client_async(streaming=streaming)
 
     async def _get_http_client_async(
         self, streaming: bool = False
@@ -425,10 +425,9 @@ class HelpersMixin:
         pool = await self._ensure_http_pool()
         return await pool.get_client_async(streaming=streaming)
 
-    @property
-    def http_client(self) -> httpx.AsyncClient:
-        """Property that returns client from pool (non-streaming by default)."""
-        return self._get_http_client(streaming=False)
+    async def http_client(self) -> httpx.AsyncClient:
+        """Async property that returns client from pool (non-streaming by default)."""
+        return await self._get_http_client(streaming=False)
 
     def _parse_custom_cap_env_key(
         self, remainder: str

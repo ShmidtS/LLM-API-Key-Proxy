@@ -219,10 +219,10 @@ class BufferedWriteRegistry(metaclass=SingletonMeta):
             tmp_path = None
             try:
                 tmp_fd, tmp_path = tempfile.mkstemp(
-                    dir=path.parent, prefix=".tmp_", suffix=".json", text=True
+                    dir=path.parent, prefix=".tmp_", suffix=".json"
                 )
-                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                    f.write(content)
+                with os.fdopen(tmp_fd, "wb") as f:
+                    f.write(content.encode("utf-8"))
                     tmp_fd = None
 
                 if options.get("secure_permissions") and os.name != "nt":
@@ -453,11 +453,11 @@ class ResilientStateWriter:
             tmp_path = None
             try:
                 tmp_fd, tmp_path = tempfile.mkstemp(
-                    dir=self.path.parent, prefix=".tmp_", suffix=".json", text=True
+                    dir=self.path.parent, prefix=".tmp_", suffix=".json"
                 )
 
-                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                    f.write(content)
+                with os.fdopen(tmp_fd, "wb") as f:
+                    f.write(content.encode("utf-8"))
                     tmp_fd = None  # fdopen closes the fd
 
                 _resilient_os_replace(tmp_path, self.path)
@@ -578,10 +578,10 @@ def safe_write_json(
             tmp_path = None
             try:
                 tmp_fd, tmp_path = tempfile.mkstemp(
-                    dir=path.parent, prefix=".tmp_", suffix=".json", text=True
+                    dir=path.parent, prefix=".tmp_", suffix=".json"
                 )
-                with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                    f.write(content)
+                with os.fdopen(tmp_fd, "wb") as f:
+                    f.write(content.encode("utf-8"))
                     tmp_fd = None
 
                 if secure_permissions and os.name != "nt":
@@ -732,7 +732,7 @@ class AsyncResilientStateWriter:
                     orjson.dumps(data, option=orjson.OPT_INDENT_2, default=str).decode(),
                     encoding='utf-8'
                 )
-                temp_path.replace(self.file_path)
+                _resilient_os_replace(str(temp_path), str(self.file_path))
             except Exception:
                 # Recovery: recreate directory if deleted
                 self.file_path.parent.mkdir(parents=True, exist_ok=True)

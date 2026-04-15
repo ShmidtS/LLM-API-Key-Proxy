@@ -18,6 +18,7 @@ import litellm
 import orjson
 from litellm.exceptions import APIConnectionError, BadRequestError, InvalidRequestError
 
+from ..config.defaults import MAX_TOTAL_ATTEMPTS
 from ..error_handler import (
     classify_error,
     get_retry_backoff,
@@ -196,6 +197,7 @@ class RetryMixin:
         transaction_logger = None
         if self.enable_request_logging:
             from ..transaction_logger import TransactionLogger
+
             transaction_logger = TransactionLogger(
                 provider,
                 model,
@@ -208,7 +210,9 @@ class RetryMixin:
         credentials_for_provider = list(self.all_credentials[provider])
         offset = self._cred_offset.get(provider, 0)
         self._cred_offset[provider] = (offset + 1) % len(credentials_for_provider)
-        credentials_for_provider = credentials_for_provider[offset:] + credentials_for_provider[:offset]
+        credentials_for_provider = (
+            credentials_for_provider[offset:] + credentials_for_provider[:offset]
+        )
 
         provider_plugin = self._get_provider_instance(provider)
 
@@ -252,10 +256,10 @@ class RetryMixin:
         credential_priorities = rc.credential_priorities
         credential_tier_names = rc.credential_tier_names
         error_accumulator = rc.error_accumulator
+        total_api_attempts = 0
 
         while (
-            len(tried_creds) < len(credentials_for_provider)
-            and time.time() < deadline
+            len(tried_creds) < len(credentials_for_provider) and time.time() < deadline
         ):
             current_cred = None
             key_acquired = False
@@ -265,6 +269,15 @@ class RetryMixin:
                 ]
                 if not creds_to_try:
                     break
+
+                rate_wait = await self._resilience.acquire_rate(provider)
+                if rate_wait > 0:
+                    wait = min(rate_wait, 5.0)
+                    lib_logger.debug(
+                        f"AdaptiveRateLimiter: {provider} rate-limited, waiting {wait:.1f}s"
+                    )
+                    if time.time() + wait < deadline:
+                        await asyncio.sleep(wait)
 
                 # Check circuit breaker before acquiring key
                 # Back off briefly if circuit is OPEN, then retry
@@ -332,6 +345,14 @@ class RetryMixin:
 
                     # Retry loop for custom providers - mirrors streaming path error handling
                     for attempt in range(self.max_retries):
+                        total_api_attempts += 1
+                        if total_api_attempts > MAX_TOTAL_ATTEMPTS:
+                            lib_logger.warning(
+                                f"Total API attempts ({total_api_attempts}) exceeded MAX_TOTAL_ATTEMPTS ({MAX_TOTAL_ATTEMPTS}). Aborting."
+                            )
+                            raise last_exception or NoAvailableKeysError(
+                                f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
+                            )
                         try:
                             lib_logger.info(
                                 f"Attempting call with credential {mask_credential(current_cred)} (Attempt {attempt + 1}/{self.max_retries})"
@@ -342,7 +363,9 @@ class RetryMixin:
                                     await pre_request_callback(request, litellm_kwargs)
                                 except Exception as e:
                                     if self.abort_on_callback_error:
-                                        await self._resilience.release_half_open_slot(provider)
+                                        await self._resilience.release_half_open_slot(
+                                            provider
+                                        )
                                         raise PreRequestCallbackError(
                                             f"Pre-request callback failed: {e}"
                                         ) from e
@@ -365,6 +388,7 @@ class RetryMixin:
                                     current_cred, model, response
                                 ),
                                 self._resilience.record_success(provider),
+                                self._resilience.record_rate_success(provider),
                                 self.usage_manager.release_key(current_cred, model),
                             )
                             key_acquired = False
@@ -393,7 +417,12 @@ class RetryMixin:
 
                             # Reset LiteLLM client cache on auth errors (401/403)
                             # Bad credentials can poison cached clients; don't clear on 429/500
-                            self._reset_cache_on_auth_error(classified_error, e, provider=provider, credential=current_cred)
+                            self._reset_cache_on_auth_error(
+                                classified_error,
+                                e,
+                                provider=provider,
+                                credential=current_cred,
+                            )
 
                             log_failure(
                                 api_key=current_cred,
@@ -411,7 +440,11 @@ class RetryMixin:
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
                                 await self._process_rate_limit(
-                                    provider, current_cred, e, str(e) if e else None, classified_error
+                                    provider,
+                                    current_cred,
+                                    e,
+                                    str(e) if e else None,
+                                    classified_error,
                                 )
                                 await self._resilience.release_half_open_slot(provider)
                                 lib_logger.error(
@@ -423,8 +456,13 @@ class RetryMixin:
                             # quota_exceeded / invalid_request / auth errors are per-credential
                             if classified_error.error_type == "rate_limit":
                                 await self._process_rate_limit(
-                                    provider, current_cred, e, str(e) if e else None, classified_error
+                                    provider,
+                                    current_cred,
+                                    e,
+                                    str(e) if e else None,
+                                    classified_error,
                                 )
+                                self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
 
                             # Track consecutive quota failures and force rotation if needed
                             if classified_error.error_type == "quota_exceeded":
@@ -438,7 +476,9 @@ class RetryMixin:
                                     await self.usage_manager.record_failure(
                                         current_cred, model, classified_error
                                     )
-                                    await self._resilience.release_half_open_slot(provider)
+                                    await self._resilience.release_half_open_slot(
+                                        provider
+                                    )
                                     break  # Force rotation
 
                             await self.usage_manager.record_failure(
@@ -527,7 +567,9 @@ class RetryMixin:
                     # [FIX] Remove problematic headers and add correct provider headers
                     # This ensures that authorization/x-api-key from client requests
                     # are replaced with the correct values from configuration
-                    await self._apply_provider_headers(litellm_kwargs, provider, current_cred)
+                    await self._apply_provider_headers(
+                        litellm_kwargs, provider, current_cred
+                    )
 
                     if provider_plugin:
                         # Ensure default Gemini safety settings are present (without overriding request)
@@ -541,7 +583,8 @@ class RetryMixin:
                             # If anything goes wrong here, avoid breaking the request flow.
                             lib_logger.warning(
                                 "Could not apply default safety settings for %s: %s; continuing.",
-                                provider, type(exc).__name__,
+                                provider,
+                                type(exc).__name__,
                             )
 
                         if "safety_settings" in litellm_kwargs:
@@ -556,13 +599,9 @@ class RetryMixin:
                                 del litellm_kwargs["safety_settings"]
 
                     if provider == "gemini" and provider_plugin:
-                        provider_plugin.handle_thinking_parameter(
-                            litellm_kwargs, model
-                        )
+                        provider_plugin.handle_thinking_parameter(litellm_kwargs, model)
                     if provider == "nvidia" and provider_plugin:
-                        provider_plugin.handle_thinking_parameter(
-                            litellm_kwargs, model
-                        )
+                        provider_plugin.handle_thinking_parameter(litellm_kwargs, model)
 
                     if "gemma-3" in model and "messages" in litellm_kwargs:
                         litellm_kwargs["messages"] = [
@@ -599,6 +638,14 @@ class RetryMixin:
                         litellm_kwargs["model"] = model.rsplit("/", 1)[1]
 
                     for attempt in range(self.max_retries):
+                        total_api_attempts += 1
+                        if total_api_attempts > MAX_TOTAL_ATTEMPTS:
+                            lib_logger.warning(
+                                f"Total API attempts ({total_api_attempts}) exceeded MAX_TOTAL_ATTEMPTS ({MAX_TOTAL_ATTEMPTS}). Aborting."
+                            )
+                            raise last_exception or NoAvailableKeysError(
+                                f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
+                            )
                         try:
                             lib_logger.info(
                                 f"Attempting call with credential {mask_credential(current_cred)} (Attempt {attempt + 1}/{self.max_retries})"
@@ -609,7 +656,9 @@ class RetryMixin:
                                     await pre_request_callback(request, litellm_kwargs)
                                 except Exception as e:
                                     if self.abort_on_callback_error:
-                                        await self._resilience.release_half_open_slot(provider)
+                                        await self._resilience.release_half_open_slot(
+                                            provider
+                                        )
                                         raise PreRequestCallbackError(
                                             f"Pre-request callback failed: {e}"
                                         ) from e
@@ -634,6 +683,7 @@ class RetryMixin:
                                     current_cred, model, response
                                 ),
                                 self._resilience.record_success(provider),
+                                self._resilience.record_rate_success(provider),
                                 self.usage_manager.release_key(current_cred, model),
                             )
                             key_acquired = False
@@ -679,8 +729,13 @@ class RetryMixin:
                             # quota_exceeded / invalid_request / auth errors are per-credential
                             if classified_error.error_type == "rate_limit":
                                 await self._process_rate_limit(
-                                    provider, current_cred, e, str(e) if e else None, classified_error
+                                    provider,
+                                    current_cred,
+                                    e,
+                                    str(e) if e else None,
+                                    classified_error,
                                 )
+                                self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
 
                             # Track consecutive quota failures and force rotation if needed
                             if classified_error.error_type == "quota_exceeded":
@@ -694,7 +749,9 @@ class RetryMixin:
                                     await self.usage_manager.record_failure(
                                         current_cred, model, classified_error
                                     )
-                                    await self._resilience.release_half_open_slot(provider)
+                                    await self._resilience.release_half_open_slot(
+                                        provider
+                                    )
                                     break  # Force rotation
 
                             await self.usage_manager.record_failure(
@@ -743,7 +800,9 @@ class RetryMixin:
                                 break  # Move to the next key
 
                             # For temporary errors, wait before retrying with the same key.
-                            base_wait = classified_error.retry_after or (2**attempt * random.uniform(0.5, 1.5))
+                            base_wait = classified_error.retry_after or (
+                                2**attempt * random.uniform(0.5, 1.5)
+                            )
                             wait_time = base_wait
                             remaining_budget = deadline - time.time()
 
@@ -790,7 +849,12 @@ class RetryMixin:
 
                             # Reset LiteLLM client cache on auth errors (401/403)
                             # Bad credentials can poison cached clients; don't clear on 429/500
-                            self._reset_cache_on_auth_error(classified_error, e, provider=provider, credential=current_cred)
+                            self._reset_cache_on_auth_error(
+                                classified_error,
+                                e,
+                                provider=provider,
+                                credential=current_cred,
+                            )
 
                             lib_logger.warning(
                                 f"Key {mask_credential(current_cred)} HTTP {e.response.status_code} ({classified_error.error_type})."
@@ -799,7 +863,11 @@ class RetryMixin:
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
                                 await self._process_rate_limit(
-                                    provider, current_cred, e, str(e) if e else None, classified_error
+                                    provider,
+                                    current_cred,
+                                    e,
+                                    str(e) if e else None,
+                                    classified_error,
                                 )
                                 await self._resilience.release_half_open_slot(provider)
                                 lib_logger.error(
@@ -816,8 +884,13 @@ class RetryMixin:
                             # quota_exceeded / invalid_request / auth errors are per-credential
                             if classified_error.error_type == "rate_limit":
                                 await self._process_rate_limit(
-                                    provider, current_cred, e, str(e) if e else None, classified_error
+                                    provider,
+                                    current_cred,
+                                    e,
+                                    str(e) if e else None,
+                                    classified_error,
                                 )
+                                self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
                             if classified_error.error_type == "quota_exceeded":
                                 await self._apply_quota_cooldown(
                                     provider, current_cred, classified_error
@@ -828,7 +901,9 @@ class RetryMixin:
                                 should_retry_same_key(classified_error)
                                 and attempt < self.max_retries - 1
                             ):
-                                base_wait = classified_error.retry_after or (2**attempt * random.uniform(0.5, 1.5))
+                                base_wait = classified_error.retry_after or (
+                                    2**attempt * random.uniform(0.5, 1.5)
+                                )
                                 wait_time = base_wait
                                 remaining_budget = deadline - time.time()
                                 if wait_time <= remaining_budget:
@@ -882,8 +957,13 @@ class RetryMixin:
                             # quota_exceeded / invalid_request / auth errors are per-credential
                             if classified_error.error_type == "rate_limit":
                                 await self._process_rate_limit(
-                                    provider, current_cred, e, str(e) if e else None, classified_error
+                                    provider,
+                                    current_cred,
+                                    e,
+                                    str(e) if e else None,
+                                    classified_error,
                                 )
+                                self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
                             if classified_error.error_type == "quota_exceeded":
                                 await self._apply_quota_cooldown(
                                     provider, current_cred, classified_error
@@ -953,6 +1033,7 @@ class RetryMixin:
         error_accumulator = rc.error_accumulator
 
         consecutive_quota_failures = 0
+        total_api_attempts = 0
 
         try:
             while (
@@ -971,10 +1052,21 @@ class RetryMixin:
                         )
                         break
 
+                    rate_wait = await self._resilience.acquire_rate(provider)
+                    if rate_wait > 0:
+                        wait = min(rate_wait, 5.0)
+                        lib_logger.debug(
+                            f"AdaptiveRateLimiter: {provider} rate-limited, waiting {wait:.1f}s"
+                        )
+                        if time.time() + wait < deadline:
+                            await asyncio.sleep(wait)
+
                     # Check circuit breaker before acquiring key
                     # Back off briefly if circuit is OPEN, then retry
                     if not await self._resilience.can_attempt(provider):
-                        remaining = await self._resilience.get_cooldown_remaining(provider)
+                        remaining = await self._resilience.get_cooldown_remaining(
+                            provider
+                        )
                         backoff = min(remaining, 5.0)
                         lib_logger.debug(
                             f"Circuit breaker OPEN for provider '{provider}', "
@@ -1038,7 +1130,6 @@ class RetryMixin:
                             **litellm_kwargs.get("litellm_params", {}),
                         }
 
-
                     # Model ID is already resolved before the loop, and kwargs['model'] is updated.
                     # No further resolution needed here.
 
@@ -1066,6 +1157,14 @@ class RetryMixin:
                         )
 
                         for attempt in range(self.max_retries):
+                            total_api_attempts += 1
+                            if total_api_attempts > MAX_TOTAL_ATTEMPTS:
+                                lib_logger.warning(
+                                    f"Total API attempts ({total_api_attempts}) exceeded MAX_TOTAL_ATTEMPTS ({MAX_TOTAL_ATTEMPTS}). Aborting."
+                                )
+                                raise last_exception or NoAvailableKeysError(
+                                    f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
+                                )
                             try:
                                 lib_logger.info(
                                     f"Attempting stream with credential {mask_credential(current_cred)} (Attempt {attempt + 1}/{self.max_retries})"
@@ -1078,7 +1177,9 @@ class RetryMixin:
                                         )
                                     except Exception as e:
                                         if self.abort_on_callback_error:
-                                            await self._resilience.release_half_open_slot(provider)
+                                            await self._resilience.release_half_open_slot(
+                                                provider
+                                            )
                                             raise PreRequestCallbackError(
                                                 f"Pre-request callback failed: {e}"
                                             ) from e
@@ -1113,7 +1214,9 @@ class RetryMixin:
                                 # out, or the consumer stops early.
                                 try:
                                     if transaction_logger:
-                                        async for chunk in self._transaction_logging_stream_wrapper(
+                                        async for (
+                                            chunk
+                                        ) in self._transaction_logging_stream_wrapper(
                                             stream_generator, transaction_logger, kwargs
                                         ):
                                             yield chunk
@@ -1121,7 +1224,9 @@ class RetryMixin:
                                         async for chunk in stream_generator:
                                             yield chunk
                                 finally:
-                                    await self.usage_manager.release_key(current_cred, model)
+                                    await self.usage_manager.release_key(
+                                        current_cred, model
+                                    )
                                     key_acquired = False  # prevent outer finally from double-releasing
                                 return
 
@@ -1141,7 +1246,12 @@ class RetryMixin:
                                 error_message = str(original_exc).split("\n")[0]
 
                                 # Reset LiteLLM client cache on auth errors (401/403)
-                                self._reset_cache_on_auth_error(classified_error, original_exc, provider=provider, credential=current_cred)
+                                self._reset_cache_on_auth_error(
+                                    classified_error,
+                                    original_exc,
+                                    provider=provider,
+                                    credential=current_cred,
+                                )
 
                                 log_failure(
                                     api_key=current_cred,
@@ -1161,9 +1271,15 @@ class RetryMixin:
                                 # Check if this error should trigger rotation
                                 if not should_rotate_on_error(classified_error):
                                     await self._process_rate_limit(
-                                        provider, current_cred, e, str(e) if e else None, classified_error
+                                        provider,
+                                        current_cred,
+                                        e,
+                                        str(e) if e else None,
+                                        classified_error,
                                     )
-                                    await self._resilience.release_half_open_slot(provider)
+                                    await self._resilience.release_half_open_slot(
+                                        provider
+                                    )
                                     lib_logger.error(
                                         f"Non-recoverable error ({classified_error.error_type}) during custom stream. Failing."
                                     )
@@ -1173,8 +1289,13 @@ class RetryMixin:
                                 # quota_exceeded / invalid_request / auth errors are per-credential
                                 if classified_error.error_type == "rate_limit":
                                     await self._process_rate_limit(
-                                        provider, current_cred, e, str(e) if e else None, classified_error
+                                        provider,
+                                        current_cred,
+                                        e,
+                                        str(e) if e else None,
+                                        classified_error,
                                     )
+                                    self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
                                 if classified_error.error_type == "quota_exceeded":
                                     await self._apply_quota_cooldown(
                                         provider, current_cred, classified_error
@@ -1223,7 +1344,9 @@ class RetryMixin:
                                     lib_logger.warning(
                                         f"Cred {mask_credential(current_cred)} failed after max retries. Rotating."
                                     )
-                                    await self._resilience.release_half_open_slot(provider)
+                                    await self._resilience.release_half_open_slot(
+                                        provider
+                                    )
                                     break
 
                                 # Reset LiteLLM internal HTTP client cache on connection errors
@@ -1232,7 +1355,9 @@ class RetryMixin:
                                 ) and "client has been closed" in str(e):
                                     self._reset_litellm_client_cache()
 
-                                base_wait = classified_error.retry_after or (2**attempt * random.uniform(0.5, 1.5))
+                                base_wait = classified_error.retry_after or (
+                                    2**attempt * random.uniform(0.5, 1.5)
+                                )
                                 wait_time = base_wait
                                 remaining_budget = deadline - time.time()
                                 if wait_time > remaining_budget:
@@ -1242,7 +1367,9 @@ class RetryMixin:
                                     lib_logger.warning(
                                         f"Retry wait ({wait_time:.2f}s) exceeds budget. Rotating."
                                     )
-                                    await self._resilience.release_half_open_slot(provider)
+                                    await self._resilience.release_half_open_slot(
+                                        provider
+                                    )
                                     break
 
                                 lib_logger.warning(
@@ -1256,8 +1383,10 @@ class RetryMixin:
                                 continue
 
                             except (
-                                httpx.ReadTimeout, httpx.PoolTimeout,
-                                httpx.RemoteProtocolError, httpx.ConnectError,
+                                httpx.ReadTimeout,
+                                httpx.PoolTimeout,
+                                httpx.RemoteProtocolError,
+                                httpx.ConnectError,
                             ) as e:
                                 last_exception = e
                                 log_failure(
@@ -1283,7 +1412,9 @@ class RetryMixin:
 
                                 # Provider-level error: don't increment consecutive failures
                                 await self.usage_manager.record_failure(
-                                    current_cred, model, classified_error,
+                                    current_cred,
+                                    model,
+                                    classified_error,
                                     increment_consecutive_failures=False,
                                 )
                                 await self._resilience.release_half_open_slot(provider)
@@ -1317,9 +1448,15 @@ class RetryMixin:
                                 # Check if this error should trigger rotation
                                 if not should_rotate_on_error(classified_error):
                                     await self._process_rate_limit(
-                                        provider, current_cred, e, str(e) if e else None, classified_error
+                                        provider,
+                                        current_cred,
+                                        e,
+                                        str(e) if e else None,
+                                        classified_error,
                                     )
-                                    await self._resilience.release_half_open_slot(provider)
+                                    await self._resilience.release_half_open_slot(
+                                        provider
+                                    )
                                     lib_logger.error(
                                         f"Non-recoverable error ({classified_error.error_type}). Failing."
                                     )
@@ -1329,8 +1466,13 @@ class RetryMixin:
                                 # quota_exceeded / invalid_request / auth errors are per-credential
                                 if classified_error.error_type == "rate_limit":
                                     await self._process_rate_limit(
-                                        provider, current_cred, e, str(e) if e else None, classified_error
+                                        provider,
+                                        current_cred,
+                                        e,
+                                        str(e) if e else None,
+                                        classified_error,
                                     )
+                                    self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
                                 if classified_error.error_type == "quota_exceeded":
                                     await self._apply_quota_cooldown(
                                         provider, current_cred, classified_error
@@ -1357,7 +1499,9 @@ class RetryMixin:
                     # [FIX] Remove problematic headers and add correct provider headers
                     # This ensures that authorization/x-api-key from client requests
                     # are replaced with the correct values from configuration
-                    await self._apply_provider_headers(litellm_kwargs, provider, current_cred)
+                    await self._apply_provider_headers(
+                        litellm_kwargs, provider, current_cred
+                    )
 
                     if provider_plugin:
                         # Ensure default Gemini safety settings are present (without overriding request)
@@ -1370,7 +1514,8 @@ class RetryMixin:
                         except Exception as exc:
                             lib_logger.warning(
                                 "Could not apply default safety settings for streaming path %s: %s; continuing.",
-                                provider, type(exc).__name__,
+                                provider,
+                                type(exc).__name__,
                             )
 
                         if "safety_settings" in litellm_kwargs:
@@ -1385,13 +1530,9 @@ class RetryMixin:
                                 del litellm_kwargs["safety_settings"]
 
                     if provider == "gemini" and provider_plugin:
-                        provider_plugin.handle_thinking_parameter(
-                            litellm_kwargs, model
-                        )
+                        provider_plugin.handle_thinking_parameter(litellm_kwargs, model)
                     if provider == "nvidia" and provider_plugin:
-                        provider_plugin.handle_thinking_parameter(
-                            litellm_kwargs, model
-                        )
+                        provider_plugin.handle_thinking_parameter(litellm_kwargs, model)
 
                     if "gemma-3" in model and "messages" in litellm_kwargs:
                         litellm_kwargs["messages"] = [
@@ -1427,6 +1568,14 @@ class RetryMixin:
                         litellm_kwargs["model"] = model.split("/", 1)[1]
 
                     for attempt in range(self.max_retries):
+                        total_api_attempts += 1
+                        if total_api_attempts > MAX_TOTAL_ATTEMPTS:
+                            lib_logger.warning(
+                                f"Total API attempts ({total_api_attempts}) exceeded MAX_TOTAL_ATTEMPTS ({MAX_TOTAL_ATTEMPTS}). Aborting."
+                            )
+                            raise last_exception or NoAvailableKeysError(
+                                f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
+                            )
                         try:
                             lib_logger.info(
                                 f"Attempting stream with credential {mask_credential(current_cred)} (Attempt {attempt + 1}/{self.max_retries})"
@@ -1437,7 +1586,9 @@ class RetryMixin:
                                     await pre_request_callback(request, litellm_kwargs)
                                 except Exception as e:
                                     if self.abort_on_callback_error:
-                                        await self._resilience.release_half_open_slot(provider)
+                                        await self._resilience.release_half_open_slot(
+                                            provider
+                                        )
                                         raise PreRequestCallbackError(
                                             f"Pre-request callback failed: {e}"
                                         ) from e
@@ -1471,7 +1622,9 @@ class RetryMixin:
                             # Release the key when the stream consumer finishes iterating.
                             try:
                                 if transaction_logger:
-                                    async for chunk in self._transaction_logging_stream_wrapper(
+                                    async for (
+                                        chunk
+                                    ) in self._transaction_logging_stream_wrapper(
                                         stream_generator, transaction_logger, kwargs
                                     ):
                                         yield chunk
@@ -1479,8 +1632,12 @@ class RetryMixin:
                                     async for chunk in stream_generator:
                                         yield chunk
                             finally:
-                                await self.usage_manager.release_key(current_cred, model)
-                                key_acquired = False  # prevent outer finally from double-releasing
+                                await self.usage_manager.release_key(
+                                    current_cred, model
+                                )
+                                key_acquired = (
+                                    False  # prevent outer finally from double-releasing
+                                )
                             return
 
                         except (
@@ -1502,13 +1659,21 @@ class RetryMixin:
                             )
 
                             # Reset LiteLLM client cache on auth errors (401/403)
-                            self._reset_cache_on_auth_error(classified_error, original_exc, provider=provider, credential=current_cred)
+                            self._reset_cache_on_auth_error(
+                                classified_error,
+                                original_exc,
+                                provider=provider,
+                                credential=current_cred,
+                            )
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
                                 await self._process_rate_limit(
-                                    provider, current_cred, original_exc,
-                                    str(original_exc) if original_exc else None, classified_error
+                                    provider,
+                                    current_cred,
+                                    original_exc,
+                                    str(original_exc) if original_exc else None,
+                                    classified_error,
                                 )
 
                                 # Add exponential backoff delay before retry
@@ -1602,14 +1767,21 @@ class RetryMixin:
                                     lib_logger.error(
                                         f"Fatal quota error for {mask_credential(current_cred)}. ID: {quota_id}, Limit: {quota_value}"
                                     )
-                                    yield {'error': {'message': client_error_message, 'type': 'proxy_fatal_quota_error'}}
+                                    yield {
+                                        "error": {
+                                            "message": client_error_message,
+                                            "type": "proxy_fatal_quota_error",
+                                        }
+                                    }
                                     yield STREAM_DONE
                                     return
                                 else:
                                     lib_logger.warning(
                                         f"Cred {mask_credential(current_cred)} quota error ({consecutive_quota_failures}/3). Rotating."
                                     )
-                                    await self._resilience.release_half_open_slot(provider)
+                                    await self._resilience.release_half_open_slot(
+                                        provider
+                                    )
                                     break
 
                             else:
@@ -1643,9 +1815,13 @@ class RetryMixin:
                                 # quota_exceeded / invalid_request / auth errors are per-credential
                                 if classified_error.error_type == "rate_limit":
                                     await self._process_rate_limit(
-                                        provider, current_cred, original_exc,
-                                        str(original_exc) if original_exc else None, classified_error
+                                        provider,
+                                        current_cred,
+                                        original_exc,
+                                        str(original_exc) if original_exc else None,
+                                        classified_error,
                                     )
+                                    self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
                                 if classified_error.error_type == "quota_exceeded":
                                     await self._apply_quota_cooldown(
                                         provider, current_cred, classified_error
@@ -1722,8 +1898,10 @@ class RetryMixin:
                             continue
 
                         except (
-                            httpx.ReadTimeout, httpx.PoolTimeout,
-                            httpx.RemoteProtocolError, httpx.ConnectError,
+                            httpx.ReadTimeout,
+                            httpx.PoolTimeout,
+                            httpx.RemoteProtocolError,
+                            httpx.ConnectError,
                         ) as e:
                             consecutive_quota_failures = 0
                             last_exception = e
@@ -1749,7 +1927,9 @@ class RetryMixin:
 
                             # Provider-level error: don't increment consecutive failures
                             await self.usage_manager.record_failure(
-                                current_cred, model, classified_error,
+                                current_cred,
+                                model,
+                                classified_error,
                                 increment_consecutive_failures=False,
                             )
                             await self._resilience.release_half_open_slot(provider)
@@ -1783,8 +1963,13 @@ class RetryMixin:
                             # quota_exceeded / invalid_request / auth errors are per-credential
                             if classified_error.error_type == "rate_limit":
                                 await self._process_rate_limit(
-                                    provider, current_cred, e, str(e) if e else None, classified_error
+                                    provider,
+                                    current_cred,
+                                    e,
+                                    str(e) if e else None,
+                                    classified_error,
                                 )
+                                self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
                             if classified_error.error_type == "quota_exceeded":
                                 await self._apply_quota_cooldown(
                                     provider, current_cred, classified_error
@@ -1905,7 +2090,11 @@ class RetryMixin:
             # Detect error payloads from the streaming retry layer
             if "error" in chunk and "choices" not in chunk:
                 error_info = chunk["error"]
-                error_msg = error_info.get("message", str(error_info)) if isinstance(error_info, dict) else str(error_info)
+                error_msg = (
+                    error_info.get("message", str(error_info))
+                    if isinstance(error_info, dict)
+                    else str(error_info)
+                )
                 raise litellm.InternalServerError(error_msg)
 
             # Capture metadata from first chunk
@@ -1954,9 +2143,13 @@ class RetryMixin:
                                 "_args_parts": [],
                             }
                         if value.get("name") is not None:
-                            final_message["function_call"]["_name_parts"].append(value["name"])
+                            final_message["function_call"]["_name_parts"].append(
+                                value["name"]
+                            )
                         if value.get("arguments") is not None:
-                            final_message["function_call"]["_args_parts"].append(value["arguments"])
+                            final_message["function_call"]["_args_parts"].append(
+                                value["arguments"]
+                            )
 
                 # Capture finish_reason
                 if choice.get("finish_reason"):
@@ -2018,7 +2211,8 @@ class RetryMixin:
                     "finish_reason": final_message.get("finish_reason", "stop"),
                 }
             ],
-            usage=usage_data or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            usage=usage_data
+            or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         )
 
         lib_logger.debug(

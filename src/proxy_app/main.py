@@ -748,7 +748,14 @@ app.add_middleware(
     allow_credentials=False,  # Must be False when allow_origins=["*"] per CORS spec
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
-    expose_headers=["X-Accel-Buffering"],  # Custom headers visible to JS clients
+    expose_headers=[
+            "X-Accel-Buffering",
+            "X-Request-Id",
+            "X-Provider",
+            "Retry-After",
+            "X-RateLimit-Limit",
+            "X-RateLimit-Remaining",
+        ],  # Custom headers visible to JS clients
 )
 
 # SSE-aware gzip: compresses non-streaming responses >= minimum_size, passes SSE through raw

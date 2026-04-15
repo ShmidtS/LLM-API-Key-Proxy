@@ -27,6 +27,8 @@ import os
 import socket
 import struct
 import random
+import asyncio
+import concurrent.futures
 from .utils.json_utils import json_loads
 import ssl
 import threading
@@ -269,11 +271,11 @@ def _dns_query(host: str, dns_host: str, dns_port: int = 53) -> Optional[str]:
         return None
 
 
-def _custom_getaddrinfo(
+def _custom_getaddrinfo_sync(
     host: str, port: int, family: int = 0, type: int = 0, proto: int = 0, flags: int = 0
 ) -> List[Tuple]:
     """
-    Custom getaddrinfo that uses custom DNS for specific hosts.
+    Synchronous getaddrinfo that uses custom DNS for specific hosts.
 
     Args:
         host: Hostname to resolve
@@ -335,6 +337,37 @@ def _custom_getaddrinfo(
 
     # Use system DNS for other hosts or if custom DNS failed
     return _original_getaddrinfo(host, port, family, type, proto, flags)
+
+
+def _custom_getaddrinfo(
+    host: str, port: int, family: int = 0, type: int = 0, proto: int = 0, flags: int = 0
+) -> List[Tuple]:
+    """
+    Custom getaddrinfo that runs DNS queries in a thread when called from
+    async context to avoid blocking the ProactorEventLoop on Windows.
+
+    socket.getaddrinfo is a synchronous API, so callers expect a List[Tuple]
+    return value. When inside a running event loop, we submit the blocking
+    DNS work to a ThreadPoolExecutor and block the CALLING thread (not the
+    event loop) until the result is ready.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop — sync context, call directly
+        return _custom_getaddrinfo_sync(host, port, family, type, proto, flags)
+
+    # Inside an async event loop — run in thread to avoid blocking the loop.
+    # We block the calling sync thread until the executor finishes, which is
+    # fine because the event loop continues running on other threads.
+    _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+    try:
+        future = _executor.submit(
+            _custom_getaddrinfo_sync, host, port, family, type, proto, flags
+        )
+        return future.result(timeout=10)
+    finally:
+        _executor.shutdown(wait=False)
 
 
 def apply_dns_fix():
