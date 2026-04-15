@@ -10,7 +10,7 @@ import fnmatch
 import logging
 import random
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
@@ -18,8 +18,11 @@ import litellm
 import orjson
 from ..utils.json_utils import json_deep_copy
 
+if TYPE_CHECKING:
+    from ..error_handler import ClassifiedError
+
 from ..env_cache import _provider_env_cache
-from ..error_types import mask_credential, ClassifiedError
+from ..error_types import mask_credential
 from ..http_client_pool import HttpClientPool, get_http_pool
 from ..providers.openai_compatible_provider import OpenAICompatibleProvider
 from ..providers.utilities import DEFAULT_GENERIC_SAFETY_SETTINGS, DEFAULT_SAFETY_SETTINGS

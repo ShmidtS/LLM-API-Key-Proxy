@@ -33,16 +33,16 @@ lib_logger = logging.getLogger("rotator_library")
 
 
 
-# Configuration defaults (overridable via environment)
-DEFAULT_MAX_KEEPALIVE_CONNECTIONS = (
-    100  # Increased for high-throughput NVIDIA/OpenAI workloads
-)
-DEFAULT_MAX_CONNECTIONS = 500  # Supports 100+ parallel NVIDIA requests
+# Platform-aware connection pool limits
+# Windows SelectorEventLoop has much lower file descriptor limits than Linux
+_IS_WIN = os.name == "nt"
+DEFAULT_MAX_KEEPALIVE_CONNECTIONS = 20 if _IS_WIN else 100
+DEFAULT_MAX_CONNECTIONS = 100 if _IS_WIN else 500
 DEFAULT_KEEPALIVE_EXPIRY = 60.0  # Seconds to keep idle connections alive
 DEFAULT_WARMUP_CONNECTIONS = 3  # Connections to pre-warm per provider
 DEFAULT_WARMUP_TIMEOUT = 10.0  # Max seconds for warmup
 DEFAULT_SSL_VERIFY = True  # SSL certificate verification enabled by default
-DEFAULT_HTTP2_ENABLED = True  # HTTP/2 enabled by default
+DEFAULT_HTTP2_ENABLED = not _IS_WIN  # HTTP/2 unreliable with SelectorEventLoop on Windows
 
 
 from .ssl_patch import AZURE_COMPATIBLE_CIPHERS
@@ -240,8 +240,9 @@ class HttpClientPool(metaclass=SingletonMeta):
         # HTTP/2 configuration (can be disabled for problematic providers)
         self._http2_enabled = _env_bool("HTTP2_ENABLED", DEFAULT_HTTP2_ENABLED)
         if not self._http2_enabled:
+            reason = "SelectorEventLoop incompatibility" if _IS_WIN else "HTTP2_ENABLED env var"
             lib_logger.warning(
-                "HTTP/2 is DISABLED via HTTP2_ENABLED. Using HTTP/1.1 only."
+                f"HTTP/2 is DISABLED ({reason}). Using HTTP/1.1 only."
             )
 
         # Client instances (lazy initialization)

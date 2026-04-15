@@ -7,7 +7,6 @@ Provides interactive configuration for custom providers, model definitions, and 
 """
 
 import orjson
-import json
 import logging
 import os
 from typing import Dict, Any, Optional, List
@@ -207,7 +206,7 @@ class ModelDefinitionManager:
         if value:
             try:
                 return orjson.loads(value)
-            except (json.JSONDecodeError, ValueError):
+            except (orjson.JSONDecodeError, ValueError):
                 return None
         return None
 
@@ -223,7 +222,7 @@ class ModelDefinitionManager:
                         providers[provider] = len(parsed)
                     elif isinstance(parsed, list):
                         providers[provider] = len(parsed)
-                except (json.JSONDecodeError, ValueError):
+                except (orjson.JSONDecodeError, ValueError):
                     logger.debug("detect_provider_counts: invalid JSON for provider %s", provider)
         return providers
 
@@ -253,7 +252,7 @@ class ConcurrencyManager:
                 provider = key.replace("MAX_CONCURRENT_REQUESTS_PER_KEY_", "").lower()
                 try:
                     limits[provider] = int(value)
-                except (json.JSONDecodeError, ValueError):
+                except (orjson.JSONDecodeError, ValueError):
                     logger.debug("detect_concurrency_limits: invalid value for %s", provider)
         return limits
 
@@ -999,7 +998,7 @@ class SettingsTool:
                         new_count = (
                             len(parsed) if isinstance(parsed, (dict, list)) else 0
                         )
-                    except (json.JSONDecodeError, ValueError):
+                    except (orjson.JSONDecodeError, ValueError):
                         new_count = 0
                     all_models[provider] = {
                         "value": f"{new_count} model{'s' if new_count > 1 else ''}",
@@ -1024,7 +1023,7 @@ class SettingsTool:
                             new_count = (
                                 len(parsed) if isinstance(parsed, (dict, list)) else 0
                             )
-                        except (json.JSONDecodeError, ValueError):
+                        except (orjson.JSONDecodeError, ValueError):
                             new_count = 0
                         all_models[provider] = {
                             "value": f"{new_count} model{'s' if new_count > 1 else ''}",

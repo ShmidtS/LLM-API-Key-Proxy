@@ -77,25 +77,4 @@ class AntigravityAuthBase(GoogleProjectDiscoveryMixin, GoogleOAuthBase):
         """Return the file prefix for Antigravity credentials."""
         return "antigravity"
 
-    def build_env_lines(self, creds: Dict[str, Any], cred_number: int) -> List[str]:
-        """
-        Generate .env file lines for an Antigravity credential.
-
-        Includes tier and project_id from _proxy_metadata.
-        """
-        # Get base lines from parent class
-        lines = super().build_env_lines(creds, cred_number)
-
-        # Add Antigravity-specific fields (tier and project_id)
-        metadata = creds.get("_proxy_metadata", {})
-        prefix = f"{self.ENV_PREFIX}_{cred_number}"
-
-        project_id = metadata.get("project_id", "")
-        tier = metadata.get("tier", "")
-
-        if project_id:
-            lines.append(f"{prefix}_PROJECT_ID={project_id}")
-        if tier:
-            lines.append(f"{prefix}_TIER={tier}")
-
-        return lines
+    # build_env_lines: inherited from GoogleOAuthBase (includes PROJECT_ID and TIER)

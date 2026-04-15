@@ -858,19 +858,11 @@ class IFlowAuthBase(GoogleOAuthBase):
 
     def build_env_lines(self, creds: Dict[str, Any], cred_number: int) -> List[str]:
         """Generate .env file lines for an iFlow credential."""
-        email = creds.get("email") or creds.get("_proxy_metadata", {}).get(
-            "email", "unknown"
-        )
-        prefix = f"IFLOW_{cred_number}"
+        email = self._get_env_email(creds)
+        prefix = f"{self.ENV_PREFIX}_{cred_number}"
+        lines = self._build_env_header(email, cred_number)
 
-        lines = [
-            f"# IFLOW Credential #{cred_number} for: {email}",
-            f"# Exported from: iflow_oauth_{cred_number}.json",
-            f"# Generated at: {time.strftime('%Y-%m-%d %H:%M:%S')}",
-            "#",
-            "# To combine multiple credentials into one .env file, copy these lines",
-            "# and ensure each credential has a unique number (1, 2, 3, etc.)",
-            "",
+        lines.extend([
             f"{prefix}_ACCESS_TOKEN={creds.get('access_token', '')}",
             f"{prefix}_REFRESH_TOKEN={creds.get('refresh_token', '')}",
             f"{prefix}_API_KEY={creds.get('api_key', '')}",
@@ -878,6 +870,6 @@ class IFlowAuthBase(GoogleOAuthBase):
             f"{prefix}_EMAIL={email}",
             f"{prefix}_TOKEN_TYPE={creds.get('token_type', 'Bearer')}",
             f"{prefix}_SCOPE={creds.get('scope', 'read write')}",
-        ]
+        ])
 
         return lines

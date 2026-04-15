@@ -10,7 +10,6 @@ import os
 import sys
 
 import orjson
-
 import json
 import logging
 
@@ -67,7 +66,7 @@ class LauncherConfig:
                     if key not in config:
                         config[key] = value
                 return config
-            except (json.JSONDecodeError, IOError):
+            except (orjson.JSONDecodeError, IOError):
                 return self.defaults.copy()
         return self.defaults.copy()
 
@@ -241,7 +240,7 @@ class SettingsDetector:
                         models[provider] = len(parsed)
                     elif isinstance(parsed, list):
                         models[provider] = len(parsed)
-                except (json.JSONDecodeError, ValueError):
+                except (orjson.JSONDecodeError, ValueError):
                     logger.debug("detect_model_counts: invalid JSON for provider %s", provider)
         return models
 
@@ -255,7 +254,7 @@ class SettingsDetector:
                 provider = key.replace("MAX_CONCURRENT_REQUESTS_PER_KEY_", "").lower()
                 try:
                     limits[provider] = int(value)
-                except (json.JSONDecodeError, ValueError):
+                except ValueError:
                     logger.debug("detect_concurrency_limits: invalid value for %s", provider)
         return limits
 

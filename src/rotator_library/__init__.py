@@ -9,8 +9,9 @@ import asyncio
 if sys.platform == "win32":
     try:
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    except RuntimeError:
-        pass
+    except RuntimeError as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).debug("non-critical event loop policy failure: %s", _e)
 
 from .client import RotatingClient
 from .utils.json_utils import STREAM_DONE

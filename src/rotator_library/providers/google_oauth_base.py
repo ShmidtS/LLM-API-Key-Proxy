@@ -1349,6 +1349,28 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             lib_logger.error(f"Credential setup failed: {e}")
             return CredentialSetupResult(success=False, error=str(e))
 
+    def _get_env_email(self, creds: Dict[str, Any]) -> str:
+        """Extract email from credentials for .env export.
+
+        Checks top-level 'email' first (iFlow/Qwen format), then falls back
+        to _proxy_metadata.email (Google OAuth format).
+        """
+        return creds.get("email") or creds.get("_proxy_metadata", {}).get(
+            "email", "unknown"
+        )
+
+    def _build_env_header(self, email: str, cred_number: int) -> List[str]:
+        """Generate common header comment lines for .env export."""
+        return [
+            f"# {self.ENV_PREFIX} Credential #{cred_number} for: {email}",
+            f"# Exported from: {self._get_provider_file_prefix()}_oauth_{cred_number}.json",
+            f"# Generated at: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            "#",
+            "# To combine multiple credentials into one .env file, copy these lines",
+            "# and ensure each credential has a unique number (1, 2, 3, etc.)",
+            "",
+        ]
+
     def build_env_lines(self, creds: Dict[str, Any], cred_number: int) -> List[str]:
         """
         Generate .env file lines for a credential.
@@ -1363,17 +1385,11 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
         Returns:
             List of .env file lines
         """
-        email = creds.get("_proxy_metadata", {}).get("email", "unknown")
+        email = self._get_env_email(creds)
         prefix = f"{self.ENV_PREFIX}_{cred_number}"
+        lines = self._build_env_header(email, cred_number)
 
-        lines = [
-            f"# {self.ENV_PREFIX} Credential #{cred_number} for: {email}",
-            f"# Exported from: {self._get_provider_file_prefix()}_oauth_{cred_number}.json",
-            f"# Generated at: {time.strftime('%Y-%m-%d %H:%M:%S')}",
-            "#",
-            "# To combine multiple credentials into one .env file, copy these lines",
-            "# and ensure each credential has a unique number (1, 2, 3, etc.)",
-            "",
+        lines.extend([
             f"{prefix}_ACCESS_TOKEN={creds.get('access_token', '')}",
             f"{prefix}_REFRESH_TOKEN={creds.get('refresh_token', '')}",
             f"{prefix}_SCOPE={creds.get('scope', '')}",
@@ -1385,7 +1401,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             f"{prefix}_TOKEN_URI={creds.get('token_uri', 'https://oauth2.googleapis.com/token')}",
             f"{prefix}_UNIVERSE_DOMAIN={creds.get('universe_domain', 'googleapis.com')}",
             f"{prefix}_EMAIL={email}",
-        ]
+        ])
 
         # Add tier and project_id from _proxy_metadata if available
         metadata = creds.get("_proxy_metadata", {})

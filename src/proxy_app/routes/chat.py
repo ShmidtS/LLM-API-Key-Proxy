@@ -4,15 +4,15 @@
 import logging
 
 import orjson
-import litellm
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
 
 from rotator_library import RotatingClient
-from proxy_app.dependencies import get_rotating_client, verify_api_key, make_error_response
-from proxy_app.streaming import streaming_response_wrapper, handle_litellm_error
+from proxy_app.dependencies import get_rotating_client, verify_api_key
+from proxy_app.streaming import streaming_response_wrapper
 from proxy_app.detailed_logger import RawIOLogger
 from proxy_app.request_logger import log_request_to_console
+from proxy_app.routes.error_handler import handle_route_errors
 
 router = APIRouter(tags=["chat"])
 
@@ -23,6 +23,7 @@ ENABLE_REQUEST_LOGGING: bool = False
 
 
 @router.post("/v1/chat/completions")
+@handle_route_errors(error_format="openai", log_context="Request failed after all retries")
 async def chat_completions(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
@@ -37,10 +38,7 @@ async def chat_completions(
     request_data: dict = {}
     try:
         # Read and parse the request body only once at the beginning.
-        try:
-            request_data = orjson.loads(await request.body())
-        except orjson.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid JSON in request body.")
+        request_data = orjson.loads(await request.body())
 
         # Global temperature=0 override (controlled by .env variable, default: OFF)
         # Low temperature makes models deterministic and prone to following training data
@@ -124,18 +122,10 @@ async def chat_completions(
                     body=response.model_dump(),
                 )
             return response
-
     except Exception as e:
-        if isinstance(e, (litellm.InvalidRequestError, ValueError, litellm.ContextWindowExceededError,
-                          litellm.AuthenticationError, litellm.RateLimitError,
-                          litellm.ServiceUnavailableError, litellm.APIConnectionError,
-                          litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
-            raise handle_litellm_error(e, error_format="openai")
-        logging.error(f"Request failed after all retries: {e}", exc_info=True)
-        # Optionally log the failed request (request_data already parsed above)
-        if ENABLE_REQUEST_LOGGING:
-            if raw_logger:
-                raw_logger.log_final_response(
-                    status_code=500, headers=None, body={"error": str(e)}
-                )
-        raise HTTPException(status_code=500, detail=make_error_response(str(e), "api_error"))
+        # Raw I/O logger: log the failed response if request logging is enabled
+        if ENABLE_REQUEST_LOGGING and raw_logger:
+            raw_logger.log_final_response(
+                status_code=500, headers=None, body={"error": str(e)}
+            )
+        raise

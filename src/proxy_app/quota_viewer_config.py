@@ -10,6 +10,7 @@ Handles remote proxy configurations including:
 - Default and last-used remote tracking
 """
 
+import orjson
 import json
 import logging
 from pathlib import Path
@@ -51,7 +52,7 @@ class QuotaViewerConfig:
                 if "remotes" not in config:
                     config["remotes"] = []
                 return config
-            except (json.JSONDecodeError, IOError):
+            except (orjson.JSONDecodeError, IOError):
                 logger.debug("Failed to load config file: %s", self.config_path)
 
         # Return default config with Local remote
@@ -267,7 +268,7 @@ class QuotaViewerConfig:
                     # Create Local remote if it doesn't exist
                     self.add_remote("Local", host, port, is_default=True)
 
-            except (json.JSONDecodeError, IOError):
+            except (orjson.JSONDecodeError, IOError):
                 logger.debug("Failed to update Local remote from env file")
 
     def get_api_key_from_env(self) -> Optional[str]:

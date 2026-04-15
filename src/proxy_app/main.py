@@ -106,9 +106,9 @@ if _env_files_found:
     print(f"📁 Loaded {len(_env_files_found)} .env file(s): {', '.join(_env_names)}")
 
 # Get proxy API key for display
-proxy_api_key = os.getenv("PROXY_API_KEY")
-if proxy_api_key:
-    key_display = f"✓ {proxy_api_key}"
+_early_proxy_api_key = os.getenv("PROXY_API_KEY")
+if _early_proxy_api_key:
+    key_display = f"✓ {_early_proxy_api_key}"
 else:
     key_display = "✗ Not Set (INSECURE - anyone can access!)"
 
@@ -137,6 +137,7 @@ with _console.status("[dim]Loading core dependencies...", spinner="dots"):
     from dotenv import load_dotenv
     import colorlog
     import json
+    import orjson
     # --- Early Log Level Configuration ---
     logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
@@ -470,7 +471,7 @@ async def lifespan(app: FastAPI):
 
                     credentials_to_initialize[provider].append(path)
 
-                except (FileNotFoundError, json.JSONDecodeError) as e:
+                except (FileNotFoundError, orjson.JSONDecodeError) as e:
                     logging.warning(
                         f"Could not pre-read metadata from '{path}': {e}. Will process during initialization."
                     )

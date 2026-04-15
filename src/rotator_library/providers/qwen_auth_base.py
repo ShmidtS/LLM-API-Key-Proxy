@@ -557,22 +557,16 @@ class QwenAuthBase(GoogleOAuthBase):
 
     def build_env_lines(self, creds: Dict[str, Any], cred_number: int) -> List[str]:
         """Generate .env file lines for a Qwen credential."""
-        email = creds.get("_proxy_metadata", {}).get("email", "unknown")
-        prefix = f"QWEN_CODE_{cred_number}"
+        email = self._get_env_email(creds)
+        prefix = f"{self.ENV_PREFIX}_{cred_number}"
+        lines = self._build_env_header(email, cred_number)
 
-        lines = [
-            f"# QWEN_CODE Credential #{cred_number} for: {email}",
-            f"# Exported from: qwen_code_oauth_{cred_number}.json",
-            f"# Generated at: {time.strftime('%Y-%m-%d %H:%M:%S')}",
-            "#",
-            "# To combine multiple credentials into one .env file, copy these lines",
-            "# and ensure each credential has a unique number (1, 2, 3, etc.)",
-            "",
+        lines.extend([
             f"{prefix}_ACCESS_TOKEN={creds.get('access_token', '')}",
             f"{prefix}_REFRESH_TOKEN={creds.get('refresh_token', '')}",
             f"{prefix}_EXPIRY_DATE={creds.get('expiry_date', 0)}",
             f"{prefix}_RESOURCE_URL={creds.get('resource_url', 'https://portal.qwen.ai/v1')}",
             f"{prefix}_EMAIL={email}",
-        ]
+        ])
 
         return lines

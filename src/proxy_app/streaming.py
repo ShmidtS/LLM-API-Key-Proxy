@@ -241,28 +241,29 @@ async def streaming_response_wrapper(
                 logging.exception("Error during stream finalization logging")
 
 
+LITELLM_ERROR_MAP = [
+    (
+        (litellm.InvalidRequestError, ValueError, litellm.ContextWindowExceededError),
+        400,
+        "Invalid Request",
+        "invalid_request_error",
+    ),
+    ((litellm.AuthenticationError,), 401, "Authentication Error", "authentication_error"),
+    ((litellm.RateLimitError,), 429, "Rate Limit Exceeded", "rate_limit_error"),
+    (
+        (litellm.ServiceUnavailableError, litellm.APIConnectionError),
+        503,
+        "Service Unavailable",
+        "api_error",
+    ),
+    ((litellm.Timeout,), 504, "Gateway Timeout", "api_error"),
+    ((litellm.InternalServerError, litellm.OpenAIError), 502, "Bad Gateway", "api_error"),
+]
+
+
 def handle_litellm_error(e: Exception, error_format: str = "openai") -> HTTPException:
     """Map litellm exceptions to HTTPException with OpenAI or Anthropic error format."""
-    _ERROR_MAP = [
-        (
-            (litellm.InvalidRequestError, ValueError, litellm.ContextWindowExceededError),
-            400,
-            "Invalid Request",
-            "invalid_request_error",
-        ),
-        ((litellm.AuthenticationError,), 401, "Authentication Error", "authentication_error"),
-        ((litellm.RateLimitError,), 429, "Rate Limit Exceeded", "rate_limit_error"),
-        (
-            (litellm.ServiceUnavailableError, litellm.APIConnectionError),
-            503,
-            "Service Unavailable",
-            "api_error",
-        ),
-        ((litellm.Timeout,), 504, "Gateway Timeout", "api_error"),
-        ((litellm.InternalServerError, litellm.OpenAIError), 502, "Bad Gateway", "api_error"),
-    ]
-
-    for exc_types, status_code, openai_label, anthropic_error_type in _ERROR_MAP:
+    for exc_types, status_code, openai_label, anthropic_error_type in LITELLM_ERROR_MAP:
         if isinstance(e, exc_types):
             if error_format == "openai":
                 detail = f"{openai_label}: {str(e)}"

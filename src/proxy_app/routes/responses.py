@@ -4,19 +4,20 @@
 import logging
 
 import orjson
-import litellm
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
 
 from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key
-from proxy_app.streaming import handle_litellm_error, streaming_response_wrapper
+from proxy_app.streaming import streaming_response_wrapper
 from proxy_app.request_logger import log_request_to_console
+from proxy_app.routes.error_handler import handle_route_errors
 
 router = APIRouter(tags=["responses"])
 
 
 @router.post("/v1/responses")
+@handle_route_errors(error_format="openai", log_context="Responses API request failed")
 async def create_response(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
@@ -29,49 +30,34 @@ async def create_response(
     and routes to providers that support this format. For providers that only
     support chat/completions, the request is converted automatically.
     """
-    try:
-        request_data = orjson.loads(await request.body())
+    request_data = orjson.loads(await request.body())
 
-        log_request_to_console(
-            url=str(request.url),
-            headers=request.headers,
-            client_info=(request.client.host, request.client.port),
-            request_data=request_data,
+    log_request_to_console(
+        url=str(request.url),
+        headers=request.headers,
+        client_info=(request.client.host, request.client.port),
+        request_data=request_data,
+    )
+
+    is_streaming = request_data.get("stream", False)
+
+    messages = _input_to_messages(request_data.get("input"))
+    request_data["messages"] = messages
+
+    if is_streaming:
+        response_generator = client.acompletion(request=request, **request_data)
+        return StreamingResponse(
+            streaming_response_wrapper(request, request_data, response_generator),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
         )
-
-        is_streaming = request_data.get("stream", False)
-
-        # Convert Responses API format to chat/completions format for
-        # providers that use the standard pipeline. Providers with custom
-        # logic (e.g. ColinProvider) handle the format internally.
-        messages = _input_to_messages(request_data.get("input"))
-        request_data["messages"] = messages
-
-        if is_streaming:
-            response_generator = client.acompletion(request=request, **request_data)
-            return StreamingResponse(
-                streaming_response_wrapper(request, request_data, response_generator),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
-                },
-            )
-        else:
-            response = await client.acompletion(request=request, **request_data)
-            return response
-
-    except orjson.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON in request body")
-    except Exception as e:
-        if isinstance(e, (litellm.InvalidRequestError, ValueError, litellm.ContextWindowExceededError,
-                          litellm.AuthenticationError, litellm.RateLimitError,
-                          litellm.ServiceUnavailableError, litellm.APIConnectionError,
-                          litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
-            raise handle_litellm_error(e, error_format="openai")
-        logging.error(f"Responses API request failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+    else:
+        response = await client.acompletion(request=request, **request_data)
+        return response
 
 
 def _input_to_messages(input_data) -> list:

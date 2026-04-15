@@ -53,6 +53,25 @@ def _resilient_os_replace(src: str, dst: str) -> None:
                 raise
             time.sleep(0.1 * (attempt + 1))
 
+
+async def _async_resilient_os_replace(src: str, dst: str) -> None:
+    """Async variant of _resilient_os_replace for use in async hot paths.
+
+    Uses asyncio.sleep instead of time.sleep to avoid blocking the event loop.
+    """
+    if os.name != "nt":
+        os.replace(src, dst)
+        return
+
+    for attempt in range(4):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == 3:
+                raise
+            await asyncio.sleep(0.1 * (attempt + 1))
+
 # =============================================================================
 # CONFIGURATION DEFAULTS
 # =============================================================================
@@ -402,7 +421,7 @@ class ResilientStateWriter:
                     # Too soon to retry, data is safe in memory
                     return False
 
-            return self._try_disk_write()
+            return await self._try_disk_write()
 
     async def retry_if_needed(self) -> bool:
         """
@@ -425,9 +444,9 @@ class ResilientStateWriter:
             if now - self._last_attempt < self.retry_interval:
                 return False
 
-            return self._try_disk_write()
+            return await self._try_disk_write()
 
-    def _try_disk_write(self) -> bool:
+    async def _try_disk_write(self) -> bool:
         """
         Attempt atomic write to disk. Updates health status.
 
@@ -460,7 +479,7 @@ class ResilientStateWriter:
                     f.write(content.encode("utf-8"))
                     tmp_fd = None  # fdopen closes the fd
 
-                _resilient_os_replace(tmp_path, self.path)
+                await _async_resilient_os_replace(tmp_path, self.path)
                 tmp_path = None
 
             finally:
@@ -732,7 +751,7 @@ class AsyncResilientStateWriter:
                     orjson.dumps(data, option=orjson.OPT_INDENT_2, default=str).decode(),
                     encoding='utf-8'
                 )
-                _resilient_os_replace(str(temp_path), str(self.file_path))
+                await _async_resilient_os_replace(str(temp_path), str(self.file_path))
             except Exception:
                 # Recovery: recreate directory if deleted
                 self.file_path.parent.mkdir(parents=True, exist_ok=True)

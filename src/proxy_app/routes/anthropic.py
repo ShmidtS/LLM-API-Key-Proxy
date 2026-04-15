@@ -17,6 +17,7 @@ from proxy_app.dependencies import get_rotating_client, verify_anthropic_api_key
 from proxy_app.streaming import handle_litellm_error
 from proxy_app.detailed_logger import RawIOLogger
 from proxy_app.request_logger import log_request_to_console
+from proxy_app.routes.error_handler import handle_route_errors
 
 router = APIRouter(tags=["anthropic"])
 
@@ -25,6 +26,7 @@ ENABLE_RAW_LOGGING: bool = False
 
 
 @router.post("/v1/messages")
+@handle_route_errors(error_format="anthropic", log_context="Anthropic messages endpoint error")
 async def anthropic_messages(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
@@ -89,25 +91,15 @@ async def anthropic_messages(
                     body=result,
                 )
             return JSONResponse(content=result)
-
     except Exception as e:
-        if isinstance(e, (litellm.InvalidRequestError, ValueError, litellm.ContextWindowExceededError,
-                          litellm.AuthenticationError, litellm.RateLimitError,
-                          litellm.ServiceUnavailableError, litellm.APIConnectionError,
-                          litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
-            raise handle_litellm_error(e, error_format="anthropic")
-        logging.error("Anthropic messages endpoint error", exc_info=True)
+        # Raw I/O logger: log the failed response if enabled
         if logger:
             logger.log_final_response(
                 status_code=500,
                 headers=None,
                 body={"error": "Internal server error"},
             )
-        error_response = {
-            "type": "error",
-            "error": {"type": "api_error", "message": "Internal server error"},
-        }
-        raise HTTPException(status_code=500, detail=error_response)
+        raise
 
 
 @router.post("/v1/messages/count_tokens")
