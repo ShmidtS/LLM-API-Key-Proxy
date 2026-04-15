@@ -42,9 +42,9 @@ def main():
         "--name",
         "proxy_app",
         "--paths",
-        "../",
+        os.path.join("..", ""),
         "--paths",
-        ".",
+        os.path.join(".", ""),
         # Core imports
         "--hidden-import=rotator_library",
         "--hidden-import=tiktoken_ext.openai_public",

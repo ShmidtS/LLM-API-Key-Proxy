@@ -406,8 +406,8 @@ class ResilientStateWriter:
         """
         Attempt atomic write to disk. Updates health status.
 
-        Uses tempfile + move pattern for atomic writes on POSIX systems.
-        On Windows, uses direct write (still safe for our use case).
+        Uses tempfile + move pattern for atomic writes on all platforms.
+        On Windows, os.replace provides atomic replacement (same as os.rename on POSIX).
 
         Also registers/unregisters with BufferedWriteRegistry for shutdown flush.
         """

@@ -42,7 +42,6 @@ from pathlib import Path
 import uuid
 import secrets
 import hashlib
-from datetime import datetime
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -1375,7 +1374,7 @@ class GeminiCliProvider(
             # Try Vertex AI models endpoint
             # Note: Gemini may not support a simple /models endpoint like OpenAI
             # This is a best-effort attempt that will gracefully fail if unsupported
-            models_url = f"https://generativelanguage.googleapis.com/v1beta/models"
+            models_url = "https://generativelanguage.googleapis.com/v1beta/models"
 
             response = await client.get(
                 models_url, headers={"Authorization": f"Bearer {access_token}"}

@@ -658,9 +658,6 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                     creds = self._credentials_cache.get(path)
                     if creds and not self._is_token_expired(creds):
                         # No longer expired, skip refresh
-                        # lib_logger.debug(
-                        #     f"Credential '{Path(path).name}' no longer expired, skipping refresh"
-                        # )
                         # Clear retry count on skip (not a failure)
                         self._queue_retry_count.pop(path, None)
                         continue
@@ -888,7 +885,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                     )
 
             with console.status(
-                f"[bold green]Waiting for you to complete authentication in the browser...[/bold green]",
+                "[bold green]Waiting for you to complete authentication in the browser...[/bold green]",
                 spinner="dots",
             ):
                 # Note: The 300s timeout here is handled by the ReauthCoordinator
@@ -924,7 +921,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                 server.close()
                 await server.wait_closed()
 
-        lib_logger.info(f"Attempting to exchange authorization code for tokens...")
+        lib_logger.info("Attempting to exchange authorization code for tokens...")
         pool = await get_http_pool()
         client = await pool.get_client_async()
         # [PKCE + HEADERS] Include code_verifier and explicit headers for token exchange
@@ -1083,7 +1080,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
 
         try:
             # Load current credentials
-            with open(credential_path, "r") as f:
+            with open(credential_path, "r", encoding="utf-8") as f:
                 creds = json_loads(f.read())
 
             # Update metadata
@@ -1198,7 +1195,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
 
         for cred_file in glob(pattern):
             try:
-                with open(cred_file, "r") as f:
+                with open(cred_file, "r", encoding="utf-8") as f:
                     creds = json_loads(f.read())
                 existing_email = creds.get("email") or creds.get("_proxy_metadata", {}).get("email")
                 if existing_email == email:
@@ -1328,7 +1325,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                     str(file_path), new_creds["access_token"]
                 )
                 # Reload credentials to get discovered metadata
-                with open(file_path, "r") as f:
+                with open(file_path, "r", encoding="utf-8") as f:
                     updated_creds = json_loads(f.read())
                 tier = updated_creds.get("_proxy_metadata", {}).get("tier")
                 project_id = updated_creds.get("_proxy_metadata", {}).get("project_id")
@@ -1418,7 +1415,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             cred_path = Path(credential_path)
 
             # Load credential
-            with open(cred_path, "r") as f:
+            with open(cred_path, "r", encoding="utf-8") as f:
                 creds = json_loads(f.read())
 
             # Extract metadata (top-level email for iFlow/Qwen, metadata email for Google)
@@ -1439,7 +1436,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
 
             # Build and write content
             env_lines = self.build_env_lines(creds, cred_number)
-            with open(env_path, "w") as f:
+            with open(env_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(env_lines))
 
             lib_logger.info(f"Exported credential to {env_path}")
@@ -1473,7 +1470,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
         credentials = []
         for cred_file in sorted(glob(pattern)):
             try:
-                with open(cred_file, "r") as f:
+                with open(cred_file, "r", encoding="utf-8") as f:
                     creds = json_loads(f.read())
 
                 metadata = creds.get("_proxy_metadata", {})

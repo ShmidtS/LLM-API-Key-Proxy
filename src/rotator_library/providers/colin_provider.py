@@ -112,7 +112,6 @@ class ColinProvider(ProviderInterface):
         stream = kwargs.get("stream", False)
         # credential_identifier is passed by the rotator, contains the API key
         credential_identifier = kwargs.pop("credential_identifier", "")
-        transaction_context = kwargs.pop("transaction_context", None)
 
         # Remove provider prefix from model if present
         model = strip_provider_prefix(model)
@@ -213,7 +212,7 @@ class ColinProvider(ProviderInterface):
         ) as response:
             # Check status code
             if response.status_code >= 400:
-                error_body = await response.aread()
+                await response.aread()
                 response.raise_for_status()
 
             # Accumulate content and metadata from SSE stream
@@ -334,7 +333,7 @@ class ColinProvider(ProviderInterface):
             # Check status code after response starts
             if response.status_code >= 400:
                 # Read error body before raising
-                error_body = await response.aread()
+                await response.aread()
                 response.raise_for_status()
 
             async for data in parse_sse_stream(response, provider_name="COLIN"):
@@ -371,7 +370,7 @@ class ColinProvider(ProviderInterface):
                                         tool_calls=[
                                             {
                                                 "id": output_item.get(
-                                                    "id", f"call_0"
+                                                    "id", "call_0"
                                                 ),
                                                 "type": "function",
                                                 "function": {

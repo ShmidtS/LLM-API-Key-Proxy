@@ -16,9 +16,6 @@ from .constants import (
     ENABLE_INTERLEAVED_THINKING,
     CLAUDE_INTERLEAVED_THINKING_HINT,
     CLAUDE_USER_INTERLEAVED_THINKING_REMINDER,
-    ANTIGRAVITY_IDENTITY_OVERRIDE_INSTRUCTION_SHORT,
-    _get_gemini3_signature_cache_file,
-    _get_claude_thinking_cache_file,
     lib_logger,
 )
 
@@ -572,7 +569,7 @@ class ThinkingCacheMixin:
 
         except orjson.JSONDecodeError:
             lib_logger.warning(
-                f"[Thinking Sanitization] Failed to parse cached thinking"
+                "[Thinking Sanitization] Failed to parse cached thinking"
             )
             return False
 

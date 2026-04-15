@@ -8,7 +8,6 @@ provider resolution."""
 import asyncio
 import fnmatch
 import logging
-import os
 import random
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -22,7 +21,6 @@ from ..utils.json_utils import json_deep_copy
 from ..env_cache import _provider_env_cache
 from ..error_types import mask_credential, ClassifiedError
 from ..http_client_pool import HttpClientPool, get_http_pool
-from ..providers import PROVIDER_PLUGINS
 from ..providers.openai_compatible_provider import OpenAICompatibleProvider
 from ..providers.utilities import DEFAULT_GENERIC_SAFETY_SETTINGS, DEFAULT_SAFETY_SETTINGS
 from ..utils.model_utils import get_or_create_provider_instance
@@ -537,7 +535,6 @@ class HelpersMixin:
 
         # For failures, extract key info to make debug logs more readable.
         model = log_data.get("model", "N/A")
-        call_id = log_data.get("litellm_call_id", "N/A")
         error_info = log_data.get("standard_logging_object", {}).get(
             "error_information", {}
         )

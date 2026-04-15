@@ -81,7 +81,14 @@ class _NoGzipForSSE:
                 started = True
                 if skip or more:
                     skip = True
-                    await send(initial_message)
+                    # Remove content-length header for streaming responses to prevent mismatch
+                    filtered_headers = [
+                        (hk, hv)
+                        for hk, hv in initial_message.get("headers", [])
+                        if (hk.decode("latin-1") if isinstance(hk, bytes) else hk).lower()
+                        != "content-length"
+                    ]
+                    await send({**initial_message, "headers": filtered_headers})
                     await send(message)
                     return
 

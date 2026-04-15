@@ -12,7 +12,10 @@ import os
 os.environ["AIOHTTP_NO_EXTENSIONS"] = "1"
 
 import json
+import logging
 import sys
+
+logger = logging.getLogger(__name__)
 from pathlib import Path
 from rich.console import Console
 from rich.prompt import IntPrompt, Prompt
@@ -58,7 +61,7 @@ class LauncherConfig:
         """Load config from file or create with defaults."""
         if self.config_path.exists():
             try:
-                with open(self.config_path, "r") as f:
+                with open(self.config_path, "r", encoding="utf-8") as f:
                     config = json.load(f)
                 # Merge with defaults for any missing keys
                 for key, value in self.defaults.items():
@@ -75,7 +78,7 @@ class LauncherConfig:
 
         self.config["last_updated"] = datetime.datetime.now().isoformat()
         try:
-            with open(self.config_path, "w") as f:
+            with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, indent=2)
         except IOError as e:
             console.print(f"[red]Error saving config: {e}[/red]")
@@ -116,7 +119,7 @@ class SettingsDetector:
                             value = value[1:-1]
                         env_dict[key] = value
         except (IOError, OSError):
-            pass
+            logger.debug("load_env_dict: failed to read .env file")
         return env_dict
 
     @staticmethod
@@ -240,7 +243,7 @@ class SettingsDetector:
                     elif isinstance(parsed, list):
                         models[provider] = len(parsed)
                 except (json.JSONDecodeError, ValueError):
-                    pass
+                    logger.debug("detect_model_counts: invalid JSON for provider %s", provider)
         return models
 
     @staticmethod
@@ -254,7 +257,7 @@ class SettingsDetector:
                 try:
                     limits[provider] = int(value)
                 except (json.JSONDecodeError, ValueError):
-                    pass
+                    logger.debug("detect_concurrency_limits: invalid value for %s", provider)
         return limits
 
     @staticmethod
@@ -306,7 +309,7 @@ class SettingsDetector:
                         if current != default:
                             modified_count += 1
                     except (ValueError, AttributeError):
-                        pass
+                        logger.debug("detect_modified_settings: failed to parse setting for %s", provider)
 
             if modified_count > 0:
                 provider_settings[provider] = modified_count
@@ -734,8 +737,8 @@ class LauncherTUI:
                 )
                 self.console.print(f"   Host:               {default_host}")
                 self.console.print(f"   Port:               {default_port}")
-                self.console.print(f"   Transaction Logging: Disabled")
-                self.console.print(f"   Raw I/O Logging:    Disabled")
+                self.console.print("   Transaction Logging: Disabled")
+                self.console.print("   Raw I/O Logging:    Disabled")
                 self.console.print(f"   Proxy API Key:      {default_api_key}")
             elif choice == "7":
                 break

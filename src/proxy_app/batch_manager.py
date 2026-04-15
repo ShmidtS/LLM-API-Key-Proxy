@@ -93,3 +93,5 @@ class EmbeddingBatcher:
                     future.set_exception(cancelled_exc)
             except asyncio.QueueEmpty:
                 break
+        # CancelledError is expected during deliberate shutdown;
+        # do not re-raise so callers can continue cleanup (close_doh_client, close_http_pool, etc.)

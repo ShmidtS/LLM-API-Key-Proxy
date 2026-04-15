@@ -20,8 +20,6 @@ import os
 import httpx
 import litellm
 
-if TYPE_CHECKING:
-    from ..usage_manager import UsageManager
 
 from ..config import (
     DEFAULT_ROTATION_MODE,

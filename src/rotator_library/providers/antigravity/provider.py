@@ -5,10 +5,7 @@
 
 from __future__ import annotations
 
-import asyncio
-import logging
 import os
-import time
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union, TYPE_CHECKING
 
@@ -19,10 +16,8 @@ import orjson
 from ...config import env_bool, env_int
 from ...error_handler import EmptyResponseError, TransientQuotaError
 from ...model_definitions import ModelDefinitions
-from ...timeout_config import TimeoutConfig
 from ...transaction_logger import AntigravityProviderLogger
 from ...utils.duration import parse_duration as _parse_duration_shared
-from ...utils.paths import get_cache_dir
 from ..provider_interface import ProviderInterface, UsageResetConfigDef, QuotaGroupMap, build_bearer_headers
 from ..antigravity_auth_base import AntigravityAuthBase
 from ..provider_cache import ProviderCache
@@ -32,12 +27,6 @@ from ..utilities.gemini_shared_utils import (
     GEMINI_DEFAULT_TIER_PRIORITY,
     GEMINI_DEFAULT_PRIORITY_MULTIPLIERS,
     GEMINI_DEFAULT_SEQUENTIAL_FALLBACK_MULTIPLIER,
-    GEMINI3_TOOL_RENAMES,
-    GEMINI3_TOOL_RENAMES_REVERSE,
-    FINISH_REASON_MAP,
-    DEFAULT_SAFETY_SETTINGS,
-    alias_to_internal_model,
-    internal_to_alias_model,
 )
 from ..utilities.gemini_tool_handler import GeminiToolHandler
 from ..utilities.gemini_credential_manager import GeminiCredentialManager
@@ -48,23 +37,8 @@ from .constants import (
     MODEL_ALIAS_MAP,
     MODEL_ALIAS_REVERSE,
     EXCLUDED_MODELS,
-    DEFAULT_MAX_OUTPUT_TOKENS,
-    EMPTY_RESPONSE_MAX_ATTEMPTS,
-    EMPTY_RESPONSE_RETRY_DELAY,
-    MALFORMED_CALL_MAX_RETRIES,
-    MALFORMED_CALL_RETRY_DELAY,
-    PREPEND_INSTRUCTION,
-    INJECT_IDENTITY_OVERRIDE,
-    USE_SHORT_ANTIGRAVITY_PROMPTS,
-    _MalformedFunctionCallDetected,
-    _sanitize_headers,
     _generate_request_id,
-    _generate_stable_session_id,
     _generate_project_id,
-    _generate_session_id,
-    _clean_claude_schema,
-    get_antigravity_preprompt_text,
-    _get_antigravity_cache_dir,
     DEFAULT_GEMINI3_SYSTEM_INSTRUCTION,
     DEFAULT_CLAUDE_SYSTEM_INSTRUCTION,
     DEFAULT_PARALLEL_TOOL_INSTRUCTION,

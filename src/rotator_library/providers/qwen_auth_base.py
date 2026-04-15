@@ -432,7 +432,7 @@ class QwenAuthBase(GoogleOAuthBase):
         with console.status(
             "[bold green]Polling for token, please complete authentication in the browser...[/bold green]",
             spinner="dots",
-        ) as status:
+        ):
             while time.time() - start_time < dev_data["expires_in"]:
                 poll_response = await client.post(
                     TOKEN_ENDPOINT,

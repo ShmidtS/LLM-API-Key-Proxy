@@ -274,6 +274,9 @@ class HttpClientPool(metaclass=SingletonMeta):
         self._warmup_hosts: list = [] # Hosts to pre-warm
 
         # Statistics
+        # No lock needed: asyncio is single-threaded, so integer counter
+        # mutations are atomic between yield points (read-modify-write of
+        # plain ints never interleaves with another coroutine).
         self._stats = {
             "requests_total": 0,
             "requests_streaming": 0,
@@ -528,6 +531,8 @@ class HttpClientPool(metaclass=SingletonMeta):
         Returns:
         httpx.AsyncClient instance
         """
+        # Note: _stats mutations in sync methods are safe in single-threaded asyncio;
+        # no yield point exists between read and write of these integers.
         self._stats["requests_total"] += 1
 
         if streaming:
@@ -550,8 +555,8 @@ class HttpClientPool(metaclass=SingletonMeta):
         Returns:
         Valid httpx.AsyncClient instance
         """
+        # _stats mutations are safe without a lock in single-threaded asyncio
         self._stats["requests_total"] += 1
-
         if streaming:
             self._stats["requests_streaming"] += 1
         else:
@@ -621,6 +626,8 @@ class HttpClientPool(metaclass=SingletonMeta):
     def record_error(self, error_type: str, message: str) -> None:
         """
         Record an error for health tracking.
+
+        Note: _stats mutations are safe in single-threaded asyncio (no yield point).
 
         Args:
         error_type: Type of error (connection, timeout, etc.)

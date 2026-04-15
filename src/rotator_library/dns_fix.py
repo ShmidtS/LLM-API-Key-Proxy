@@ -46,7 +46,16 @@ except ImportError:
 try:
     from dotenv import load_dotenv
 
-    load_dotenv()
+    try:
+        from rotator_library.utils.paths import get_default_root
+
+        _env_path = get_default_root() / ".env"
+    except ImportError:
+        from pathlib import Path
+
+        _env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+
+    load_dotenv(_env_path)
 except ImportError:
     pass  # python-dotenv not installed
 

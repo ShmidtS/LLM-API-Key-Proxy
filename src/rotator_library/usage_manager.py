@@ -1211,7 +1211,6 @@ class UsageManager:
         # Check quota group: look for _quota virtual model or any grouped model
         group = self._get_model_quota_group(key, model)
         if group:
-            virtual_name = f"{model.split('/')[0] if '/' in model else ''}/_quota"
             for model_name, stats in models_data.items():
                 if model_name == model:
                     continue
@@ -2324,15 +2323,6 @@ class UsageManager:
         for credential, usage in candidates:
             weight = (max_usage - usage) + tolerance + 1
             weights.append(weight)
-
-        # Log weight distribution for debugging
-        if lib_logger.isEnabledFor(logging.DEBUG):
-            total_weight = sum(weights)
-            weight_info = ", ".join(
-                f"{mask_credential(cred)}: w={w:.1f} ({w / total_weight * 100:.1f}%)"
-                for (cred, _), w in zip(candidates, weights)
-            )
-            # lib_logger.debug(f"Weighted selection candidates: {weight_info}")
 
         # Random selection with weights
         selected_credential = random.choices(

@@ -11,8 +11,11 @@ Handles remote proxy configurations including:
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+
+logger = logging.getLogger(__name__)
 
 
 class QuotaViewerConfig:
@@ -49,7 +52,7 @@ class QuotaViewerConfig:
                     config["remotes"] = []
                 return config
             except (json.JSONDecodeError, IOError):
-                pass
+                logger.debug("Failed to load config file: %s", self.config_path)
 
         # Return default config with Local remote
         return {
@@ -265,7 +268,7 @@ class QuotaViewerConfig:
                     self.add_remote("Local", host, port, is_default=True)
 
             except (json.JSONDecodeError, IOError):
-                pass
+                logger.debug("Failed to update Local remote from env file")
 
     def get_api_key_from_env(self) -> Optional[str]:
         """
@@ -296,5 +299,5 @@ class QuotaViewerConfig:
                             value = value[1:-1]
                         return value if value else None
         except IOError:
-            pass
+            logger.debug("Failed to read .env file for API key")
         return None

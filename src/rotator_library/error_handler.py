@@ -6,7 +6,7 @@ import json
 import os
 import logging
 import random
-from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING
+from typing import Optional, Dict, Tuple
 import httpx
 
 from litellm.exceptions import (
@@ -345,8 +345,8 @@ def get_retry_after(error: Exception) -> Optional[int]:
                 result = _extract_retry_from_json_body(response_text)
                 if result is not None:
                     return result
-        except Exception:
-            lib_logger.debug("Response body unavailable for retry-after extraction", exc_info=True)
+        except Exception as exc:
+            lib_logger.debug("Response body unavailable for retry-after extraction (%s: %s)", type(exc).__name__, exc)
 
         # Fallback to HTTP headers
         headers = error.response.headers

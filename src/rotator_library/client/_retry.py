@@ -11,7 +11,7 @@ import random
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Dict, List, Optional, Union
+from typing import Any, AsyncGenerator, Optional
 
 import httpx
 import litellm
@@ -484,7 +484,7 @@ class RetryMixin:
                                     current_cred, classified_error, error_message
                                 )
                                 lib_logger.warning(
-                                    f"Retry wait exceeds budget. Rotating."
+                                    "Retry wait exceeds budget. Rotating."
                                 )
                                 break
 
@@ -526,10 +526,11 @@ class RetryMixin:
                             self._apply_default_safety_settings(
                                 litellm_kwargs, provider
                             )
-                        except Exception:
+                        except Exception as exc:
                             # If anything goes wrong here, avoid breaking the request flow.
-                            lib_logger.debug(
-                                "Could not apply default safety settings; continuing."
+                            lib_logger.warning(
+                                "Could not apply default safety settings for %s: %s; continuing.",
+                                provider, type(exc).__name__,
                             )
 
                         if "safety_settings" in litellm_kwargs:
@@ -1272,9 +1273,10 @@ class RetryMixin:
                             self._apply_default_safety_settings(
                                 litellm_kwargs, provider
                             )
-                        except Exception:
-                            lib_logger.debug(
-                                "Could not apply default safety settings for streaming path; continuing."
+                        except Exception as exc:
+                            lib_logger.warning(
+                                "Could not apply default safety settings for streaming path %s: %s; continuing.",
+                                provider, type(exc).__name__,
                             )
 
                         if "safety_settings" in litellm_kwargs:
@@ -1599,7 +1601,7 @@ class RetryMixin:
                                 attempt, deadline, classified_error
                             ):
                                 lib_logger.warning(
-                                    f"Required retry wait exceeds remaining budget. Rotating key early."
+                                    "Required retry wait exceeds remaining budget. Rotating key early."
                                 )
                                 break
 
@@ -1735,7 +1737,6 @@ class RetryMixin:
         # Collect dict chunks and assemble into a non-streaming response
         # This mirrors the aggregation logic in main.py's streaming_response_wrapper
         _content_parts: list = []
-        _generic_str_parts: dict = {}
         aggregated_tool_calls: dict = {}
         final_message: dict = {"role": "assistant"}
         usage_data = None

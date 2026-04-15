@@ -69,6 +69,7 @@ class BackgroundRefresher:
 
     async def stop(self):
         """Stops all background tasks (main loop + provider jobs)."""
+        cancelled = False
         # Cancel provider job tasks first
         for provider, task in self._provider_job_tasks.items():
             if task and not task.done():
@@ -76,7 +77,7 @@ class BackgroundRefresher:
                 try:
                     await task
                 except asyncio.CancelledError:
-                    pass
+                    cancelled = True
                 lib_logger.debug(f"Stopped background job for '{provider}'")
 
         self._provider_job_tasks.clear()

@@ -18,8 +18,6 @@ from .provider_interface import ProviderInterface
 from .utilities.firmware_quota_tracker import FirmwareQuotaTracker
 from ..config.defaults import env_int
 
-if TYPE_CHECKING:
-    from ..usage_manager import UsageManager
 
 import logging
 

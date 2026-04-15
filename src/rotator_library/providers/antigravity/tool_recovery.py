@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import logging
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -13,7 +12,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import litellm
 import orjson
 from .constants import (
-    MALFORMED_CALL_MAX_RETRIES,
     MALFORMED_CALL_RETRY_DELAY,
     _MalformedFunctionCallDetected,
     lib_logger,

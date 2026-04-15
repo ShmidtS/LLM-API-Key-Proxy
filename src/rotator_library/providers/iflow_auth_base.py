@@ -456,7 +456,7 @@ class IFlowAuthBase(GoogleOAuthBase):
                         and "data" in new_token_data
                     ):
                         lib_logger.debug(
-                            f"iFlow refresh response wrapped in 'data' key, extracting..."
+                            "iFlow refresh response wrapped in 'data' key, extracting..."
                         )
                         if not new_token_data.get("success", True):
                             error_msg = new_token_data.get(

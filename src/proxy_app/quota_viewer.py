@@ -44,8 +44,11 @@ Credential Details:
 - [ ] Disable/enable individual credentials
 """
 
+import logging
 import re
 import time
+
+logger = logging.getLogger(__name__)
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -131,7 +134,7 @@ def is_local_host(host: str) -> bool:
             if 16 <= second_octet <= 31:
                 return True
         except (ValueError, IndexError):
-            pass
+            logger.debug("is_private_ip: failed to parse host address")
     return False
 
 

@@ -2,8 +2,12 @@
 # Copyright (c) 2026 ShmidtS
 
 import hmac
+import asyncio
+import logging
 import threading
 from typing import AsyncGenerator, Any
+
+logger = logging.getLogger(__name__)
 
 from fastapi import Request, HTTPException, Depends
 from fastapi.security import APIKeyHeader
@@ -14,7 +18,10 @@ from proxy_app.batch_manager import EmbeddingBatcher
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 anthropic_api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
-# These are set by main.py after environment loading
+# These are set once by main.py after environment loading, before any requests are served.
+# They are read-only during request handling, so no race condition exists in the
+# single-threaded asyncio event loop. Moving to app.state would be cleaner but
+# requires refactoring all route imports that reference these module-level names.
 PROXY_API_KEY: str = None
 _BEARER_PROXY_API_KEY: str = None
 
@@ -54,15 +61,19 @@ async def track_stream(request: Request, stream: AsyncGenerator[Any, None]) -> A
     try:
         _inc_streams(request)
     except AttributeError:
-        pass
+        logger.debug("track_stream: request lacks stream counter attribute")
     try:
         async for chunk in stream:
             yield chunk
+    except (GeneratorExit, asyncio.CancelledError):
+        if hasattr(stream, "aclose"):
+            await stream.aclose()
+        raise
     finally:
         try:
             _dec_streams(request)
         except AttributeError:
-            pass
+            logger.debug("track_stream: request lacks stream counter attribute on decrement")
 
 
 async def verify_api_key(auth: str = Depends(api_key_header)):

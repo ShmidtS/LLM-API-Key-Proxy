@@ -4,7 +4,7 @@
 import os
 import httpx
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from .provider_interface import ProviderInterface
 from ..model_definitions import ModelDefinitions
 

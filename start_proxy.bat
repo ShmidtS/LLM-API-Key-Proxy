@@ -24,6 +24,6 @@ echo Для остановки нажмите Ctrl+C
 echo ========================================
 echo.
 
-python src/proxy_app/main.py --host %PROXY_HOST% --port %PROXY_PORT%
+python src/proxy_app/main.py --host %PROXY_HOST% --port %PROXY_PORT% 2>nul || py src/proxy_app/main.py --host %PROXY_HOST% --port %PROXY_PORT%
 
 pause

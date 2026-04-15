@@ -41,19 +41,14 @@ from .constants import (
     _generate_project_id,
     _generate_session_id,
     _clean_claude_schema,
-    get_antigravity_preprompt_text,
     lib_logger,
 )
 from ..utilities.gemini_shared_utils import (
-    alias_to_internal_model,
-    internal_to_alias_model,
     map_finish_reason,
     inline_schema_refs,
     normalize_type_arrays,
     recursively_parse_json_strings,
     GEMINI3_TOOL_RENAMES,
-    GEMINI3_TOOL_RENAMES_REVERSE,
-    FINISH_REASON_MAP,
     DEFAULT_SAFETY_SETTINGS,
 )
 
@@ -217,8 +212,8 @@ class MessageTransformMixin:
                 # No cached signature - skip the thinking block
                 # This can happen if context was compressed and signature was lost
                 lib_logger.warning(
-                    f"Skipping reasoning_content - no valid signature found. "
-                    f"This may cause issues if thinking is enabled."
+                    "Skipping reasoning_content - no valid signature found. "
+                    "This may cause issues if thinking is enabled."
                 )
         elif (
             self._is_claude(model)
@@ -248,11 +243,6 @@ class MessageTransformMixin:
 
             tool_id = tc.get("id", "")
             func_name = tc["function"]["name"]
-
-            # lib_logger.debug(
-            #    f"[ID Transform] Converting assistant tool_call to functionCall: "
-            #    f"id={tool_id}, name={func_name}"
-            # )
 
             # Add prefix for Gemini 3 (and rename problematic tools)
             if self._is_gemini_3(model) and self._enable_gemini3_tool_fix:
@@ -630,13 +620,10 @@ class MessageTransformMixin:
         # Get existing system instruction (check both formats)
         if has_camel_case:
             existing_sys_inst = request.get("systemInstruction", {})
-            original_key = "systemInstruction"
         elif has_snake_case:
             existing_sys_inst = request.get("system_instruction", {})
-            original_key = "system_instruction"
         else:
             existing_sys_inst = {}
-            original_key = "systemInstruction"  # Default to camelCase
 
         existing_parts = existing_sys_inst.get("parts", [])
 

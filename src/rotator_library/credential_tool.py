@@ -163,7 +163,7 @@ def _get_api_keys_from_env() -> dict:
         return api_keys
 
     try:
-        with open(env_file, "r") as f:
+        with open(env_file, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 # Skip comments and empty lines
@@ -224,7 +224,7 @@ def _delete_api_key_from_env(key_name: str) -> bool:
 
     try:
         # Step 1: Read all lines and backup all API keys
-        with open(env_file, "r") as f:
+        with open(env_file, "r", encoding="utf-8") as f:
             original_lines = f.readlines()
 
         # Create backup of all API keys before modification
@@ -257,7 +257,7 @@ def _delete_api_key_from_env(key_name: str) -> bool:
             return False
 
         # Step 3: Write the modified content
-        with open(env_file, "w") as f:
+        with open(env_file, "w", encoding="utf-8") as f:
             f.writelines(new_lines)
 
         # Step 4: Verify the deletion - compare before and after
@@ -276,7 +276,7 @@ def _delete_api_key_from_env(key_name: str) -> bool:
                 "[bold red]Error: Unexpected keys were affected during deletion![/bold red]"
             )
             console.print("[bold yellow]Restoring original file...[/bold yellow]")
-            with open(env_file, "w") as f:
+            with open(env_file, "w", encoding="utf-8") as f:
                 f.writelines(original_lines)
             return False
 
@@ -348,7 +348,7 @@ def _get_existing_custom_providers() -> list:
         api_bases = {}
         api_keys = set()
 
-        with open(env_file, "r") as f:
+        with open(env_file, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -634,7 +634,7 @@ async def _edit_oauth_credential_email(provider_name: str):
             return
 
         # Load and update the credential file
-        with open(cred_path, "r") as f:
+        with open(cred_path, "r", encoding="utf-8") as f:
             creds = json_loads(f.read())
 
         if "_proxy_metadata" not in creds:
@@ -644,7 +644,7 @@ async def _edit_oauth_credential_email(provider_name: str):
         creds["_proxy_metadata"]["email"] = new_email.strip()
 
         # Save the updated credentials
-        with open(cred_path, "w") as f:
+        with open(cred_path, "w", encoding="utf-8") as f:
             f.write(orjson.dumps(creds, option=orjson.OPT_INDENT_2).decode("utf-8"))
 
         console.print(
@@ -1455,7 +1455,7 @@ async def setup_api_key():
                 while True:
                     key_name = f"{api_key_var}_{key_index}"
                     if _get_env_file().is_file():
-                        with open(_get_env_file(), "r") as f:
+                        with open(_get_env_file(), "r", encoding="utf-8") as f:
                             if not any(line.startswith(f"{key_name}=") for line in f):
                                 break
                     else:
@@ -1668,7 +1668,7 @@ async def setup_custom_openai_provider():
     api_key_var_base = f"{provider_name}_API_KEY"
     key_index = 1
     if env_file.is_file():
-        with open(env_file, "r") as f:
+        with open(env_file, "r", encoding="utf-8") as f:
             content = f.read()
             while f"{api_key_var_base}_{key_index}=" in content:
                 key_index += 1
@@ -1714,17 +1714,6 @@ async def setup_new_credential(provider_name: str):
         _ensure_providers_loaded()
         auth_class = _get_provider_auth_class(provider_name)
         auth_instance = auth_class()
-
-        # Build display name for better user experience
-        oauth_friendly_names = {
-            "gemini_cli": "Gemini CLI (OAuth)",
-            "qwen_code": "Qwen Code (OAuth - also supports API keys)",
-            "iflow": "iFlow (OAuth - also supports API keys)",
-            "antigravity": "Antigravity (OAuth)",
-        }
-        display_name = oauth_friendly_names.get(
-            provider_name, provider_name.replace("_", " ").title()
-        )
 
         # Call the auth class's setup_credential() method which handles the entire flow:
         # - OAuth authentication
@@ -2273,7 +2262,7 @@ async def combine_provider_credentials(provider_name: str):
     for cred_info in credentials:
         try:
             # Load credential file
-            with open(cred_info["file_path"], "r") as f:
+            with open(cred_info["file_path"], "r", encoding="utf-8") as f:
                 creds = json_loads(f.read())
 
             # Use auth class to build env lines
@@ -2292,7 +2281,7 @@ async def combine_provider_credentials(provider_name: str):
     combined_filename = f"{provider_name}_all_combined.env"
     combined_filepath = _get_oauth_base_dir() / combined_filename
 
-    with open(combined_filepath, "w") as f:
+    with open(combined_filepath, "w", encoding="utf-8") as f:
         f.write("\n".join(combined_lines))
 
     console.print(
@@ -2351,7 +2340,7 @@ async def combine_all_credentials():
         for cred_info in credentials:
             try:
                 # Load credential file
-                with open(cred_info["file_path"], "r") as f:
+                with open(cred_info["file_path"], "r", encoding="utf-8") as f:
                     creds = json_loads(f.read())
 
                 # Use auth class to build env lines
@@ -2383,7 +2372,7 @@ async def combine_all_credentials():
     combined_filename = "all_providers_combined.env"
     combined_filepath = _get_oauth_base_dir() / combined_filename
 
-    with open(combined_filepath, "w") as f:
+    with open(combined_filepath, "w", encoding="utf-8") as f:
         f.write("\n".join(combined_lines))
 
     # Build summary

@@ -41,17 +41,13 @@ _patch_aiohttp_connector()
 import asyncio
 import fnmatch
 import logging
-import re
-import time
 import httpx
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
 from pathlib import Path
-from typing import List, Dict, Any, AsyncGenerator, Optional, Union, Tuple
+from typing import List, Dict, Any, AsyncGenerator, Optional, Union
 from urllib.parse import urlparse
 
-from ..utils.json_utils import json_deep_copy
-from ..utils.json_utils import STREAM_DONE  # noqa: E402 – after litellm patching
 
 lib_logger = logging.getLogger("rotator_library")
 # Ensure the logger is configured to propagate to the root logger
@@ -69,27 +65,17 @@ _STREAM_REQUIRED_PROVIDERS = {
 }
 
 from ..usage_manager import UsageManager
-from ..failure_logger import log_failure, configure_failure_logger
+from ..failure_logger import configure_failure_logger
 from ..error_types import (
-    PreRequestCallbackError,
-    CredentialNeedsReauthError,
-    NoAvailableKeysError,
-    RequestErrorAccumulator,
     mask_credential,
-    ContextOverflowError,
-    ClassifiedError,
 )
 from ..error_handler import (
     classify_error,
-    should_rotate_on_error,
-    should_retry_same_key,
-    get_retry_backoff,
 )
 from ..provider_routing_config import ProviderConfig
 from ..http_client_pool import HttpClientPool, get_http_pool, close_http_pool
 from ..providers import PROVIDER_PLUGINS
 from ..providers.openai_compatible_provider import OpenAICompatibleProvider
-from ..request_sanitizer import sanitize_request_payload
 from ..model_info_service import get_model_info_service
 from ..resilience import ResilienceOrchestrator
 from ..credential_manager import CredentialManager
@@ -99,7 +85,6 @@ from ..anthropic_compat.models import (
     AnthropicCountTokensRequest,
 )
 from ..model_definitions import ModelDefinitions
-from ..transaction_logger import TransactionLogger
 from ..utils.paths import get_default_root, get_logs_dir, get_oauth_dir
 from ..utils.suppress_litellm_warnings import suppress_litellm_serialization_warnings
 from ..utils.model_utils import extract_provider_from_model, get_or_create_provider_instance, normalize_model_string
@@ -111,12 +96,11 @@ from ..config import (
     CIRCUIT_BREAKER_PROVIDER_OVERRIDES,
 )
 
-from ..env_cache import _provider_env_cache, _PROVIDER_ENV_PREFIXES  # noqa: F401
 
 # Import mixin classes for method inheritance
 from ._helpers import HelpersMixin
 from ._streaming import StreamingMixin
-from ._retry import RetryMixin, _RetryContext
+from ._retry import RetryMixin
 
 
 class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
@@ -676,10 +660,12 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         await self.close()
 
     async def close(self):
-        """Close the HTTP client pool to prevent resource leaks."""
-        # Note: We don't close the global pool here as it may be shared
-        # across multiple RotatingClient instances.
-        # The pool will be closed on application shutdown via close_http_pool().
+        """Release reference to the shared HTTP client pool.
+
+        Does NOT close the pool — it is a singleton shared across all
+        RotatingClient instances.  Pool lifecycle is managed via
+        close_http_pool() during application shutdown.
+        """
         self._http_pool = None
         self._pool_initialized = False
 

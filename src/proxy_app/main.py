@@ -110,7 +110,7 @@ else:
 print("━" * 70)
 print(f"Starting proxy on {args.host}:{args.port}")
 print(f"Proxy API Key: {key_display}")
-print(f"GitHub: https://github.com/ShmidtS/LLM-API-Key-Proxy")
+print("GitHub: https://github.com/ShmidtS/LLM-API-Key-Proxy")
 print("━" * 70)
 print("Loading server components...")
 
@@ -149,29 +149,28 @@ with _console.status("[dim]Loading LiteLLM library...", spinner="dots"):
 
         # 1. Set litellm's SSL verification to False
         litellm.ssl_verify = False
-        print(f"[SSL-FIX-MAIN] Set litellm.ssl_verify = False")
+        print("[SSL-FIX-MAIN] Set litellm.ssl_verify = False")
 
         # 2. Create pre-configured httpx clients with SSL verification disabled
         # This is the MOST RELIABLE way to disable SSL in litellm
         litellm.client_session = httpx.Client(verify=False)
         litellm.aclient_session = httpx.AsyncClient(verify=False)
         print(
-            f"[SSL-FIX-MAIN] Created litellm.client_session and aclient_session with verify=False"
+            "[SSL-FIX-MAIN] Created litellm.client_session and aclient_session with verify=False"
         )
 
         # 3. Set environment variable for litellm
         os.environ["SSL_VERIFY"] = "False"
-        print(f"[SSL-FIX-MAIN] Set SSL_VERIFY=False environment variable")
+        print("[SSL-FIX-MAIN] Set SSL_VERIFY=False environment variable")
 
 # Phase 4: Application imports with granular loading messages
 print("  → Initializing proxy core...")
 with _console.status("[dim]Initializing proxy core...", spinner="dots"):
-    from rotator_library import RotatingClient, STREAM_DONE
+    from rotator_library import RotatingClient
     from rotator_library.credential_manager import CredentialManager
     from rotator_library.dns_fix import close_doh_client
     from rotator_library.http_client_pool import close_http_pool
     from rotator_library.model_info_service import init_model_info_service
-    from proxy_app.request_logger import log_request_to_console
     from proxy_app.batch_manager import EmbeddingBatcher
 
 # Import extracted modules
@@ -206,7 +205,7 @@ os.system("cls" if os.name == "nt" else "clear")
 print("━" * 70)
 print(f"Starting proxy on {args.host}:{args.port}")
 print(f"Proxy API Key: {key_display}")
-print(f"GitHub: https://github.com/ShmidtS/LLM-API-Key-Proxy")
+print("GitHub: https://github.com/ShmidtS/LLM-API-Key-Proxy")
 print("━" * 70)
 print(
     f"✓ Server ready in {_elapsed:.2f}s ({_plugin_count} providers discovered in {_provider_time:.2f}s)"
@@ -395,16 +394,28 @@ async def lifespan(app: FastAPI):
     # Suppress noisy ConnectionResetError from Windows ProactorEventLoop
     # High-TPS providers (fireworks, friendli) forcefully close connections
     # after streaming, causing socket.shutdown() to throw in cleanup callbacks.
+    # Scope: only suppress transport-level errors (proactor/send/socket context),
+    # not arbitrary business logic errors that happen to be ConnectionResetError.
+    _original_handler = None
     if sys.platform == "win32":
         loop = asyncio.get_running_loop()
+        _original_handler = loop.get_exception_handler()
 
         def _suppress_connection_reset(loop, context):
             exc = context.get("exception")
             if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
                 msg = str(exc).lower()
-                if "send" in msg or "socket" in msg:
-                    return  # Disconnected client, not a provider auth failure
-            loop.default_exception_handler(context)
+                # Only suppress transport-level resets, not provider auth failures
+                context_msg = context.get("message", "").lower()
+                if ("send" in msg or "socket" in msg
+                        or "transport" in context_msg or "proactor" in context_msg
+                        or "fatal write error" in context_msg
+                        or "write error" in context_msg):
+                    return  # Disconnected client / transport cleanup
+            if _original_handler:
+                _original_handler(loop, context)
+            else:
+                loop.default_exception_handler(context)
 
         loop.set_exception_handler(_suppress_connection_reset)
     # [MODIFIED] Perform skippable OAuth initialization at startup
@@ -432,7 +443,7 @@ async def lifespan(app: FastAPI):
                     continue
 
                 try:
-                    with open(path, "r") as f:
+                    with open(path, "r", encoding="utf-8") as f:
                         data = json.load(f)
                     metadata = data.get("_proxy_metadata", {})
                     email = metadata.get("email")
@@ -550,7 +561,7 @@ async def lifespan(app: FastAPI):
                 # Update metadata (skip for env-based credentials - they don't have files)
                 if not path.startswith("env://"):
                     try:
-                        with open(path, "r+") as f:
+                        with open(path, "r+", encoding="utf-8") as f:
                             data = json.load(f)
                             metadata = data.get("_proxy_metadata", {})
                             metadata["email"] = email
@@ -651,6 +662,14 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Restore original exception handler on shutdown
+    if sys.platform == "win32" and _original_handler is not None:
+        try:
+            loop = asyncio.get_running_loop()
+            loop.set_exception_handler(_original_handler)
+        except RuntimeError:
+            pass
+
     # Grace period: allow in-flight streaming responses to complete
     try:
         logging.info("Shutdown requested, waiting up to 5s for active streams...")
@@ -708,7 +727,7 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
+    allow_credentials=False,  # Must be False when allow_origins=["*"] per CORS spec
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )

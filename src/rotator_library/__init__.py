@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 ShmidtS
 
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING
 
 from .client import RotatingClient
 from .utils.json_utils import STREAM_DONE
@@ -10,7 +10,6 @@ from .utils.json_utils import STREAM_DONE
 # At runtime, it's lazy-loaded via __getattr__
 if TYPE_CHECKING:
     from .providers import PROVIDER_PLUGINS
-    from .providers.provider_interface import ProviderInterface
     from .model_info_service import ModelInfoService, ModelInfo, ModelMetadata
     from . import anthropic_compat
     from .http_client_pool import HttpClientPool, get_http_pool, close_http_pool

@@ -7,8 +7,11 @@ Provides interactive configuration for custom providers, model definitions, and 
 """
 
 import json
+import logging
 import os
 from typing import Dict, Any, Optional, List
+
+logger = logging.getLogger(__name__)
 from rich.console import Console
 from rich.prompt import Prompt, IntPrompt, Confirm
 from rich.panel import Panel
@@ -220,7 +223,7 @@ class ModelDefinitionManager:
                     elif isinstance(parsed, list):
                         providers[provider] = len(parsed)
                 except (json.JSONDecodeError, ValueError):
-                    pass
+                    logger.debug("detect_provider_counts: invalid JSON for provider %s", provider)
         return providers
 
     def set_models(self, provider: str, models: Dict[str, Dict[str, Any]]):
@@ -250,7 +253,7 @@ class ConcurrencyManager:
                 try:
                     limits[provider] = int(value)
                 except (json.JSONDecodeError, ValueError):
-                    pass
+                    logger.debug("detect_concurrency_limits: invalid value for %s", provider)
         return limits
 
     def set_limit(self, provider: str, limit: int):
@@ -336,7 +339,7 @@ class PriorityMultiplierManager:
             ):
                 return dict(provider_class.default_priority_multipliers)
         except ImportError:
-            pass
+            logger.debug("get_default_priority_multipliers: provider %s not importable", provider)
         return {}
 
     def get_sequential_fallback(self, provider: str) -> int:
@@ -350,7 +353,7 @@ class PriorityMultiplierManager:
             ):
                 return provider_class.default_sequential_fallback_multiplier
         except ImportError:
-            pass
+            logger.debug("get_sequential_fallback: provider %s not importable", provider)
         return 1
 
     def get_current_multipliers(self) -> Dict[str, Dict[int, int]]:
@@ -375,7 +378,7 @@ class PriorityMultiplierManager:
                         multipliers[provider] = {}
                     multipliers[provider][priority] = multiplier
                 except (ValueError, IndexError):
-                    pass
+                    logger.debug("get_current_multipliers: failed to parse multiplier env var for %s", provider)
         return multipliers
 
     def get_effective_multiplier(self, provider: str, priority: int) -> int:
@@ -695,7 +698,7 @@ class SettingsTool:
                             provider = line.split("_API_KEY")[0].strip().lower()
                             providers.add(provider)
             except (IOError, OSError):
-                pass
+                logger.debug("detect_providers: failed to read .env file")
 
         # Also check for OAuth providers from files
         from rotator_library.utils.paths import get_oauth_dir
@@ -1214,7 +1217,7 @@ class SettingsTool:
                                 try:
                                     value = float(value) if "." in value else int(value)
                                 except (ValueError, TypeError):
-                                    pass
+                                    logger.debug("parse_model_options: non-numeric value kept as string for key %s", key.strip())
                                 options[key.strip()] = value
                         if options:
                             model_def["options"] = options

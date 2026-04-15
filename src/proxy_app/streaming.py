@@ -2,6 +2,7 @@
 # Copyright (c) 2026 ShmidtS
 
 import time
+import asyncio
 import logging
 from typing import AsyncGenerator, Any, Optional
 
@@ -12,6 +13,8 @@ from proxy_app.dependencies import _inc_streams, _dec_streams
 from proxy_app.detailed_logger import RawIOLogger
 
 import litellm
+
+logger = logging.getLogger(__name__)
 
 
 async def streaming_response_wrapper(
@@ -42,7 +45,7 @@ async def streaming_response_wrapper(
     try:
         _inc_streams(request)
     except AttributeError:
-        pass
+        logger.debug("stream_response: request lacks stream counter attribute")
 
     try:
         async for chunk in response_stream:
@@ -145,6 +148,8 @@ async def streaming_response_wrapper(
 
             if "usage" in chunk and chunk["usage"]:
                 usage_data = chunk["usage"]
+    except (GeneratorExit, asyncio.CancelledError):
+        raise
     except Exception as e:
         logging.exception("Error during response stream")
         # Yield a final error message to the client to ensure they are not left hanging.
@@ -167,7 +172,7 @@ async def streaming_response_wrapper(
         try:
             _dec_streams(request)
         except AttributeError:
-            pass
+            logger.debug("stream_response: request lacks stream counter attribute on decrement")
         if logger:
             try:
                 if first_chunk_meta is not None:

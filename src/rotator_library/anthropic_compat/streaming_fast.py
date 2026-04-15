@@ -14,6 +14,7 @@ Performance optimizations:
 - Pre-built templates for common events
 """
 
+import asyncio
 import logging
 import time
 from time import monotonic
@@ -296,12 +297,10 @@ async def anthropic_streaming_wrapper_fast(
     output_tokens = 0
     cached_tokens = 0
     cache_creation_tokens = 0
-    usage_received_from_provider = False  # Track if we got usage from provider
 
     # Accumulated content for logging (list + join for O(n) instead of += O(n^2))
     _text_parts: list[str] = []
     _thinking_parts: list[str] = []
-    stop_reason_final = "end_turn"
     
     # Initialize chunk batcher for improved throughput
     batcher = ChunkBatcher(max_size=4096, max_delay_ms=1)
@@ -328,7 +327,6 @@ async def anthropic_streaming_wrapper_fast(
                     _thinking_parts, _text_parts, input_tokens,
                 ):
                     yield event
-                stop_reason_final = "tool_use" if tool_calls_by_index else "end_turn"
                 break
 
             # Dict chunk (new internal pipeline format)
@@ -348,7 +346,6 @@ async def anthropic_streaming_wrapper_fast(
                         _thinking_parts, _text_parts, input_tokens,
                     ):
                         yield event
-                    stop_reason_final = "tool_use" if tool_calls_by_index else "end_turn"
                     break
 
                 try:
@@ -370,7 +367,6 @@ async def anthropic_streaming_wrapper_fast(
                 # Provider returned usage - use it (overrides precomputed)
                 if usage.get("prompt_tokens"):
                     input_tokens = usage.get("prompt_tokens", input_tokens)
-                    usage_received_from_provider = True
                 output_tokens = usage.get("completion_tokens", output_tokens)
                 # Extract cached tokens from prompt_tokens_details
                 if usage.get("prompt_tokens_details"):
@@ -490,6 +486,10 @@ async def anthropic_streaming_wrapper_fast(
                         yield event
                     last_event_time = current_time
 
+    except GeneratorExit:
+        raise
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.error(f"Error in Anthropic streaming wrapper: {e}")
 

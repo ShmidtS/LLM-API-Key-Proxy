@@ -33,6 +33,11 @@ def _patch_aiohttp_connector():
                         ctx.set_ciphers(_AZURE_COMPATIBLE_CIPHERS)
                     except _ssl_module.SSLError:
                         pass
+                    except Exception as exc:
+                        if os.name == "nt" and isinstance(exc, _ssl_module.SSLError):
+                            print("[SSL-FIX] Schannel does not support set_ciphers, skipping on Windows")
+                        else:
+                            raise
                 return ctx
 
             _ssl_module.create_default_context = _patched_create_default
@@ -42,7 +47,7 @@ def _patch_aiohttp_connector():
                 _ssl_module._create_default_context = _patched_create_default
 
             print(
-                f"[SSL-FIX] Global ssl.create_default_context patched to return unverified TLS 1.2 context"
+                "[SSL-FIX] Global ssl.create_default_context patched to return unverified TLS 1.2 context"
             )
 
         # Patch aiohttp.TCPConnector
@@ -60,6 +65,11 @@ def _patch_aiohttp_connector():
                         ssl_context.set_ciphers(_AZURE_COMPATIBLE_CIPHERS)
                     except _ssl_module.SSLError:
                         pass
+                    except Exception as exc:
+                        if os.name == "nt" and isinstance(exc, _ssl_module.SSLError):
+                            print("[SSL-FIX] Schannel does not support set_ciphers, skipping on Windows")
+                        else:
+                            raise
                 kwargs["ssl"] = ssl_context
             _original_init(self, *args, **kwargs)
 
@@ -76,7 +86,7 @@ def _patch_aiohttp_connector():
                 return await _original_request(self, *args, **kwargs)
 
             aiohttp.ClientSession._request = _patched_request
-            print(f"[SSL-FIX] Patched aiohttp.ClientSession._request to use ssl=False")
+            print("[SSL-FIX] Patched aiohttp.ClientSession._request to use ssl=False")
         except Exception as e:
             print(f"[SSL-FIX] Failed to patch ClientSession: {e}")
 
