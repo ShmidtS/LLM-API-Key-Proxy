@@ -743,7 +743,7 @@ for _router in all_routers:
     app.include_router(_router)
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def read_root():
     return {"Status": "API Key Proxy is running"}
 
