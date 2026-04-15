@@ -19,7 +19,7 @@ Key differences from chat/completions:
 """
 
 import os
-import json
+import orjson
 import logging
 from typing import List, Dict, Any, AsyncGenerator, Union
 import httpx
@@ -284,7 +284,7 @@ class ColinProvider(ProviderInterface):
                                     "text", ""
                                 )
 
-                    except json.JSONDecodeError:
+                    except orjson.JSONDecodeError:
                         lib_logger.debug(f"Failed to parse SSE data: {data_str[:100]}")
                         continue
 

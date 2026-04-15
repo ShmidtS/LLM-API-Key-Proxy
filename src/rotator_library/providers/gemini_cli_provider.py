@@ -3,7 +3,6 @@
 
 # src/rotator_library/providers/gemini_cli_provider.py
 
-import json
 import orjson
 from ..utils.json_utils import json_deep_copy
 from ..utils.duration import parse_duration as _parse_duration_shared
@@ -234,7 +233,7 @@ class GeminiCliProvider(
                             if parsed:
                                 result["retry_after"] = parsed
 
-        except (json.JSONDecodeError, AttributeError, TypeError):
+        except (orjson.JSONDecodeError, AttributeError, TypeError):
             pass
 
         if not result["retry_after"]:

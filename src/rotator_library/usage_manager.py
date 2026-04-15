@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 ShmidtS
 
-import json
+import orjson
 import os
 from .utils.json_utils import json_loads
 import time
@@ -1612,7 +1612,7 @@ class UsageManager:
             except FileNotFoundError:
                 # File deleted between exists check and open
                 self._usage_data = {}
-            except json.JSONDecodeError as e:
+            except orjson.JSONDecodeError as e:
                 lib_logger.warning(
                     f"Corrupted usage file {self.file_path}: {e}. Starting fresh."
                 )

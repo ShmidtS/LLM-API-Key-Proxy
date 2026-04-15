@@ -8,7 +8,7 @@ import re
 import webbrowser
 from dataclasses import dataclass, field
 from typing import ClassVar, Union, Optional, List, Dict, Any
-import json
+import orjson
 import time
 import asyncio
 import logging
@@ -171,7 +171,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             if "v" not in state_data:
                 raise ValueError("Missing verifier in state")
             return state_data["v"]
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        except (orjson.JSONDecodeError, UnicodeDecodeError) as e:
             raise ValueError(f"Invalid state parameter: {e}")
 
     @property

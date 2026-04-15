@@ -6,15 +6,8 @@ Interactive TUI launcher for the LLM API Key Proxy.
 Provides a beautiful Rich-based interface for configuration and execution.
 """
 
-# Disable aiodns BEFORE any aiohttp/litellm imports to fix DNS resolution issues
-# This must be set before aiohttp is imported anywhere in the process
 import os
 import sys
-
-# Disable aiodns C extensions on Windows only (breaks DNS resolution there).
-# Linux/macOS keep C extensions for performance.
-if sys.platform == "win32":
-    os.environ["AIOHTTP_NO_EXTENSIONS"] = "1"
 
 import orjson
 

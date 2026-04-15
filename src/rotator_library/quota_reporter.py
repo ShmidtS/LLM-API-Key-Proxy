@@ -154,7 +154,9 @@ class QuotaReporter:
                     prov_stats["quota_groups"][group_name] = group_stats
 
                 # Also enrich each credential with formatted quota group info
-                for cred in prov_stats.get("credentials", []):
+                credentials = prov_stats.get("credentials", [])
+                for i, cred in enumerate(credentials):
+                    cred = dict(cred)
                     cred["model_groups"] = {}
                     models_data = cred.get("models", {})
 
@@ -264,6 +266,8 @@ class QuotaReporter:
                         tier = provider_instance.project_tier_cache.get(cred_path)
                         if tier:
                             cred["tier"] = tier
+
+                    credentials[i] = cred
 
         return stats
 

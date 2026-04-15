@@ -16,7 +16,6 @@ from typing import (
 import re
 import orjson
 
-import json
 import logging
 import os
 import httpx
@@ -280,7 +279,7 @@ class ProviderInterface(ABC):
             json_match = re.search(r"\{[\s\S]*\}", body)
             if json_match:
                 data = orjson.loads(json_match.group(0))
-        except (json.JSONDecodeError, ValueError):
+        except (orjson.JSONDecodeError, ValueError):
             pass
 
         for spec in patterns:

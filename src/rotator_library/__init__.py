@@ -3,6 +3,15 @@
 
 from typing import TYPE_CHECKING
 
+import sys
+import asyncio
+
+if sys.platform == "win32":
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except RuntimeError:
+        pass
+
 from .client import RotatingClient
 from .utils.json_utils import STREAM_DONE
 

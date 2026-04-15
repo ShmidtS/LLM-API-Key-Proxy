@@ -1,18 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
-# Disable aiodns BEFORE any aiohttp/litellm imports to fix DNS resolution issues
-# This must be set before aiohttp is imported anywhere in the process
-# See: https://github.com/aio-libs/aiohttp/issues/1135
-# When aiodns is installed, aiohttp uses it by default but it may fail to resolve
-# domains that work fine with system DNS (ping works but aiohttp fails)
 import os
 import sys
-
-# Disable aiodns C extensions on Windows only (breaks DNS resolution there).
-# Linux/macOS keep C extensions for performance.
-if sys.platform == "win32":
-    os.environ["AIOHTTP_NO_EXTENSIONS"] = "1"
 
 import time
 # Phase 1: Minimal imports for arg parsing and TUI

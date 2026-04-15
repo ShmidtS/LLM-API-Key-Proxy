@@ -3,14 +3,11 @@
 
 import os
 import ssl as _ssl_module
+import logging
 
-_AZURE_COMPATIBLE_CIPHERS = (
-    "ECDHE-RSA-AES256-GCM-SHA384:"
-    "ECDHE-RSA-AES128-GCM-SHA256:"
-    "ECDHE-ECDSA-AES256-GCM-SHA384:"
-    "ECDHE-ECDSA-AES128-GCM-SHA256:"
-    "AES256-GCM-SHA384:"
-    "AES128-GCM-SHA256"
+AZURE_COMPATIBLE_CIPHERS = (
+    "ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:"
+    "ECDH+3DES:DH+3DES:RSA+AESGCM:RSA+AES:RSA+3DES:!aNULL:!MD5:!DSS"
 )
 
 
@@ -20,7 +17,7 @@ def _safe_set_ciphers(ctx, cipher_string):
         ctx.set_ciphers(cipher_string)
     except Exception as exc:
         if os.name == "nt" and isinstance(exc, _ssl_module.SSLError):
-            print("[SSL-FIX] Schannel does not support set_ciphers, skipping on Windows")
+            logging.warning("[SSL-FIX] Schannel does not support set_ciphers, skipping on Windows")
         else:
             raise
 
@@ -38,7 +35,7 @@ def _patch_aiohttp_connector():
                 ctx = _ssl_module._create_unverified_context()
                 if _force_tls12:
                     ctx.maximum_version = _ssl_module.TLSVersion.TLSv1_2
-                    _safe_set_ciphers(ctx, _AZURE_COMPATIBLE_CIPHERS)
+                    _safe_set_ciphers(ctx, AZURE_COMPATIBLE_CIPHERS)
                 return ctx
 
             _ssl_module.create_default_context = _patched_create_default
@@ -62,7 +59,7 @@ def _patch_aiohttp_connector():
                 ssl_context = _ssl_module._create_unverified_context()
                 if _force_tls12:
                     ssl_context.maximum_version = _ssl_module.TLSVersion.TLSv1_2
-                    _safe_set_ciphers(ssl_context, _AZURE_COMPATIBLE_CIPHERS)
+                    _safe_set_ciphers(ssl_context, AZURE_COMPATIBLE_CIPHERS)
                 kwargs["ssl"] = ssl_context
             _original_init(self, *args, **kwargs)
 

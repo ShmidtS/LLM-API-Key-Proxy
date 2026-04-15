@@ -61,6 +61,7 @@ class CircuitInfo:
         self.state = CircuitState.CLOSED
         self.failure_count = 0
         self.last_failure_time = None
+        self.last_success_time = None
         self.half_open_attempts = 0
         self.half_open_active = 0
         self.custom_recovery_timeout = None

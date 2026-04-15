@@ -2,11 +2,10 @@
 # Copyright (c) 2026 ShmidtS
 
 import re
-import json
 import os
 import logging
 import random
-from typing import Optional, Dict, Tuple
+from typing import TYPE_CHECKING, Optional, Dict, Tuple
 import httpx
 
 from litellm.exceptions import (
@@ -22,12 +21,14 @@ from litellm.exceptions import (
 )
 
 from .ip_throttle_detector import (
-    IPThrottleDetector,
     ThrottleScope,
     get_ip_throttle_detector,
 )
-from .circuit_breaker import ProviderCircuitBreaker
-from .cooldown_manager import CooldownManager
+if TYPE_CHECKING:
+    from .ip_throttle_detector import IPThrottleDetector
+    from .circuit_breaker import ProviderCircuitBreaker
+    from .cooldown_manager import CooldownManager
+import orjson
 from .utils.json_utils import json_loads
 from .utils.duration import parse_duration
 
@@ -282,7 +283,7 @@ def _extract_retry_from_json_body(json_text: str) -> Optional[int]:
                     if result is not None:
                         return result
 
-    except (json.JSONDecodeError, IndexError, KeyError, TypeError):
+    except (orjson.JSONDecodeError, IndexError, KeyError, TypeError):
         pass
 
     return None

@@ -46,7 +46,6 @@ import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
 from pathlib import Path
 from typing import List, Dict, Any, AsyncGenerator, Optional, Union
-from urllib.parse import urlparse
 
 
 lib_logger = logging.getLogger("rotator_library")
@@ -73,7 +72,7 @@ from ..error_handler import (
     classify_error,
 )
 from ..provider_routing_config import ProviderConfig
-from ..http_client_pool import HttpClientPool, get_http_pool, close_http_pool
+from ..http_client_pool import HttpClientPool, close_http_pool
 from ..providers import PROVIDER_PLUGINS
 from ..providers.openai_compatible_provider import OpenAICompatibleProvider
 from ..model_info_service import get_model_info_service
@@ -168,7 +167,6 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
 
         # Suppress harmless Pydantic serialization warnings from litellm
         # See: https://github.com/BerriAI/litellm/issues/11759
-        # TODO: Remove this workaround once litellm patches the issue
         suppress_litellm_serialization_warnings()
 
         if configure_logging:
@@ -348,116 +346,6 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                         litellm_kwargs[key] = value
 
         return litellm_kwargs
-
-    async def _ensure_http_pool(self) -> HttpClientPool:
-        """
-        Ensure the HTTP client pool is initialized.
-
-        Uses the global singleton pool for optimal connection sharing.
-        Pre-warms connections to known provider endpoints.
-        """
-        if self._http_pool is None or not self._pool_initialized:
-            self._http_pool = await get_http_pool()
-            if not self._http_pool.is_initialized:
-                # Build list of endpoints to pre-warm
-                warmup_hosts = self._get_provider_endpoints()
-                await self._http_pool.initialize(warmup_hosts=warmup_hosts)
-            self._pool_initialized = True
-            lib_logger.debug("HTTP client pool initialized with pre-warmed connections")
-        return self._http_pool
-
-    def _get_provider_endpoints(self) -> List[str]:
-        """
-        Get list of API endpoints for all configured providers.
-
-        Returns:
-            List of URLs to pre-warm connections for
-        """
-        endpoints = []
-
-        # Map of provider names to their default API base URLs
-        # These are only used as fallbacks if no custom API_BASE is configured
-        provider_urls = {
-            "openai": "https://api.openai.com",
-            "anthropic": "https://api.anthropic.com",
-            "gemini": "https://generativelanguage.googleapis.com",
-            "antigravity": "https://api.antigravity.ai",
-            "iflow": "https://api.iflow.ai",
-        }
-
-        # Add endpoints for configured providers
-        # Priority: custom API_BASE from env > hardcoded defaults
-        for provider in self.all_credentials.keys():
-            # First check if provider has a custom API_BASE configured
-            if provider in self.provider_config.api_bases:
-                api_base = self.provider_config.api_bases[provider]
-                if api_base:
-                    # Extract just the origin for warmup
-                    parsed = urlparse(api_base)
-                    if parsed.scheme and parsed.netloc:
-                        endpoints.append(f"{parsed.scheme}://{parsed.netloc}")
-                        continue
-            # Fall back to hardcoded defaults
-            if provider in provider_urls:
-                endpoints.append(provider_urls[provider])
-
-        # Cache resolved endpoints for later use
-        self._provider_endpoints = {}
-        for provider in self.all_credentials.keys():
-            if provider in self.provider_config.api_bases:
-                api_base = self.provider_config.api_bases[provider]
-                if api_base:
-                    parsed = urlparse(api_base)
-                    if parsed.scheme and parsed.netloc:
-                        self._provider_endpoints[provider] = (
-                            f"{parsed.scheme}://{parsed.netloc}"
-                        )
-                        continue
-            if provider in provider_urls:
-                self._provider_endpoints[provider] = provider_urls[provider]
-
-        return list(set(endpoints))[:5]  # Dedupe and limit
-
-    async def _get_http_client(self, streaming: bool = False) -> httpx.AsyncClient:
-        """
-        Get HTTP client from the pool (async version with lock protection).
-
-        Prefer _get_http_client_async() for production use.
-
-        Args:
-            streaming: Whether this client will be used for streaming requests
-
-        Returns:
-            httpx.AsyncClient instance
-        """
-        # If pool reference not set, bind to the singleton pool
-        # (this should rarely happen if initialize() is called properly)
-        if self._http_pool is None:
-            lib_logger.warning("HTTP pool accessed before initialization")
-            self._http_pool = HttpClientPool()
-        return await self._http_pool.get_client_async(streaming=streaming)
-
-    async def _get_http_client_async(
-        self, streaming: bool = False
-    ) -> httpx.AsyncClient:
-        """
-        Get HTTP client from the pool with automatic recovery.
-
-        This is the preferred method for getting an HTTP client.
-        It ensures the pool is initialized and returns a healthy client.
-
-        Args:
-            streaming: Whether this client will be used for streaming requests
-
-        Returns:
-            Usable httpx.AsyncClient instance
-        """
-        pool = await self._ensure_http_pool()
-        return await pool.get_client_async(streaming=streaming)
-
-    async def http_client(self) -> httpx.AsyncClient:
-        """Async property that returns client from pool (non-streaming by default)."""
-        return await self._get_http_client(streaming=False)
 
     def _is_model_ignored(self, provider: str, model_id: str) -> bool:
         """

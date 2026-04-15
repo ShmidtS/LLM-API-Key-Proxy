@@ -91,7 +91,7 @@ class ProviderCache:
         self._memory_ttl = memory_ttl_seconds
         self._disk_ttl = disk_ttl_seconds
         self._rw_lock = ReadWriteLock()
-        self._sync_lock = threading.Lock()
+        self._sync_lock = threading.Lock()  # Used in both sync (retrieve/contains) and async contexts; asyncio.Lock would deadlock in sync callers
         self._disk_lock = asyncio.RLock()
         self._max_entries = max_entries
         self._evicted_count = 0

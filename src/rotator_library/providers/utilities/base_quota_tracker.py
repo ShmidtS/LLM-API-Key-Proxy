@@ -28,7 +28,6 @@ Required from provider (via mixin inheritance):
 """
 
 import asyncio
-import json
 import logging
 import orjson
 import os
@@ -270,7 +269,7 @@ class BaseQuotaTracker:
                     f"Loaded {sum(len(v) for v in self._learned_costs.values())} "
                     f"learned {self.cache_subdir} quota costs"
                 )
-        except (json.JSONDecodeError, IOError) as e:
+        except (orjson.JSONDecodeError, IOError) as e:
             lib_logger.warning(f"Failed to load learned costs: {e}")
             self._learned_costs = {}
 

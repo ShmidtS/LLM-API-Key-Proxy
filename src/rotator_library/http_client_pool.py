@@ -17,33 +17,12 @@ import gzip
 import logging
 import os
 import ssl
-import sys
 import time
 from typing import Any, Dict, List, Optional, Union
 import httpx
 
 from .config.defaults import HTTP_COMPRESS_MIN_SIZE, HTTP_COMPRESS_REQUESTS
 from .utils.singleton import SingletonMeta
-
-# Disable aiodns before any aiohttp import to fix DNS resolution issues
-# This must be set before aiohttp is imported anywhere in the process
-# See: https://github.com/aio-libs/aiohttp/issues/1135
-# Accepts: true, 1, yes, on, or any non-empty value (including DNS IP addresses)
-_http_dns_resolver = os.getenv("HTTP_DNS_RESOLVER", "").strip().lower()
-if _http_dns_resolver in ("true", "1", "yes", "on") or (
-    _http_dns_resolver and _http_dns_resolver not in ("false", "0", "no", "off")
-):
-    # Check if aiodns is available — if missing, aiohttp DNS resolution
-    # fails on any platform, not just Windows.
-    try:
-        import aiodns  # type: ignore[import-untyped] # noqa: F401
-    except ImportError:
-        _aiodns_available = False
-    else:
-        _aiodns_available = True
-
-    if sys.platform == "win32" or not _aiodns_available:
-        os.environ["AIOHTTP_NO_EXTENSIONS"] = "1"
 
 from .timeout_config import TimeoutConfig
 from .config import env_bool as _env_bool, env_float as _env_float, env_int as _env_int
@@ -66,12 +45,7 @@ DEFAULT_SSL_VERIFY = True  # SSL certificate verification enabled by default
 DEFAULT_HTTP2_ENABLED = True  # HTTP/2 enabled by default
 
 
-# Azure-compatible cipher suites to fix SSLV3_ALERT_HANDSHAKE_FAILURE
-# Some Azure endpoints reject TLS 1.3 cipher suites; this list prefers TLS 1.2 suites
-AZURE_COMPATIBLE_CIPHERS = (
-    "ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:"
-    "ECDH+3DES:DH+3DES:RSA+AESGCM:RSA+AES:RSA+3DES:!aNULL:!MD5:!DSS"
-)
+from .ssl_patch import AZURE_COMPATIBLE_CIPHERS
 
 
 class GzipRequestTransport(httpx.AsyncHTTPTransport):

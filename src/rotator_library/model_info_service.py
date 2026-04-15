@@ -12,7 +12,7 @@ Data retrieval happens asynchronously post-startup to keep initialization fast.
 
 import asyncio
 import functools
-import json
+import orjson
 import logging
 from .utils.json_utils import json_loads
 from .config.defaults import env_int
@@ -463,7 +463,7 @@ class OpenRouterAdapter(DataSourceAdapter):
                 catalog[full_id] = self._normalize(entry)
 
             return catalog
-        except (URLError, json.JSONDecodeError, TimeoutError) as err:
+        except (URLError, orjson.JSONDecodeError, TimeoutError) as err:
             raise ConnectionError(f"OpenRouter unavailable: {err}") from err
 
     def _normalize(self, raw: Dict) -> Dict:
@@ -554,7 +554,7 @@ class ModelsDevAdapter(DataSourceAdapter):
                     catalog[full_id] = self._normalize(model_data, provider_key)
 
             return catalog
-        except (URLError, json.JSONDecodeError, TimeoutError) as err:
+        except (URLError, orjson.JSONDecodeError, TimeoutError) as err:
             raise ConnectionError(f"Models.dev unavailable: {err}") from err
 
     def _normalize(self, raw: Dict, provider_key: str) -> Dict:

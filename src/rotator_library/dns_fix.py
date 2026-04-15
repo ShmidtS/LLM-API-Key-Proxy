@@ -24,6 +24,7 @@ Usage:
 """
 
 import os
+import sys
 import socket
 import struct
 import random
@@ -225,10 +226,7 @@ def _dns_query(host: str, dns_host: str, dns_port: int = 53) -> Optional[str]:
         # Create DNS query for A record
         query_id = random.randint(0, 65535)
 
-        # Header: ID, Flags (standard query), QDCOUNT=1, ANCOUNT=0, NSCOUNT=0, ARCOUNT=0
-        query = struct.pack("!HHHHHH", query_id, 0x0100, 1, 0, 0, 0)
-
-        # Question: domain name (encode each label with length prefix)
+        # Header + Question: domain name (encode each label with length prefix)
         query_parts: List[bytes] = [struct.pack("!HHHHHH", query_id, 0x0100, 1, 0, 0, 0)]
         for part in host.split("."):
             query_parts.append(bytes([len(part)]) + part.encode("ascii"))
@@ -370,15 +368,17 @@ def _custom_getaddrinfo(
         return _custom_getaddrinfo_sync(host, port, family, type, proto, flags)
 
     # Cache-first: avoid threading overhead for already-resolved hosts.
-    if host in CUSTOM_DNS_HOSTS:
-        cached = _get_cached_ips(host)
-        if cached:
-            ip = cached[0]
-            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
+    cached = _get_cached_ips(host)
+    if cached:
+        ip = cached[0]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
 
     # Inside an async event loop — run in thread to avoid blocking the loop.
     # We block the calling sync thread until the executor finishes, which is
     # fine because the event loop continues running on other threads.
+    global _dns_executor
+    if _dns_executor is None or _dns_executor._shutdown:
+        _dns_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="dns-resolver")
     future = _dns_executor.submit(
         _custom_getaddrinfo_sync, host, port, family, type, proto, flags
     )
@@ -390,7 +390,13 @@ def apply_dns_fix():
     Apply DNS fix by monkey-patching socket.getaddrinfo.
 
     This should be called BEFORE importing litellm/aiohttp.
+    Also disables aiodns on Windows to fix DNS resolution issues.
     """
+    # Disable aiodns C extensions on Windows only (breaks DNS resolution there).
+    # Linux/macOS keep C extensions for performance.
+    if sys.platform == "win32":
+        os.environ["AIOHTTP_NO_EXTENSIONS"] = "1"
+
     dns_resolver = os.getenv("HTTP_DNS_RESOLVER", "").strip()
 
     # Check if custom DNS is disabled

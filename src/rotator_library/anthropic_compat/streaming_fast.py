@@ -37,7 +37,7 @@ class ChunkBatcher:
     - Time since last flush exceeds max_delay_ms
     """
     
-    def __init__(self, max_size: int = 4096, max_delay_ms: int = 1):
+    def __init__(self, max_size: int = 16384, max_delay_ms: int = 1):
         self.buffer = []
         self.current_size = 0
         self.max_size = max_size
@@ -302,7 +302,7 @@ async def anthropic_streaming_wrapper_fast(
     _thinking_parts: list[str] = []
     
     # Initialize chunk batcher for improved throughput
-    batcher = ChunkBatcher(max_size=4096, max_delay_ms=1)
+    batcher = ChunkBatcher(max_size=16384, max_delay_ms=1)
     
     # Heartbeat tracking to prevent connection timeouts
     last_event_time = monotonic()

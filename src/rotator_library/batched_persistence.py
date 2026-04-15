@@ -11,7 +11,6 @@ generalized for any state data.
 """
 
 import asyncio
-import json
 import logging
 from .utils.json_utils import json_loads
 import orjson
@@ -139,7 +138,7 @@ class BatchedPersistence:
                content = await f.read()
                self._state = json_loads(content)
             lib_logger.debug(f"Loaded state from {self._file_path.name}")
-        except (json.JSONDecodeError, IOError, OSError) as e:
+        except (orjson.JSONDecodeError, IOError, OSError) as e:
             lib_logger.warning(f"Failed to load state from {self._file_path.name}: {e}")
 
     async def _writer_loop(self) -> None:

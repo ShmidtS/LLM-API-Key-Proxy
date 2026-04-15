@@ -6,7 +6,6 @@ Base mixin classes for shared streaming logic across multiple API providers.
 LightweightQuotaMixin (formerly QuotaRefreshMixin) is in utilities/lightweight_quota_mixin.py.
 """
 
-import json
 import logging
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
@@ -59,7 +58,7 @@ async def parse_sse_stream(
         try:
             chunk = orjson.loads(data_str)
             yield chunk
-        except (orjson.JSONDecodeError, json.JSONDecodeError):
+        except orjson.JSONDecodeError:
             name = provider_name or "unknown"
             lib_logger.warning(
                 f"Could not decode JSON from {name}: {line}"

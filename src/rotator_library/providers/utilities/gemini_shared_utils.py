@@ -11,7 +11,7 @@ AntigravityProvider, extracted to reduce code duplication.
 
 from __future__ import annotations
 
-import json
+import orjson
 
 from ...utils.json_utils import json_deep_copy, json_loads
 import logging
@@ -362,7 +362,7 @@ def recursively_parse_json_strings(
                     f"{len(obj) - len(unescaped)} chars changed. Snippet: {snippet!r}"
                 )
                 return unescaped
-            except (json.JSONDecodeError, ValueError):
+            except (orjson.JSONDecodeError, ValueError):
                 # If unescaping fails, continue with original processing
                 pass
 
@@ -391,7 +391,7 @@ def recursively_parse_json_strings(
                     return recursively_parse_json_strings(
                         parsed, schema, parse_json_objects, log_prefix
                     )
-                except (json.JSONDecodeError, ValueError):
+                except (orjson.JSONDecodeError, ValueError):
                     pass
 
             # Handle malformed JSON: array that doesn't end with ]
@@ -410,7 +410,7 @@ def recursively_parse_json_strings(
                         return recursively_parse_json_strings(
                             parsed, schema, parse_json_objects, log_prefix
                         )
-                except (json.JSONDecodeError, ValueError):
+                except (orjson.JSONDecodeError, ValueError):
                     pass
 
             # Handle malformed JSON: object that doesn't end with }
@@ -428,6 +428,6 @@ def recursively_parse_json_strings(
                         return recursively_parse_json_strings(
                             parsed, schema, parse_json_objects, log_prefix
                         )
-                except (json.JSONDecodeError, ValueError):
+                except (orjson.JSONDecodeError, ValueError):
                     pass
     return obj
