@@ -282,12 +282,24 @@ class HttpClientPool(metaclass=SingletonMeta):
         self._ssl_context = self._create_ssl_context()
         lib_logger.info("SSL context refreshed")
 
-    def _create_limits(self) -> httpx.Limits:
-        """Create optimized connection limits."""
+    def _create_limits(self, streaming: bool = False) -> httpx.Limits:
+        """Create optimized connection limits.
+
+        Streaming connections are long-lived (minutes), so they need fewer
+        total slots but longer keepalive.  Non-streaming connections are
+        short-lived (seconds), so they benefit from more slots and shorter
+        keepalive to free resources quickly.
+        """
+        if streaming:
+            return httpx.Limits(
+                max_connections=50,
+                max_keepalive_connections=20,
+                keepalive_expiry=120,
+            )
         return httpx.Limits(
-            max_keepalive_connections=self._max_keepalive,
-            max_connections=self._max_connections,
-            keepalive_expiry=self._keepalive_expiry,
+            max_connections=100,
+            max_keepalive_connections=50,
+            keepalive_expiry=30,
         )
 
     async def _create_client(self, streaming: bool = False) -> httpx.AsyncClient:
@@ -310,7 +322,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         # Build client kwargs
         client_kwargs = {
             "timeout": timeout,
-            "limits": self._create_limits(),
+            "limits": self._create_limits(streaming=streaming),
             "follow_redirects": True,
             "http2": self._http2_enabled,
             "http1": True,
@@ -319,8 +331,14 @@ class HttpClientPool(metaclass=SingletonMeta):
 
         # Use GzipRequestTransport for request body compression
         if HTTP_COMPRESS_REQUESTS:
+            if self._http2_enabled:
+                lib_logger.warning(
+                    "HTTP/2 is enabled but will be silently ignored when using "
+                    "GzipRequestTransport (custom transport overrides http2 setting). "
+                    "Set HTTP2_ENABLED=false or HTTP_COMPRESS_REQUESTS=false to resolve."
+                )
             client_kwargs["transport"] = GzipRequestTransport(
-                limits=self._create_limits(),
+                limits=self._create_limits(streaming=streaming),
                 verify=ssl_context,
                 http2=self._http2_enabled,
             )
@@ -572,7 +590,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         # Build client kwargs consistent with _create_client()
         client_kwargs = {
             "timeout": timeout,
-            "limits": self._create_limits(),
+            "limits": self._create_limits(streaming=streaming),
             "follow_redirects": True,
             "http2": self._http2_enabled,
             "http1": True,
@@ -580,8 +598,14 @@ class HttpClientPool(metaclass=SingletonMeta):
         }
 
         if HTTP_COMPRESS_REQUESTS:
+            if self._http2_enabled:
+                lib_logger.warning(
+                    "HTTP/2 is enabled but will be silently ignored when using "
+                    "GzipRequestTransport (custom transport overrides http2 setting). "
+                    "Set HTTP2_ENABLED=false or HTTP_COMPRESS_REQUESTS=false to resolve."
+                )
             client_kwargs["transport"] = GzipRequestTransport(
-                limits=self._create_limits(),
+                limits=self._create_limits(streaming=streaming),
                 verify=self._ssl_context,
                 http2=self._http2_enabled,
             )

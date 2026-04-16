@@ -154,7 +154,9 @@ class CredentialWeightCache(metaclass=SingletonMeta):
         async with self._lock:
             self._cache[key] = cached
             # Update provider index for O(1) invalidation
-            self._provider_index.setdefault(provider, []).append(key)
+            idx = self._provider_index.setdefault(provider, [])
+            if key not in idx:
+                idx.append(key)
 
     async def invalidate(
         self,
@@ -198,6 +200,10 @@ class CredentialWeightCache(metaclass=SingletonMeta):
             for key in keys_to_invalidate:
                 self._cache[key].invalidated = True
                 self._stats["invalidations"] += 1
+                # Remove from provider index to speed up cleanup_expired
+                prov_keys = self._provider_index.get(provider)
+                if prov_keys and key in prov_keys:
+                    prov_keys.remove(key)
 
     async def invalidate_all(self, provider: Optional[str] = None) -> None:
         """
@@ -208,15 +214,17 @@ class CredentialWeightCache(metaclass=SingletonMeta):
         """
         async with self._lock:
             if provider is None:
+                invalidated_count = len(self._cache)
                 self._cache.clear()
                 self._provider_index.clear()
             else:
                 # Use provider index for O(1) lookup
                 keys_to_remove = self._provider_index.pop(provider, [])
+                invalidated_count = len(keys_to_remove)
                 for key in keys_to_remove:
                     self._cache.pop(key, None)
 
-            self._stats["invalidations"] += len(self._cache)
+            self._stats["invalidations"] += invalidated_count
 
     async def check_usage_change(
         self,

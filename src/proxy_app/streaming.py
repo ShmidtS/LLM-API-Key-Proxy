@@ -89,7 +89,11 @@ async def streaming_response_wrapper(
 
                         elif key == "tool_calls":
                             for tc_chunk in value:
-                                index = tc_chunk["index"]
+                                try:
+                                    index = tc_chunk["index"]
+                                except KeyError:
+                                    logger.warning("tool_calls chunk missing 'index' key, skipping: %s", tc_chunk)
+                                    continue
                                 if index not in aggregated_tool_calls:
                                     aggregated_tool_calls[index] = {
                                         "type": "function",
@@ -141,13 +145,15 @@ async def streaming_response_wrapper(
                 if "usage" in chunk and chunk["usage"]:
                     usage_data = chunk["usage"]
     except (GeneratorExit, asyncio.CancelledError):
+        if hasattr(response_stream, "aclose"):
+            await response_stream.aclose()
         raise
     except Exception as e:
         logging.exception("Error during response stream")
         # Yield a final error message to the client to ensure they are not left hanging.
         error_payload = {
             "error": {
-                "message": f"An unexpected error occurred during the stream: {str(e)}",
+                "message": "An unexpected error occurred during the stream",
                 "type": "proxy_internal_error",
                 "code": 500,
             }
@@ -229,7 +235,7 @@ async def streaming_response_wrapper(
                     headers=None,  # Headers are not available at this stage
                     body=full_response,
                 )
-            except Exception as exc:
+            except Exception:
                 logging.exception("Error during stream finalization logging")
 
 
@@ -267,10 +273,10 @@ def handle_litellm_error(e: Exception, error_format: str = "openai") -> HTTPExce
                 }
             return HTTPException(status_code=status_code, detail=detail)
 
-    # Fallback for unmatched litellm errors
+    # Fallback for unmatched litellm errors — use generic message to avoid information leakage
     if error_format == "openai":
-        return HTTPException(status_code=500, detail=str(e))
+        return HTTPException(status_code=500, detail="Internal server error")
     return HTTPException(
         status_code=500,
-        detail={"type": "error", "error": {"type": "api_error", "message": str(e)}},
+        detail={"type": "error", "error": {"type": "api_error", "message": "Internal server error"}},
     )

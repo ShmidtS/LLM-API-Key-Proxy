@@ -12,7 +12,7 @@ def compute_backoff_with_jitter(
     attempt: int,
     base: float = 2.0,
     max_wait: float = 60.0,
-    jitter: float = 0.1,
+    jitter: float = 0.3,
     retry_after: Optional[float] = None,
     min_wait: float = 0.5,
 ) -> float:
@@ -33,8 +33,8 @@ def compute_backoff_with_jitter(
         jitter_amount = random.uniform(-jitter, jitter) * wait_time
         wait_time = max(min_wait, wait_time + jitter_amount)
 
-    if retry_after is not None:
-        wait_time = max(wait_time, retry_after)
+    if retry_after is not None and retry_after > 0:
+        wait_time = max(wait_time, retry_after, min_wait)
 
     return wait_time
 
@@ -43,7 +43,7 @@ async def exponential_backoff_with_jitter(
     attempt: int,
     base: float = 2.0,
     max_wait: float = 60.0,
-    jitter: float = 0.1,
+    jitter: float = 0.3,
     retry_after: Optional[float] = None,
     min_wait: float = 0.5,
 ) -> None:

@@ -53,6 +53,9 @@ class EmbeddingBatcher:
                 
                 # Distribute results back to the original requesters
                 for i, future in enumerate(futures):
+                    if i >= len(response.data):
+                        future.set_exception(IndexError(f"Batch response has {len(response.data)} items but batch has {len(futures)} requests"))
+                        continue
                     # Create a new response object for each item in the batch
                     single_response_data = {
                         "object": response.object,
@@ -62,15 +65,15 @@ class EmbeddingBatcher:
                     }
                     future.set_result(single_response_data)
 
-            except Exception as e:
-                for future in futures:
-                    future.set_exception(e)
-
             except asyncio.CancelledError:
                 for future in futures:
                     if not future.done():
                         future.cancel()
                 raise
+
+            except Exception as e:
+                for future in futures:
+                    future.set_exception(e)
 
     async def _gather_batch(self) -> Tuple[List[Dict[str, Any]], List[asyncio.Future]]:
         """Collect requests from the queue until batch_size or timeout is reached. Returns: Tuple of (batch request data list, corresponding futures list)."""

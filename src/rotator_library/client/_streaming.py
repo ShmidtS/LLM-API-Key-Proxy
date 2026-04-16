@@ -75,11 +75,17 @@ class StreamingMixin:
                         json_buffer_parts.clear()
 
                     # Convert chunk to dict, handling both litellm.ModelResponse and raw dicts
-                    # model_dump() is faster than orjson round-trip for Pydantic objects
-                    if hasattr(chunk, "model_dump"):
-                        chunk_dict = chunk.model_dump()
-                    else:
-                        chunk_dict = chunk
+                    # Per-chunk error isolation: malformed chunks are skipped, not fatal
+                    try:
+                        if hasattr(chunk, "model_dump"):
+                            chunk_dict = chunk.model_dump()
+                        else:
+                            chunk_dict = chunk
+                    except (KeyError, TypeError) as e:
+                        lib_logger.warning(
+                            f"Skipping malformed chunk at index {chunk_index} for model {model}: {e}"
+                        )
+                        continue
 
                     # === FINISH_REASON LOGIC ===
                     # Providers send raw chunks without finish_reason logic.
@@ -232,7 +238,7 @@ class StreamingMixin:
                     not request or not await request.is_disconnected()
                 ):
                     yield STREAM_DONE
-            except Exception as exc:
+            except Exception:
                 lib_logger.exception("Error during stream cleanup")
 
     async def _transaction_logging_stream_wrapper(

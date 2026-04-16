@@ -43,7 +43,8 @@ if sys.platform == "win32":
 # --- Argument Parsing (BEFORE heavy imports) ---
 parser = argparse.ArgumentParser(description="API Key Proxy Server")
 parser.add_argument(
-    "--host", type=str, default="0.0.0.0", help="Host to bind the server to."
+    "--host", type=str, default="127.0.0.1",
+    help="Host to bind the server to. Use 0.0.0.0 to expose to all interfaces."
 )
 parser.add_argument("--port", type=int, default=8000, help="Port to run the server on.")
 parser.add_argument(
@@ -758,9 +759,11 @@ app = FastAPI(lifespan=lifespan)
 _cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "")
 if _cors_origins_env.strip():
     _cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+    if _cors_origins == ["*"]:
+        logger.warning("CORS_ALLOWED_ORIGINS='*' — allowing all origins (dev-mode only, restrict in production!)")
 else:
-    logger.warning("CORS_ALLOWED_ORIGINS not set — allowing all origins (set CORS_ALLOWED_ORIGINS to restrict)")
-    _cors_origins = ["*"]
+    logger.warning("CORS_ALLOWED_ORIGINS not set — defaulting to same-origin only (set CORS_ALLOWED_ORIGINS to allow specific origins)")
+    _cors_origins = []
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,

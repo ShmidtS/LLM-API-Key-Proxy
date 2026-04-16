@@ -25,7 +25,6 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ..async_locks import ReadWriteLock
 from ..config import env_bool as _env_bool, env_int as _env_int
 from ..utils.json_utils import json_loads
 from ..utils.resilient_io import safe_write_json
@@ -92,7 +91,6 @@ class ProviderCache:
         self._cache: OrderedDict[str, Dict[str, float | str]] = OrderedDict()
         self._memory_ttl = memory_ttl_seconds
         self._disk_ttl = disk_ttl_seconds
-        self._rw_lock = ReadWriteLock()
         self._async_lock = asyncio.Lock()   # All cache mutations and async reads
         self._disk_lock = asyncio.Lock()
         self._max_entries = max_entries
@@ -351,21 +349,20 @@ class ProviderCache:
         Only cleans memory - disk entries are preserved and cleaned during
         _save_to_disk() based on their own disk_ttl.
         """
-        async with self._rw_lock.write():
-            async with self._async_lock:
-                now = time.time()
-                while len(self._cache) >= self._max_entries:
-                    # popitem(last=False) removes the least-recently-used entry
-                    self._cache.popitem(last=False)
-                    self._evicted_count += 1
+        async with self._async_lock:
+            now = time.time()
+            while len(self._cache) >= self._max_entries:
+                # popitem(last=False) removes the least-recently-used entry
+                self._cache.popitem(last=False)
+                self._evicted_count += 1
 
-                expired = [
-                    k
-                    for k, entry in self._cache.items()
-                    if now - entry["timestamp"] > self._memory_ttl
-                ]
-                for k in expired:
-                    del self._cache[k]
+            expired = [
+                k
+                for k, entry in self._cache.items()
+                if now - entry["timestamp"] > self._memory_ttl
+            ]
+            for k in expired:
+                del self._cache[k]
             # Don't set dirty flag: memory cleanup shouldn't trigger disk write
             # Disk entries are cleaned separately in _save_to_disk() by disk_ttl
             if expired:
@@ -390,11 +387,10 @@ class ProviderCache:
     async def _async_store(self, key: str, value: str) -> None:
         """Async implementation of store."""
         now = time.time()
-        async with self._rw_lock.write():
-            async with self._async_lock:
-                self._cache[key] = {"value": value, "timestamp": now, "accessed": now}
-                self._cache.move_to_end(key)
-                self._dirty = True
+        async with self._async_lock:
+            self._cache[key] = {"value": value, "timestamp": now, "accessed": now}
+            self._cache.move_to_end(key)
+            self._dirty = True
 
     async def store_async(self, key: str, value: str) -> None:
         """
@@ -437,15 +433,30 @@ class ProviderCache:
             if time.time() - entry["timestamp"] <= self._memory_ttl:
                 self._stats["memory_hits"] += 1
                 # Schedule LRU re-order and expiry cleanup asynchronously
-                asyncio.create_task(self._touch_key(key))
+                try:
+                    asyncio.create_task(self._touch_key(key))
+                except RuntimeError:
+                    lib_logger.warning(
+                        f"ProviderCache[{self._cache_name}]: retrieve() called outside event loop; touch skipped"
+                    )
                 return entry["value"]
             else:
                 # Entry expired — schedule removal via async path (no race)
-                asyncio.create_task(self._remove_expired_key(key))
+                try:
+                    asyncio.create_task(self._remove_expired_key(key))
+                except RuntimeError:
+                    lib_logger.warning(
+                        f"ProviderCache[{self._cache_name}]: retrieve() called outside event loop; expired key removal skipped"
+                    )
 
         self._stats["misses"] += 1
         if self._enable_disk:
-            asyncio.create_task(self._disk_lookup(key))
+            try:
+                asyncio.create_task(self._disk_lookup(key))
+            except RuntimeError:
+                lib_logger.warning(
+                    f"ProviderCache[{self._cache_name}]: retrieve() called outside event loop; disk lookup skipped"
+                )
         return None
 
     async def retrieve_async(self, key: str) -> Optional[str]:
@@ -538,16 +549,15 @@ class ProviderCache:
                     self._stats["misses"] += 1
                 return None
 
-            async with self._rw_lock.write():
-                async with self._async_lock:
-                    now = time.time()
-                    self._cache[key] = {"value": value, "timestamp": ts, "accessed": now}
-                    self._cache.move_to_end(key)
-                self._stats["disk_hits"] += 1
-                if not return_value:
-                    lib_logger.debug(
-                        f"ProviderCache[{self._cache_name}]: Loaded {key} from disk"
-                    )
+            async with self._async_lock:
+                now = time.time()
+                self._cache[key] = {"value": value, "timestamp": ts, "accessed": now}
+                self._cache.move_to_end(key)
+            self._stats["disk_hits"] += 1
+            if not return_value:
+                lib_logger.debug(
+                    f"ProviderCache[{self._cache_name}]: Loaded {key} from disk"
+                )
             return value if return_value else None
         except Exception as e:
             lib_logger.debug(
@@ -581,11 +591,10 @@ class ProviderCache:
 
     async def clear(self) -> None:
         """Clear all cached data."""
-        async with self._rw_lock.write():
-            async with self._async_lock:
-                self._cache.clear()
-                self._dirty = True
-            if self._enable_disk:
+        async with self._async_lock:
+            self._cache.clear()
+            self._dirty = True
+        if self._enable_disk:
                 await self._save_to_disk()
 
     async def shutdown(self) -> None:

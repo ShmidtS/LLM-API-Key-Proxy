@@ -20,7 +20,7 @@ from ..utils.json_utils import json_deep_copy
 if TYPE_CHECKING:
     from ..error_handler import ClassifiedError
 
-from ..env_cache import _provider_env_cache
+from ..env_cache import get_provider_env_cache
 from ..error_types import mask_credential
 from ..http_client_pool import HttpClientPool, close_http_pool, get_http_pool
 from ..providers.utilities import DEFAULT_GENERIC_SAFETY_SETTINGS, DEFAULT_SAFETY_SETTINGS
@@ -615,7 +615,7 @@ class HelpersMixin:
         # Add provider-specific headers from environment variables if configured
         # These headers should be used instead of any client-provided ones
         provider_headers_key = f"{provider.upper()}_API_HEADERS"
-        provider_headers = _provider_env_cache.get(provider_headers_key)
+        provider_headers = get_provider_env_cache().get(provider_headers_key)
 
         if provider_headers:
             try:

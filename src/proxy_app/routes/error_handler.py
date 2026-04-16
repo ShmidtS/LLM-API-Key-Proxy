@@ -30,7 +30,7 @@ def handle_route_errors(
     Args:
         error_format: Controls error response formatting.
             "openai"    - litellm errors via handle_litellm_error("openai"),
-                         500 detail = make_error_response(str(e), "api_error")
+                         500 detail = make_error_response("Internal server error", "api_error")
             "anthropic" - litellm errors via handle_litellm_error("anthropic"),
                           500 detail = Anthropic-shaped error dict
             "simple"    - no litellm error handling,

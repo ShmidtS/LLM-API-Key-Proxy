@@ -487,7 +487,7 @@ class RetryMixin:
                                     str(e) if e else None,
                                     classified_error,
                                 )
-                                self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
+                                await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
 
                             # Track consecutive quota failures and force rotation if needed
                             if classified_error.error_type == "quota_exceeded":
@@ -756,7 +756,7 @@ class RetryMixin:
                                     str(e) if e else None,
                                     classified_error,
                                 )
-                                self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
+                                await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
 
                             # Track consecutive quota failures and force rotation if needed
                             if classified_error.error_type == "quota_exceeded":
@@ -906,7 +906,7 @@ class RetryMixin:
                                     str(e) if e else None,
                                     classified_error,
                                 )
-                                self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
+                                await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
                             if classified_error.error_type == "quota_exceeded":
                                 await self._apply_quota_cooldown(
                                     provider, current_cred, classified_error
@@ -977,7 +977,7 @@ class RetryMixin:
                                     str(e) if e else None,
                                     classified_error,
                                 )
-                                self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
+                                await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
                             if classified_error.error_type == "quota_exceeded":
                                 await self._apply_quota_cooldown(
                                     provider, current_cred, classified_error
@@ -1305,7 +1305,7 @@ class RetryMixin:
                                         str(e) if e else None,
                                         classified_error,
                                     )
-                                    self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
+                                    await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
                                 if classified_error.error_type == "quota_exceeded":
                                     await self._apply_quota_cooldown(
                                         provider, current_cred, classified_error
@@ -1474,7 +1474,7 @@ class RetryMixin:
                                         str(e) if e else None,
                                         classified_error,
                                     )
-                                    self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
+                                    await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
                                 if classified_error.error_type == "quota_exceeded":
                                     await self._apply_quota_cooldown(
                                         provider, current_cred, classified_error
@@ -1819,7 +1819,7 @@ class RetryMixin:
                                         str(original_exc) if original_exc else None,
                                         classified_error,
                                     )
-                                    self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
+                                    await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
                                 if classified_error.error_type == "quota_exceeded":
                                     await self._apply_quota_cooldown(
                                         provider, current_cred, classified_error
@@ -1967,7 +1967,7 @@ class RetryMixin:
                                     str(e) if e else None,
                                     classified_error,
                                 )
-                                self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
+                                await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
                             if classified_error.error_type == "quota_exceeded":
                                 await self._apply_quota_cooldown(
                                     provider, current_cred, classified_error

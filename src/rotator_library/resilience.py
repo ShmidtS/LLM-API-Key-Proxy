@@ -82,10 +82,10 @@ class ResilienceOrchestrator:
         """Acquire rate limiter token. Returns wait time (0 if immediate)."""
         return await self.rate_limiter.acquire(provider)
 
-    def record_rate_429(self, provider: str, retry_after: int = None) -> None:
+    async def record_rate_429(self, provider: str, retry_after: int = None) -> None:
         """Record 429 in rate limiter for AIMD decrease."""
-        self.rate_limiter.record_429(provider, retry_after)
+        await self.rate_limiter.record_429(provider, retry_after)
 
-    def record_rate_success(self, provider: str) -> None:
+    async def record_rate_success(self, provider: str) -> None:
         """Record success in rate limiter for AIMD increase."""
-        self.rate_limiter.record_success(provider)
+        await self.rate_limiter.record_success(provider)

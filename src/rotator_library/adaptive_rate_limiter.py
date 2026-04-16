@@ -108,68 +108,72 @@ class AdaptiveRateLimiter:
             state.total_requests += 1
             return wait
 
-    def record_success(self, provider: str) -> None:
+    async def record_success(self, provider: str) -> None:
         """Record success. Gradually increase rate (AIMD additive increase)."""
         if not self.enabled:
             return
 
-        state = self._get_state(provider)
-        now = time.monotonic()
+        lock = await self._lock_manager.get_lock(provider)
+        async with lock:
+            state = self._get_state(provider)
+            now = time.monotonic()
 
-        if state.last_429 is not None and (now - state.last_429) < self.increase_interval:
-            return
+            if state.last_429 is not None and (now - state.last_429) < self.increase_interval:
+                return
 
-        if state.last_increase is not None and (now - state.last_increase) < self.increase_interval:
-            return
+            if state.last_increase is not None and (now - state.last_increase) < self.increase_interval:
+                return
 
-        # Clear expired ceiling (3 intervals since 429)
-        if state.ceiling_rps is not None and state.ceiling_time is not None:
-            if (now - state.ceiling_time) >= self.increase_interval * 3:
-                lib_logger.info(
-                    f"AdaptiveRateLimiter: ceiling expired for {provider}, "
-                    f"clearing {state.ceiling_rps:.1f} rps cap"
+            # Clear expired ceiling (3 intervals since 429)
+            if state.ceiling_rps is not None and state.ceiling_time is not None:
+                if (now - state.ceiling_time) >= self.increase_interval * 3:
+                    lib_logger.info(
+                        f"AdaptiveRateLimiter: ceiling expired for {provider}, "
+                        f"clearing {state.ceiling_rps:.1f} rps cap"
+                    )
+                    state.ceiling_rps = None
+                    state.ceiling_time = None
+
+            old_rps = state.current_rps
+            state.current_rps += self.increase_rps
+
+            if state.ceiling_rps is not None and state.ceiling_time is not None:
+                cap = state.ceiling_rps * 0.9
+                state.current_rps = min(state.current_rps, cap)
+
+            state.current_rps = min(state.current_rps, self.max_rps)
+            state.last_increase = now
+
+            if state.current_rps != old_rps:
+                lib_logger.debug(
+                    f"AdaptiveRateLimiter: {provider} rate increased "
+                    f"{old_rps:.1f} -> {state.current_rps:.1f} rps"
                 )
-                state.ceiling_rps = None
-                state.ceiling_time = None
 
-        old_rps = state.current_rps
-        state.current_rps += self.increase_rps
-
-        if state.ceiling_rps is not None and state.ceiling_time is not None:
-            cap = state.ceiling_rps * 0.9
-            state.current_rps = min(state.current_rps, cap)
-
-        state.current_rps = min(state.current_rps, self.max_rps)
-        state.last_increase = now
-
-        if state.current_rps != old_rps:
-            lib_logger.debug(
-                f"AdaptiveRateLimiter: {provider} rate increased "
-                f"{old_rps:.1f} -> {state.current_rps:.1f} rps"
-            )
-
-    def record_429(self, provider: str, retry_after: Optional[int] = None) -> None:
+    async def record_429(self, provider: str, retry_after: Optional[int] = None) -> None:
         """Record a 429 response. Multiplicative decrease rate and set ceiling."""
         if not self.enabled:
             return
 
-        state = self._get_state(provider)
-        now = time.monotonic()
+        lock = await self._lock_manager.get_lock(provider)
+        async with lock:
+            state = self._get_state(provider)
+            now = time.monotonic()
 
-        state.ceiling_rps = state.current_rps
-        state.ceiling_time = now
+            state.ceiling_rps = state.current_rps
+            state.ceiling_time = now
 
-        old_rps = state.current_rps
-        state.current_rps = max(self.min_rps, state.current_rps * self.decrease_factor)
-        state.last_429 = now
-        state.total_429s += 1
-        state.tokens = 0.0
+            old_rps = state.current_rps
+            state.current_rps = max(self.min_rps, state.current_rps * self.decrease_factor)
+            state.last_429 = now
+            state.total_429s += 1
+            state.tokens = 0.0
 
-        lib_logger.info(
-            f"AdaptiveRateLimiter: {provider} 429 received, rate decreased "
-            f"{old_rps:.1f} -> {state.current_rps:.1f} rps "
-            f"(ceiling={state.ceiling_rps:.1f}, 429s={state.total_429s})"
-        )
+            lib_logger.info(
+                f"AdaptiveRateLimiter: {provider} 429 received, rate decreased "
+                f"{old_rps:.1f} -> {state.current_rps:.1f} rps "
+                f"(ceiling={state.ceiling_rps:.1f}, 429s={state.total_429s})"
+            )
 
     def is_enabled(self) -> bool:
         return self.enabled

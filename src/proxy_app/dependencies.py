@@ -49,12 +49,26 @@ async def _unregister_stream_gen(request, gen):
 
 def get_rotating_client(request: Request) -> RotatingClient:
     """Dependency to get the rotating client instance from the app state."""
-    return request.app.state.rotating_client
+    try:
+        client = request.app.state.rotating_client
+    except AttributeError as e:
+        logger.error("Failed to get rotating client from app state: %s", e)
+        raise HTTPException(status_code=500, detail="Server not initialized: rotating client unavailable") from e
+    if client is None:
+        raise HTTPException(status_code=500, detail="Server not initialized: rotating client unavailable")
+    return client
 
 
 def get_embedding_batcher(request: Request) -> EmbeddingBatcher:
     """Dependency to get the embedding batcher instance from the app state."""
-    return request.app.state.embedding_batcher
+    try:
+        batcher = request.app.state.embedding_batcher
+    except AttributeError as e:
+        logger.error("Failed to get embedding batcher from app state: %s", e)
+        raise HTTPException(status_code=500, detail="Server not initialized: embedding batcher unavailable") from e
+    if batcher is None:
+        raise HTTPException(status_code=500, detail="Server not initialized: embedding batcher unavailable")
+    return batcher
 
 
 def make_error_response(message: str, error_type: str = "api_error", code: str | None = None) -> dict:
@@ -70,7 +84,7 @@ async def track_stream(request: Request, stream: AsyncGenerator[Any, None]) -> A
     try:
         await _inc_streams(request)
     except AttributeError:
-        logger.debug("track_stream: request lacks stream counter attribute")
+        logger.error("track_stream: request lacks stream counter attribute")
     await _register_stream_gen(request, stream)
     try:
         async for chunk in stream:
@@ -84,7 +98,7 @@ async def track_stream(request: Request, stream: AsyncGenerator[Any, None]) -> A
         try:
             await _dec_streams(request)
         except AttributeError:
-            logger.debug("track_stream: request lacks stream counter attribute on decrement")
+            logger.error("track_stream: request lacks stream counter attribute on decrement")
 
 
 async def verify_api_key(request: Request, auth: str = Depends(api_key_header)):

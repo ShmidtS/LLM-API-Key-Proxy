@@ -4,7 +4,6 @@
 import re
 import os
 import logging
-import random
 from typing import TYPE_CHECKING, Optional, Dict, Tuple
 import httpx
 
@@ -22,7 +21,7 @@ from litellm.exceptions import (
 
 from .ip_throttle_detector import (
     ThrottleScope,
-    get_ip_throttle_detector,
+    IPThrottleDetector,
 )
 if TYPE_CHECKING:
     from .ip_throttle_detector import IPThrottleDetector
@@ -31,6 +30,7 @@ if TYPE_CHECKING:
 import orjson
 from .utils.json_utils import json_loads
 from .utils.duration import parse_duration
+from .utils.http_retry import compute_backoff_with_jitter
 
 from .config.defaults import COOLDOWN_RATE_LIMIT_DEFAULT
 from .error_types import (
@@ -585,26 +585,23 @@ def get_retry_backoff(
 
     if error_type == "api_connection":
         # More aggressive retry for network errors - they're usually transient
-        # 0.5s, 0.75s, 1.1s, 1.7s, 2.5s...
         base = config.get("connection_base", 0.5)
-        backoff = base * (1.5**attempt) + random.uniform(0, 0.5)
+        backoff = compute_backoff_with_jitter(attempt, base=1.5, max_wait=max_backoff, jitter=0.3, min_wait=float(base))
     elif error_type == "server_error":
         # Standard exponential backoff with provider-specific base
-        # Default: 1s, 2s, 4s, 8s... (base=2)
-        # Kilocode: 1s, 1s, 1s, 1s... (base=1.0, slower growth)
         base = config.get("server_error_base", 2.0)
-        backoff = (base**attempt) + random.uniform(0, 1)
+        backoff = compute_backoff_with_jitter(attempt, base=base, max_wait=max_backoff, jitter=0.3)
     elif error_type == "rate_limit":
         # Short default for transient rate limits without retry_after
-        backoff = 5 + random.uniform(0, 2)
+        backoff = compute_backoff_with_jitter(attempt, base=2.0, max_wait=max_backoff, jitter=0.3, retry_after=5.0)
     elif error_type == "ip_rate_limit":
         # IP throttle - use default cooldown with jitter
-        backoff = RATE_LIMIT_DEFAULT_COOLDOWN + random.uniform(0, 2)
+        backoff = compute_backoff_with_jitter(attempt, base=2.0, max_wait=max_backoff, jitter=0.3, retry_after=float(RATE_LIMIT_DEFAULT_COOLDOWN))
     else:
         # Default backoff
-        backoff = (2**attempt) + random.uniform(0, 1)
+        backoff = compute_backoff_with_jitter(attempt, base=2.0, max_wait=max_backoff, jitter=0.3)
 
-    return min(backoff, max_backoff)
+    return backoff
 
 
 # =============================================================================
@@ -719,7 +716,7 @@ async def handle_429_error(
     """
     # Get or create detector
     if ip_throttle_detector is None:
-        ip_throttle_detector = get_ip_throttle_detector()
+        ip_throttle_detector = IPThrottleDetector()
 
     # Step 1: Check for explicit IP throttle indicators in error body
     ip_throttle_from_body = _detect_ip_throttle(error_body, provider=provider)

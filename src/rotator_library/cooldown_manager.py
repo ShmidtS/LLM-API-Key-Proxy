@@ -25,6 +25,7 @@ class CooldownManager:
     def __init__(self):
         self._cooldowns: Dict[str, float] = {}
         self._provider_lock_manager = ProviderLockManager()
+        self._last_cleanup = 0.0
 
     def _extract_provider(self, credential: str) -> str:
         """
@@ -55,7 +56,10 @@ class CooldownManager:
         provider = self._extract_provider(credential)
         lock = await self._provider_lock_manager.get_lock(provider)
         async with lock:
-            await self._cleanup_expired()
+            now = time.monotonic()
+            if now - self._last_cleanup >= 30.0:
+                await self._cleanup_expired()
+                self._last_cleanup = now
             expiry = self._cooldowns.get(credential)
             return expiry is not None and time.monotonic() < expiry
 
@@ -68,8 +72,11 @@ class CooldownManager:
         provider = self._extract_provider(credential)
         lock = await self._provider_lock_manager.get_lock(provider)
         async with lock:
-            await self._cleanup_expired()
-            new_expiry = time.monotonic() + duration
+            now = time.monotonic()
+            if now - self._last_cleanup >= 30.0:
+                await self._cleanup_expired()
+                self._last_cleanup = now
+            new_expiry = now + duration
             existing = self._cooldowns.get(credential, 0)
             self._cooldowns[credential] = max(existing, new_expiry)
 
@@ -78,8 +85,10 @@ class CooldownManager:
         Returns the remaining cooldown time in seconds for a credential.
         Returns 0 if the credential is not in a cooldown period.
         """
-        # Single dict read — no lock needed in CPython asyncio context.
-        expiry = self._cooldowns.get(credential)
-        if expiry is None:
-            return 0
-        return max(0.0, expiry - time.monotonic())
+        provider = self._extract_provider(credential)
+        lock = await self._provider_lock_manager.get_lock(provider)
+        async with lock:
+            expiry = self._cooldowns.get(credential)
+            if expiry is None:
+                return 0
+            return max(0.0, expiry - time.monotonic())

@@ -23,8 +23,8 @@ lib_logger = logging.getLogger("rotator_library")
 
 def _get_env_cache() -> dict:
     """Access the provider env cache from env_cache module."""
-    from .env_cache import _provider_env_cache
-    return _provider_env_cache
+    from .env_cache import get_provider_env_cache
+    return get_provider_env_cache()
 
 
 def build_provider_rotation_modes(

@@ -4,7 +4,8 @@
 """Cached environment variables for provider configuration. Pre-filtered at module load to avoid repeated O(P*E) scans of os.environ in provider __init__."""
 
 import os
-from typing import Dict
+import threading
+from typing import Dict, Optional
 
 
 _PROVIDER_ENV_PREFIXES = (
@@ -20,12 +21,35 @@ _PROVIDER_ENV_PREFIXES = (
 )
 """Environment variable prefixes that are cached for provider configuration lookups."""
 
-_provider_env_cache: Dict[str, str] = {
-    k: v for k, v in os.environ.items()
-    if any(k.startswith(p) or k.endswith(p) for p in _PROVIDER_ENV_PREFIXES)
-}
-"""Dict of env vars matching provider prefixes, computed once at import time."""
+_provider_env_cache: Optional[Dict[str, str]] = None
+"""Dict of env vars matching provider prefixes, lazily computed on first access."""
 
-# Add global exhaustion cooldown threshold (no provider suffix)
-if "EXHAUSTION_COOLDOWN_THRESHOLD" in os.environ:
-    _provider_env_cache["EXHAUSTION_COOLDOWN_THRESHOLD"] = os.environ["EXHAUSTION_COOLDOWN_THRESHOLD"]
+_env_cache_lock = threading.Lock()
+"""Lock protecting build/invalidate paths for thread safety."""
+
+
+def _build_env_cache() -> Dict[str, str]:
+    """Build the provider env cache by scanning os.environ for matching prefixes."""
+    cache: Dict[str, str] = {
+        k: v for k, v in os.environ.items()
+        if any(k.startswith(p) or k.endswith(p) for p in _PROVIDER_ENV_PREFIXES)
+    }
+    if "EXHAUSTION_COOLDOWN_THRESHOLD" in os.environ:
+        cache["EXHAUSTION_COOLDOWN_THRESHOLD"] = os.environ["EXHAUSTION_COOLDOWN_THRESHOLD"]
+    return cache
+
+
+def get_provider_env_cache() -> Dict[str, str]:
+    """Return the provider env cache, building it on first call or after invalidation."""
+    global _provider_env_cache
+    with _env_cache_lock:
+        if _provider_env_cache is None:
+            _provider_env_cache = _build_env_cache()
+        return _provider_env_cache
+
+
+def invalidate_env_cache() -> None:
+    """Reset the provider env cache so the next access recomputes it from os.environ."""
+    global _provider_env_cache
+    with _env_cache_lock:
+        _provider_env_cache = None

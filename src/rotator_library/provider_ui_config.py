@@ -12,8 +12,6 @@ This module handles:
 
 from typing import Dict, Any
 
-from .litellm_providers import SCRAPED_PROVIDERS
-
 # =============================================================================
 # LiteLLM Provider UI Configuration
 #

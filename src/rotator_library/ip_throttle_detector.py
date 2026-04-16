@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Any
 
+from .utils.singleton import SingletonMeta
+
 lib_logger = logging.getLogger("rotator_library")
 
 
@@ -73,7 +75,7 @@ class _ThrottleRecord:
     error_body: Optional[str] = None
 
 
-class IPThrottleDetector:
+class IPThrottleDetector(metaclass=SingletonMeta):
     """
     Detects IP-level throttling by correlating 429 errors across credentials.
 
@@ -130,9 +132,6 @@ class IPThrottleDetector:
 
         # Per-provider tracking: provider -> list of _ThrottleRecord
         self._records: Dict[str, List[_ThrottleRecord]] = defaultdict(list)
-
-        # Cache of recent assessments to avoid repeated computation
-        self._assessment_cache: Dict[str, tuple] = {}
 
         lib_logger.debug(
             f"IPThrottleDetector initialized: window={window_seconds}s, "
@@ -334,7 +333,6 @@ class IPThrottleDetector:
         """Clear all records."""
         async with self._records_lock:
             self._records.clear()
-            self._assessment_cache.clear()
         lib_logger.debug("IPThrottleDetector: cleared all records")
 
     async def get_stats(self) -> Dict[str, Any]:
@@ -357,14 +355,3 @@ class IPThrottleDetector:
 
         return stats
 
-
-# Singleton instance for global use
-_detector_instance: Optional[IPThrottleDetector] = None
-
-
-def get_ip_throttle_detector() -> IPThrottleDetector:
-    """Get the global IP throttle detector instance."""
-    global _detector_instance
-    if _detector_instance is None:
-        _detector_instance = IPThrottleDetector()
-    return _detector_instance
