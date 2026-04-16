@@ -9,8 +9,6 @@ This module contains helper functions used by both GeminiCliProvider and
 AntigravityProvider, extracted to reduce code duplication.
 """
 
-from __future__ import annotations
-
 import orjson
 
 from ...utils.json_utils import json_deep_copy, json_loads

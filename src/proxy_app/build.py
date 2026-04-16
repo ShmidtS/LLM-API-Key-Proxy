@@ -5,6 +5,9 @@ import os
 import sys
 import platform
 import subprocess
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def get_providers():
@@ -19,7 +22,7 @@ def get_providers():
     providers_path = os.path.join(script_dir, "..", "rotator_library", "providers")
 
     if not os.path.isdir(providers_path):
-        print(f"Error: Directory not found at '{os.path.abspath(providers_path)}'")
+        logger.error("Directory not found at '%s'", os.path.abspath(providers_path))
         return []
 
     for filename in os.listdir(providers_path):
@@ -70,25 +73,23 @@ def main():
     # Add hidden imports for providers
     provider_imports = get_providers()
     if not provider_imports:
-        print(
-            "Warning: No providers found. The build might not include any LLM providers."
-        )
+        logger.warning("No providers found. The build might not include any LLM providers.")
     command.extend(provider_imports)
 
     # Add the main script
     command.append("main.py")
 
     # Execute the command
-    print(f"Running command: {' '.join(command)}")
+    logger.info("Running command: %s", ' '.join(command))
     try:
         # Run PyInstaller from the script's directory to ensure relative paths are correct
         script_dir = os.path.dirname(os.path.abspath(__file__))
         subprocess.run(command, check=True, cwd=script_dir)
-        print("Build successful!")
+        logger.info("Build successful!")
     except subprocess.CalledProcessError as e:
-        print(f"Build failed with error: {e}")
+        logger.error("Build failed with error: %s", e)
     except FileNotFoundError:
-        print("Error: PyInstaller is not installed or not in the system's PATH.")
+        logger.error("PyInstaller is not installed or not in the system's PATH.")
 
 
 if __name__ == "__main__":

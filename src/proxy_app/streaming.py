@@ -42,7 +42,7 @@ async def streaming_response_wrapper(
 
     # Track active streaming connections for graceful shutdown
     try:
-        _inc_streams(request)
+        await _inc_streams(request)
     except AttributeError:
         logging.debug("stream_response: request lacks stream counter attribute on increment")
 
@@ -162,7 +162,7 @@ async def streaming_response_wrapper(
         return  # Stop further processing
     finally:
         try:
-            _dec_streams(request)
+            await _dec_streams(request)
         except AttributeError:
             logging.debug("stream_response: request lacks stream counter attribute on decrement")
         if logger:

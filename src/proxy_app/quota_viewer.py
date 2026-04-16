@@ -60,6 +60,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .quota_viewer_config import QuotaViewerConfig
+from rotator_library.timeout_config import TimeoutConfig
 from rotator_library.utils.terminal_utils import clear_screen
 
 
@@ -291,18 +292,20 @@ class QuotaViewer:
         return None
 
     def check_connection(
-        self, remote: Dict[str, Any], timeout: float = 3.0
+        self, remote: Dict[str, Any], timeout: Optional[float] = None
     ) -> Tuple[bool, str]:
         """
         Check if a remote proxy is reachable.
 
         Args:
             remote: Remote configuration dict
-            timeout: Connection timeout in seconds
+            timeout: Connection timeout in seconds (defaults to TimeoutConfig.quota_viewer_connect)
 
         Returns:
             Tuple of (is_online, status_message)
         """
+        if timeout is None:
+            timeout = TimeoutConfig.quota_viewer_connect()
         host = remote.get("host", "127.0.0.1")
         host = normalize_host_for_connection(host)
 
@@ -353,7 +356,7 @@ class QuotaViewer:
             url += f"?provider={provider}"
 
         try:
-            with httpx.Client(timeout=30.0) as client:
+            with httpx.Client(timeout=TimeoutConfig.quota_viewer_fetch()) as client:
                 response = client.get(url, headers=self._get_headers())
 
                 if response.status_code == 401:
@@ -531,7 +534,7 @@ class QuotaViewer:
             payload["credential"] = credential
 
         try:
-            with httpx.Client(timeout=60.0) as client:
+            with httpx.Client(timeout=TimeoutConfig.quota_viewer_action()) as client:
                 response = client.post(url, headers=self._get_headers(), json=payload)
 
                 if response.status_code == 401:

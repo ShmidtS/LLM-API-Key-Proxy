@@ -9,8 +9,6 @@ Provides tier loading, caching, and background job methods used by both
 GeminiCliProvider and AntigravityProvider.
 """
 
-from __future__ import annotations
-
 import orjson
 import logging
 from ...utils.json_utils import json_loads

@@ -3,8 +3,6 @@
 
 """Thinking cache mixin for AntigravityProvider."""
 
-from __future__ import annotations
-
 import hashlib
 import time
 from typing import Any, Dict, List, Optional, Tuple

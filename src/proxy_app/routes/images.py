@@ -8,7 +8,7 @@ import litellm
 from fastapi import APIRouter, Request, Depends, HTTPException
 
 from rotator_library import RotatingClient
-from proxy_app.dependencies import get_rotating_client, verify_api_key
+from proxy_app.dependencies import get_rotating_client, verify_api_key, make_error_response
 from proxy_app.streaming import handle_litellm_error
 from proxy_app.request_logger import log_request_to_console
 
@@ -47,7 +47,7 @@ async def image_generations(
                           litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
             raise handle_litellm_error(e, error_format="openai")
         logging.error(f"Image generation request failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=make_error_response("Internal server error", "api_error"))
 
 
 @router.post("/v1/images/edits")
@@ -82,7 +82,7 @@ async def image_edits(
                           litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
             raise handle_litellm_error(e, error_format="openai")
         logging.error(f"Image edit request failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=make_error_response("Internal server error", "api_error"))
 
 
 @router.post("/v1/images/variations")
@@ -117,7 +117,7 @@ async def image_variations(
                           litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
             raise handle_litellm_error(e, error_format="openai")
         logging.error(f"Image variation request failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=make_error_response("Internal server error", "api_error"))
 
 
 @router.post("/v1/images/generations/async")
@@ -148,7 +148,7 @@ async def async_image_generations(
                           litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
             raise handle_litellm_error(e, error_format="openai")
         logging.error(f"Async image generation request failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=make_error_response("Internal server error", "api_error"))
 
 
 @router.get("/v1/images/{image_id}")
@@ -166,4 +166,4 @@ async def get_image_status(
 
     except Exception as e:
         logging.error(f"Image status check failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=make_error_response("Internal server error", "api_error"))

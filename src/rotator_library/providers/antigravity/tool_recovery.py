@@ -3,8 +3,6 @@
 
 """Tool recovery mixin for AntigravityProvider."""
 
-from __future__ import annotations
-
 import time
 import uuid
 from typing import Any, Dict, Optional, Tuple

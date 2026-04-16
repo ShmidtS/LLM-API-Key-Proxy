@@ -15,8 +15,6 @@ Handles:
 - Gemini 3 thoughtSignature preservation
 """
 
-from __future__ import annotations
-
 import logging
 import orjson
 from typing import Any, Callable, Dict, List, Optional, Tuple

@@ -3,8 +3,6 @@
 
 """Streaming mixin for AntigravityProvider."""
 
-from __future__ import annotations
-
 import asyncio
 import time
 import uuid

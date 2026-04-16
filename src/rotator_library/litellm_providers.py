@@ -17,7 +17,6 @@ To update, run the scraper and then sync:
 # Last synced: 2026-01-20 05:39:47
 # Provider count: 103
 
-from typing import Optional
 
 SCRAPED_PROVIDERS: dict[str, dict] = {
     "a2a": {

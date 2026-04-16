@@ -9,8 +9,6 @@ Provides tool schema transformation, response grouping, and tool choice translat
 methods used by both GeminiCliProvider and AntigravityProvider.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any, Dict, List, Optional, Union
 

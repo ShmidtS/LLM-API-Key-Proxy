@@ -6,11 +6,15 @@
 Centralized timeout configuration for HTTP requests.
 
 All values can be overridden via environment variables:
-    TIMEOUT_CONNECT - Connection establishment timeout (default: 30s)
+    TIMEOUT_CONNECT - Connection establishment timeout (default: 15s)
     TIMEOUT_WRITE - Request body send timeout (default: 30s)
     TIMEOUT_POOL - Connection pool acquisition timeout (default: 15s)
     TIMEOUT_READ_STREAMING - Read timeout between chunks for streaming (default: 300s / 5 min)
-    TIMEOUT_READ_NON_STREAMING - Read timeout for non-streaming responses (default: 600s / 10 min)
+    TIMEOUT_READ_NON_STREAMING - Read timeout for non-streaming responses (default: 300s / 5 min)
+    TIMEOUT_QUOTA_VIEWER_CONNECT - Quota viewer liveness check (default: 3s)
+    TIMEOUT_QUOTA_VIEWER_FETCH - Quota viewer stats fetch (default: 30s)
+    TIMEOUT_QUOTA_VIEWER_ACTION - Quota viewer POST actions (default: 60s)
+    TIMEOUT_MODEL_FILTER_FETCH - Model filter GUI model list fetch (default: 30s)
 """
 
 import os
@@ -36,6 +40,12 @@ class TimeoutConfig:
     _READ_STREAMING = 300.0  # 5 minutes between chunks
     _READ_NON_STREAMING = 300.0  # 5 minutes for full response (was 600s)
 
+    # UI tool timeouts (quota viewer, model filter GUI)
+    _QUOTA_VIEWER_CONNECT = 3.0  # Quick liveness check
+    _QUOTA_VIEWER_FETCH = 30.0  # Fetching stats from proxy
+    _QUOTA_VIEWER_ACTION = 60.0  # Posting actions (reload, force_refresh)
+    _MODEL_FILTER_FETCH = 30.0  # Fetching model lists from providers
+
     # Cached httpx.Timeout instances
     _STREAMING_TIMEOUT: Optional[httpx.Timeout] = None
     _DEFAULT_TIMEOUT: Optional[httpx.Timeout] = None
@@ -52,6 +62,26 @@ class TimeoutConfig:
                     f"Invalid value for {key}: {value}. Using default: {default}"
                 )
         return default
+
+    @classmethod
+    def quota_viewer_connect(cls) -> float:
+        """Quick liveness check timeout for quota viewer."""
+        return cls._get_env_float("TIMEOUT_QUOTA_VIEWER_CONNECT", cls._QUOTA_VIEWER_CONNECT)
+
+    @classmethod
+    def quota_viewer_fetch(cls) -> float:
+        """Stats fetch timeout for quota viewer."""
+        return cls._get_env_float("TIMEOUT_QUOTA_VIEWER_FETCH", cls._QUOTA_VIEWER_FETCH)
+
+    @classmethod
+    def quota_viewer_action(cls) -> float:
+        """Action POST timeout for quota viewer (reload, force_refresh)."""
+        return cls._get_env_float("TIMEOUT_QUOTA_VIEWER_ACTION", cls._QUOTA_VIEWER_ACTION)
+
+    @classmethod
+    def model_filter_fetch(cls) -> float:
+        """Model list fetch timeout for model filter GUI."""
+        return cls._get_env_float("TIMEOUT_MODEL_FILTER_FETCH", cls._MODEL_FILTER_FETCH)
 
     @classmethod
     def connect(cls) -> float:

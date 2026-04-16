@@ -8,7 +8,7 @@ import litellm
 from fastapi import APIRouter, Request, Depends, HTTPException
 
 from rotator_library import RotatingClient
-from proxy_app.dependencies import get_rotating_client, verify_api_key
+from proxy_app.dependencies import get_rotating_client, verify_api_key, make_error_response
 from proxy_app.streaming import handle_litellm_error
 from proxy_app.request_logger import log_request_to_console
 
@@ -39,7 +39,7 @@ async def moderations(
         return response
 
     except orjson.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON in request body")
+        raise HTTPException(status_code=400, detail=make_error_response("Invalid JSON in request body", "invalid_request_error"))
     except Exception as e:
         if isinstance(e, (litellm.InvalidRequestError, ValueError, litellm.ContextWindowExceededError,
                           litellm.AuthenticationError, litellm.RateLimitError,
@@ -47,4 +47,4 @@ async def moderations(
                           litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
             raise handle_litellm_error(e, error_format="openai")
         logging.error(f"Moderation failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=make_error_response("Internal server error", "api_error"))

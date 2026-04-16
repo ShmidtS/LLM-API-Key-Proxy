@@ -9,8 +9,6 @@ Eliminates duplication of provider/model string extraction across
 client.py, usage_manager.py, and provider modules.
 """
 
-from __future__ import annotations
-
 import functools
 from typing import Any, Optional
 

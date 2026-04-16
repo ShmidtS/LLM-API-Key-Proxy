@@ -9,7 +9,7 @@ import orjson
 from fastapi import APIRouter, Request, HTTPException, Depends
 
 from rotator_library import RotatingClient
-from proxy_app.dependencies import get_rotating_client, verify_api_key
+from proxy_app.dependencies import get_rotating_client, verify_api_key, make_error_response
 from proxy_app.routes.error_handler import handle_route_errors
 
 router = APIRouter()
@@ -92,25 +92,25 @@ async def refresh_quota_stats(
     if action not in ("reload", "force_refresh"):
         raise HTTPException(
             status_code=400,
-            detail="action must be 'reload' or 'force_refresh'",
+            detail=make_error_response("action must be 'reload' or 'force_refresh'", "invalid_request_error"),
         )
 
     if scope not in ("all", "provider", "credential"):
         raise HTTPException(
             status_code=400,
-            detail="scope must be 'all', 'provider', or 'credential'",
+            detail=make_error_response("scope must be 'all', 'provider', or 'credential'", "invalid_request_error"),
         )
 
     if scope in ("provider", "credential") and not provider:
         raise HTTPException(
             status_code=400,
-            detail="'provider' is required when scope is 'provider' or 'credential'",
+            detail=make_error_response("'provider' is required when scope is 'provider' or 'credential'", "invalid_request_error"),
         )
 
     if scope == "credential" and not credential:
         raise HTTPException(
             status_code=400,
-            detail="'credential' is required when scope is 'credential'",
+            detail=make_error_response("'credential' is required when scope is 'credential'", "invalid_request_error"),
         )
 
     refresh_result = {
@@ -161,7 +161,7 @@ async def token_count(
 
     if not model or not messages:
         raise HTTPException(
-            status_code=400, detail="'model' and 'messages' are required."
+            status_code=400, detail=make_error_response("'model' and 'messages' are required.", "invalid_request_error")
         )
 
     count = await asyncio.to_thread(client.token_count, **data)
@@ -203,7 +203,7 @@ async def cost_estimate(request: Request, _=Depends(verify_api_key)):
     cache_creation_tokens = data.get("cache_creation_tokens", 0)
 
     if not model:
-        raise HTTPException(status_code=400, detail="'model' is required.")
+        raise HTTPException(status_code=400, detail=make_error_response("'model' is required.", "invalid_request_error"))
 
     result = {
         "model": model,

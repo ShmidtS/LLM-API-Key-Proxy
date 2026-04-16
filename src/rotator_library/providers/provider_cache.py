@@ -17,8 +17,6 @@ Usage examples:
 - General: Any transient data that benefits from persistence across requests
 """
 
-from __future__ import annotations
-
 import asyncio
 from orjson import JSONDecodeError
 import logging

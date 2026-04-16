@@ -3,8 +3,6 @@
 
 """AntigravityProvider - core class for Google Antigravity API."""
 
-from __future__ import annotations
-
 import os
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union

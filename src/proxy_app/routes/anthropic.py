@@ -3,6 +3,8 @@
 
 import logging
 
+logger = logging.getLogger(__name__)
+
 import orjson
 import litellm
 from fastapi import APIRouter, Request, Depends, HTTPException
@@ -13,7 +15,7 @@ from rotator_library.anthropic_compat import (
     AnthropicMessagesRequest,
     AnthropicCountTokensRequest,
 )
-from proxy_app.dependencies import get_rotating_client, verify_anthropic_api_key, make_error_response, track_stream
+from proxy_app.dependencies import get_rotating_client, verify_anthropic_api_key, track_stream
 from proxy_app.detailed_logger import RawIOLogger
 from proxy_app.request_logger import log_request_to_console
 from proxy_app.routes.error_handler import handle_route_errors
@@ -115,19 +117,19 @@ async def anthropic_count_tokens(
     ) as e:
         error_response = {
             "type": "error",
-            "error": make_error_response(str(e), "invalid_request_error"),
+            "error": {"type": "invalid_request_error", "message": str(e)},
         }
         raise HTTPException(status_code=400, detail=error_response)
     except litellm.AuthenticationError as e:
         error_response = {
             "type": "error",
-            "error": make_error_response(str(e), "authentication_error"),
+            "error": {"type": "authentication_error", "message": str(e)},
         }
         raise HTTPException(status_code=401, detail=error_response)
     except Exception as exc:
-        logging.error("Anthropic count_tokens endpoint error", exc_info=True)
+        logger.error("Anthropic count_tokens endpoint error", exc_info=True)
         error_response = {
             "type": "error",
-            "error": make_error_response("Internal server error", "api_error"),
+            "error": {"type": "api_error", "message": "Internal server error"},
         }
         raise HTTPException(status_code=500, detail=error_response)

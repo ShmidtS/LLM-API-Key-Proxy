@@ -48,7 +48,7 @@ def handle_route_errors(
             except orjson.JSONDecodeError:
                 raise HTTPException(
                     status_code=400,
-                    detail="Invalid JSON in request body",
+                    detail=make_error_response("Invalid JSON in request body", "invalid_request_error"),
                 )
             except Exception as e:
                 if error_format in ("openai", "anthropic"):
@@ -77,7 +77,7 @@ def handle_route_errors(
                 else:
                     raise HTTPException(
                         status_code=500,
-                        detail="Internal server error",
+                        detail=make_error_response("Internal server error", "api_error"),
                     )
 
         return wrapper

@@ -23,6 +23,7 @@ Usage:
     ```
 """
 
+import logging
 import os
 import sys
 import socket
@@ -35,6 +36,8 @@ import ssl
 import threading
 import time
 from typing import List, Tuple, Optional, Dict
+
+logger = logging.getLogger(__name__)
 
 # Try to use httpx for DoH, fallback to urllib
 try:
@@ -209,7 +212,7 @@ def _doh_query(host: str, doh_url: str) -> Optional[str]:
         return None
 
     except Exception as e:
-        print(f"[DNS-FIX] DoH query error: {e}")
+        logger.debug("DoH query error: %s", e)
         return None
 
 
@@ -280,7 +283,7 @@ def _dns_query(host: str, dns_host: str, dns_port: int = 53) -> Optional[str]:
             return None
 
     except Exception as e:
-        print(f"[DNS-FIX] Error querying DNS: {e}")
+        logger.debug("Error querying DNS: %s", e)
         return None
 
 
@@ -305,7 +308,7 @@ def _custom_getaddrinfo_sync(
         # Check if we have a known IP for this host
         known_ip = CUSTOM_DNS_HOSTS[host]
         if known_ip:
-            print(f"[DNS-FIX] Using known IP for {host} -> {known_ip}")
+            logger.debug("Using known IP for %s -> %s", host, known_ip)
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (known_ip, port))]
 
         # Otherwise, use DNS resolver
@@ -321,7 +324,7 @@ def _custom_getaddrinfo_sync(
                 # Use DoH
                 ip = _doh_query(host, dns_resolver)
                 if ip:
-                    print(f"[DNS-FIX] Resolved {host} -> {ip} via DoH: {dns_resolver}")
+                    logger.debug("Resolved %s -> %s via DoH: %s", host, ip, dns_resolver)
             else:
                 # Use traditional DNS
                 dns_host = dns_resolver
@@ -333,19 +336,19 @@ def _custom_getaddrinfo_sync(
                     try:
                         dns_port = int(parts[1])
                     except ValueError:
-                        print(f"[DNS-FIX] Invalid DNS port in resolver: {dns_resolver}")
+                        logger.warning("Invalid DNS port in resolver: %s", dns_resolver)
 
                 ip = _dns_query(host, dns_host, dns_port)
                 if ip:
-                    print(
-                        f"[DNS-FIX] Resolved {host} -> {ip} via {dns_host}:{dns_port}"
+                    logger.debug(
+                        "Resolved %s -> %s via %s:%s", host, ip, dns_host, dns_port
                     )
 
             if ip:
                 return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
             else:
-                print(
-                    f"[DNS-FIX] Failed to resolve {host} via custom DNS, falling back to system DNS"
+                logger.debug(
+                    "Failed to resolve %s via custom DNS, falling back to system DNS", host
                 )
 
     # Use system DNS for other hosts or if custom DNS failed
@@ -426,11 +429,11 @@ def apply_dns_fix():
         try:
             dns_port = int(parts[1])
         except ValueError:
-            print(f"[DNS-FIX] Invalid DNS port in resolver: {dns_resolver}")
+            logger.warning("Invalid DNS port in resolver: %s", dns_resolver)
 
     # Apply monkey-patch
     socket.getaddrinfo = _custom_getaddrinfo
-    print(
-        f"[DNS-FIX] Patched socket.getaddrinfo to use custom DNS: {dns_host}:{dns_port}"
+    logger.info(
+        "Patched socket.getaddrinfo to use custom DNS: %s:%s", dns_host, dns_port
     )
 

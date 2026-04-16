@@ -22,8 +22,6 @@ Directory structure:
             error.log             # If any errors occurred
 """
 
-from __future__ import annotations
-
 import orjson
 import logging
 import time

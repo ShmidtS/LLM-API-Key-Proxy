@@ -19,6 +19,12 @@ import argparse
 import logging
 import re
 
+logger = logging.getLogger(__name__)
+
+# Early startup messages need a basic handler before full config is set up.
+# Without this, logger.info() calls before line ~246 are silently dropped.
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+
 # Fix Windows console encoding issues
 if sys.platform == "win32":
     import io
@@ -103,7 +109,7 @@ for _env_file in sorted(_env_files_found):  # reuse already-computed list
 # Log discovered .env files for deployment verification
 if _env_files_found:
     _env_names = [_ef.name for _ef in _env_files_found]
-    print(f"📁 Loaded {len(_env_files_found)} .env file(s): {', '.join(_env_names)}")
+    logger.info("Loaded %d .env file(s): %s", len(_env_files_found), ', '.join(_env_names))
 
 # Get proxy API key for display
 _early_proxy_api_key = os.getenv("PROXY_API_KEY")
@@ -113,12 +119,12 @@ if _early_proxy_api_key:
 else:
     key_display = "✗ Not Set (INSECURE - anyone can access!)"
 
-print("━" * 70)
-print(f"Starting proxy on {args.host}:{args.port}")
-print(f"Proxy API Key: {key_display}")
-print("GitHub: https://github.com/ShmidtS/LLM-API-Key-Proxy")
-print("━" * 70)
-print("Loading server components...")
+logger.info("━" * 70)
+logger.info("Starting proxy on %s:%s", args.host, args.port)
+logger.info("Proxy API Key: %s", key_display)
+logger.info("GitHub: https://github.com/ShmidtS/LLM-API-Key-Proxy")
+logger.info("━" * 70)
+logger.info("Loading server components...")
 
 
 # Phase 2: Load Rich for loading spinner (lightweight)
@@ -127,13 +133,13 @@ from rich.console import Console
 _console = Console()
 
 # Phase 3: Heavy dependencies with granular loading messages
-print("  → Loading FastAPI framework...")
+logger.info("Loading FastAPI framework...")
 with _console.status("[dim]Loading FastAPI framework...", spinner="dots"):
     from contextlib import asynccontextmanager
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
 
-print("  → Loading core dependencies...")
+logger.info("Loading core dependencies...")
 with _console.status("[dim]Loading core dependencies...", spinner="dots"):
     import colorlog
     import json
@@ -141,7 +147,7 @@ with _console.status("[dim]Loading core dependencies...", spinner="dots"):
     # --- Early Log Level Configuration ---
     logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
-print(" → Loading LiteLLM library...")
+logger.info("Loading LiteLLM library...")
 with _console.status("[dim]Loading LiteLLM library...", spinner="dots"):
     import litellm
     import httpx
@@ -151,11 +157,11 @@ with _console.status("[dim]Loading LiteLLM library...", spinner="dots"):
 
     _ssl_verify_env = os.environ.get("HTTP_SSL_VERIFY", "true").lower()
     if _ssl_verify_env == "false":
-        print("[SSL-FIX-MAIN] HTTP_SSL_VERIFY=false - Applying SSL patches in main.py")
+        logger.info("[SSL-FIX-MAIN] HTTP_SSL_VERIFY=false - Applying SSL patches in main.py")
 
         # 1. Set litellm's SSL verification to False
         litellm.ssl_verify = False
-        print("[SSL-FIX-MAIN] Set litellm.ssl_verify = False")
+        logger.info("[SSL-FIX-MAIN] Set litellm.ssl_verify = False")
 
         # 2. Create pre-configured httpx clients with SSL verification disabled
         # This is the MOST RELIABLE way to disable SSL in litellm
@@ -163,16 +169,14 @@ with _console.status("[dim]Loading LiteLLM library...", spinner="dots"):
         _litellm_timeout = TimeoutConfig.non_streaming()
         litellm.client_session = httpx.Client(verify=False, timeout=_litellm_timeout)
         litellm.aclient_session = httpx.AsyncClient(verify=False, timeout=_litellm_timeout)
-        print(
-            "[SSL-FIX-MAIN] Created litellm.client_session and aclient_session with verify=False"
-        )
+        logger.info("[SSL-FIX-MAIN] Created litellm.client_session and aclient_session with verify=False")
 
         # 3. Set environment variable for litellm
         os.environ["SSL_VERIFY"] = "False"
-        print("[SSL-FIX-MAIN] Set SSL_VERIFY=False environment variable")
+        logger.info("[SSL-FIX-MAIN] Set SSL_VERIFY=False environment variable")
 
 # Phase 4: Application imports with granular loading messages
-print("  → Initializing proxy core...")
+logger.info("Initializing proxy core...")
 with _console.status("[dim]Initializing proxy core...", spinner="dots"):
     from rotator_library import RotatingClient
     from rotator_library.credential_manager import CredentialManager
@@ -186,7 +190,7 @@ from proxy_app.logging_config import RotatorDebugFilter, NoLiteLLMLogFilter
 from proxy_app.dependencies import _streams_lock
 
 # Anthropic API Models (imported from library)
-print("  → Discovering provider plugins...")
+logger.info("Discovering provider plugins...")
 # Provider lazy loading happens during import, so time it here
 _provider_start = time.time()
 with _console.status("[dim]Discovering provider plugins...", spinner="dots"):
@@ -201,9 +205,7 @@ _plugin_count = len(PROVIDER_PLUGINS)
 
 # Calculate total loading time
 _elapsed = time.time() - _start_time
-print(
-    f"✓ Server ready in {_elapsed:.2f}s ({_plugin_count} providers discovered in {_provider_time:.2f}s)"
-)
+logger.info("Server ready in %.2fs (%d providers discovered in %.2fs)", _elapsed, _plugin_count, _provider_time)
 
 # Clear screen and reprint header for clean startup view
 # This pushes loading messages up (still in scroll history) but shows a clean final screen
@@ -211,14 +213,12 @@ sys.stdout.write("\033[2J\033[H")
 sys.stdout.flush()
 
 # Reprint header
-print("━" * 70)
-print(f"Starting proxy on {args.host}:{args.port}")
-print(f"Proxy API Key: {key_display}")
-print("GitHub: https://github.com/ShmidtS/LLM-API-Key-Proxy")
-print("━" * 70)
-print(
-    f"✓ Server ready in {_elapsed:.2f}s ({_plugin_count} providers discovered in {_provider_time:.2f}s)"
-)
+logger.info("━" * 70)
+logger.info("Starting proxy on %s:%s", args.host, args.port)
+logger.info("Proxy API Key: %s", key_display)
+logger.info("GitHub: https://github.com/ShmidtS/LLM-API-Key-Proxy")
+logger.info("━" * 70)
+logger.info("Server ready in %.2fs (%d providers discovered in %.2fs)", _elapsed, _plugin_count, _provider_time)
 
 
 # Note: Debug logging will be added after logging configuration below
@@ -267,6 +267,9 @@ console_handler.addFilter(NoLiteLLMLogFilter())
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.DEBUG)
 
+# Remove the basicConfig StreamHandler added at startup to avoid duplicate output
+root_logger.handlers.clear()
+
 # Add all handlers to the root logger
 root_logger.addHandler(info_file_handler)
 root_logger.addHandler(console_handler)
@@ -283,7 +286,7 @@ litellm_logger.handlers = []
 litellm_logger.propagate = False
 
 # Now that logging is configured, log the module load time to debug file only
-logging.debug(f"Modules loaded in {_elapsed:.2f}s")
+logger.debug(f"Modules loaded in {_elapsed:.2f}s")
 
 
 # --- Configuration ---
@@ -291,11 +294,11 @@ USE_EMBEDDING_BATCHER = False
 ENABLE_REQUEST_LOGGING = args.enable_request_logging
 ENABLE_RAW_LOGGING = args.enable_raw_logging
 if ENABLE_REQUEST_LOGGING:
-    logging.info(
+    logger.info(
         "Transaction logging is enabled (library-level with provider correlation)."
     )
 if ENABLE_RAW_LOGGING:
-    logging.info("Raw I/O logging is enabled (proxy boundary, unmodified HTTP data).")
+    logger.info("Raw I/O logging is enabled (proxy boundary, unmodified HTTP data).")
 PROXY_API_KEY = os.getenv("PROXY_API_KEY")
 # Note: PROXY_API_KEY validation moved to server startup to allow credential tool to run first
 # Pre-build Bearer string once to avoid f-string on every request
@@ -335,7 +338,7 @@ for key, value in os.environ.items():
             model.strip() for model in value.split(",") if model.strip()
         ]
         ignore_models[provider] = models_to_ignore
-        logging.debug(
+        logger.debug(
             f"Loaded ignore list for provider '{provider}': {models_to_ignore}"
         )
 
@@ -348,7 +351,7 @@ for key, value in os.environ.items():
             model.strip() for model in value.split(",") if model.strip()
         ]
         whitelist_models[provider] = models_to_whitelist
-        logging.debug(
+        logger.debug(
             f"Loaded whitelist for provider '{provider}': {models_to_whitelist}"
         )
 
@@ -360,16 +363,16 @@ for key, value in os.environ.items():
         try:
             max_concurrent = int(value)
             if max_concurrent < 1:
-                logging.warning(
+                logger.warning(
                     f"Invalid max_concurrent value for provider '{provider}': {value}. Must be >= 1. Using default (1)."
                 )
                 max_concurrent = 1
             max_concurrent_requests_per_key[provider] = max_concurrent
-            logging.debug(
+            logger.debug(
                 f"Loaded max concurrent requests for provider '{provider}': {max_concurrent}"
             )
         except ValueError:
-            logging.warning(
+            logger.warning(
                 f"Invalid max_concurrent value for provider '{provider}': {value}. Using default (1)."
             )
 
@@ -380,11 +383,11 @@ async def lifespan(app: FastAPI):
     """Manage the RotatingClient's lifecycle with the app's lifespan."""
     # Startup guard: warn if PROXY_API_KEY is missing and auth not explicitly disabled
     if not os.getenv("PROXY_API_KEY") and os.getenv("ALLOW_NO_AUTH", "").lower() != "true":
-        logging.warning("=" * 70)
-        logging.warning("SECURITY: PROXY_API_KEY is not set and ALLOW_NO_AUTH is not enabled!")
-        logging.warning("Your proxy is running WITHOUT authentication — anyone can access it.")
-        logging.warning("Set PROXY_API_KEY in .env or set ALLOW_NO_AUTH=true to suppress this warning.")
-        logging.warning("=" * 70)
+        logger.warning("=" * 70)
+        logger.warning("SECURITY: PROXY_API_KEY is not set and ALLOW_NO_AUTH is not enabled!")
+        logger.warning("Your proxy is running WITHOUT authentication — anyone can access it.")
+        logger.warning("Set PROXY_API_KEY in .env or set ALLOW_NO_AUTH=true to suppress this warning.")
+        logger.warning("=" * 70)
 
     # Suppress noisy ConnectionResetError from Windows ProactorEventLoop
     # High-TPS providers (fireworks, friendli) forcefully close connections
@@ -422,7 +425,7 @@ async def lifespan(app: FastAPI):
     oauth_credentials = cred_manager.discover_and_prepare()
 
     if not skip_oauth_init and oauth_credentials:
-        logging.info("Starting OAuth credential validation and deduplication...")
+        logger.info("Starting OAuth credential validation and deduplication...")
         processed_emails = {}  # email -> {provider: path}
         credentials_to_initialize = {}  # provider -> [paths]
         final_oauth_credentials = {}
@@ -449,7 +452,7 @@ async def lifespan(app: FastAPI):
 
                         if provider in processed_emails[email]:
                             original_path = processed_emails[email][provider]
-                            logging.warning(
+                            logger.warning(
                                 f"Duplicate for '{email}' on '{provider}' found in pre-scan: '{Path(path).name}'. Original: '{Path(original_path).name}'. Skipping."
                             )
                             continue
@@ -459,7 +462,7 @@ async def lifespan(app: FastAPI):
                     credentials_to_initialize[provider].append(path)
 
                 except (FileNotFoundError, orjson.JSONDecodeError) as e:
-                    logging.warning(
+                    logger.warning(
                         f"Could not pre-read metadata from '{path}': {e}. Will process during initialization."
                     )
                     credentials_to_initialize[provider].append(path)
@@ -478,7 +481,7 @@ async def lifespan(app: FastAPI):
                 return (provider, path, email, None)
 
             except Exception as e:
-                logging.error(
+                logger.error(
                     f"Failed to process OAuth token for {provider} at '{path}': {e}"
                 )
                 return (provider, path, None, e)
@@ -508,7 +511,7 @@ async def lifespan(app: FastAPI):
         for result in results:
             # Handle exceptions from gather
             if isinstance(result, Exception):
-                logging.error(f"Credential processing raised exception: {result}")
+                logger.error(f"Credential processing raised exception: {result}")
                 continue
 
             provider, path, email, error = result
@@ -526,7 +529,7 @@ async def lifespan(app: FastAPI):
 
             # Handle empty email
             if not email:
-                logging.warning(
+                logger.warning(
                     f"Could not retrieve email for '{path}'. Treating as unique."
                 )
                 if provider not in final_oauth_credentials:
@@ -543,7 +546,7 @@ async def lifespan(app: FastAPI):
                 and processed_emails[email][provider] != path
             ):
                 original_path = processed_emails[email][provider]
-                logging.warning(
+                logger.warning(
                     f"Duplicate for '{email}' on '{provider}' found post-init: '{Path(path).name}'. Original: '{Path(original_path).name}'. Skipping."
                 )
                 continue
@@ -566,9 +569,9 @@ async def lifespan(app: FastAPI):
                             json.dump(data, f, indent=2)
                             f.truncate()
                     except Exception as e:
-                        logging.error(f"Failed to update metadata for '{path}': {e}")
+                        logger.error(f"Failed to update metadata for '{path}': {e}")
 
-        logging.info("OAuth credential processing complete.")
+        logger.info("OAuth credential processing complete.")
         oauth_credentials = final_oauth_credentials
 
     # [NEW] Load provider-specific params
@@ -618,7 +621,7 @@ async def lifespan(app: FastAPI):
     )
 
     if not isinstance(init_results[0], Exception):
-        logging.info(f"HTTP pool initialized with {endpoint_count} endpoints")
+        logger.info(f"HTTP pool initialized with {endpoint_count} endpoints")
 
     # Log loaded credentials summary (compact, always visible for deployment verification)
     client.background_refresher.start()  # Start the background task
@@ -632,15 +635,15 @@ async def lifespan(app: FastAPI):
 
     # Warn if no provider credentials are configured
     if not client.all_credentials:
-        logging.warning("=" * 70)
-        logging.warning("NO PROVIDER CREDENTIALS CONFIGURED")
-        logging.warning("The proxy is running but cannot serve any LLM requests.")
-        logging.warning(
+        logger.warning("=" * 70)
+        logger.warning("NO PROVIDER CREDENTIALS CONFIGURED")
+        logger.warning("The proxy is running but cannot serve any LLM requests.")
+        logger.warning(
             "Launch the credential tool to add API keys or OAuth credentials."
         )
-        logging.warning("  * Executable: Run with --add-credential flag")
-        logging.warning("  * Source: python src/proxy_app/main.py --add-credential")
-        logging.warning("=" * 70)
+        logger.warning("  * Executable: Run with --add-credential flag")
+        logger.warning("  * Source: python src/proxy_app/main.py --add-credential")
+        logger.warning("=" * 70)
 
     os.environ["LITELLM_LOG"] = "ERROR"
     litellm.set_verbose = False
@@ -648,14 +651,14 @@ async def lifespan(app: FastAPI):
     if USE_EMBEDDING_BATCHER:
         batcher = EmbeddingBatcher(client=client)
         app.state.embedding_batcher = batcher
-        logging.info("RotatingClient and EmbeddingBatcher initialized.")
+        logger.info("RotatingClient and EmbeddingBatcher initialized.")
     else:
         app.state.embedding_batcher = None
-        logging.info("RotatingClient initialized (EmbeddingBatcher disabled).")
+        logger.info("RotatingClient initialized (EmbeddingBatcher disabled).")
 
     app.state.model_info_service = model_info_service
     if model_info_service:
-        logging.info(
+        logger.info(
             "Model info service started (fetching pricing data in background)."
         )
 
@@ -671,7 +674,7 @@ async def lifespan(app: FastAPI):
 
     # Grace period: allow in-flight streaming responses to complete
     try:
-        logging.info("Shutdown requested, waiting up to 5s for active streams...")
+        logger.info("Shutdown requested, waiting up to 5s for active streams...")
         for _ in range(50):
             async with _streams_lock:
                 if not getattr(app.state, "active_streams", 0):
@@ -680,7 +683,7 @@ async def lifespan(app: FastAPI):
         async with _streams_lock:
             remaining = getattr(app.state, "active_streams", 0)
         if remaining:
-            logging.warning("Cancelling %d remaining active streams", remaining)
+            logger.warning("Cancelling %d remaining active streams", remaining)
             # Cancel remaining in-flight stream generators
             active_stream_gens = getattr(app.state, "active_stream_gens", None)
             if active_stream_gens:
@@ -689,10 +692,10 @@ async def lifespan(app: FastAPI):
                         if hasattr(stream_gen, "aclose"):
                             await stream_gen.aclose()
                     except Exception as e:
-                        logging.debug("Error during stream cleanup: %s", e)
+                        logger.debug("Error during stream cleanup: %s", e)
                 active_stream_gens.clear()
     except Exception as e:
-        logging.debug("Error waiting for active streams during shutdown: %s", e)
+        logger.debug("Error waiting for active streams during shutdown: %s", e)
 
     await client.background_refresher.stop()  # Stop the background task on shutdown
     close_doh_client()  # Close persistent DoH httpx.Client
@@ -706,26 +709,26 @@ async def lifespan(app: FastAPI):
     try:
         await litellm.close_litellm_async_clients()
     except Exception as e:
-        logging.debug("Error closing litellm async clients: %s", e)
+        logger.debug("Error closing litellm async clients: %s", e)
     if hasattr(litellm, "aclient_session") and litellm.aclient_session is not None:
         try:
             await litellm.aclient_session.aclose()
         except Exception as e:
-            logging.debug("Error closing litellm aclient_session: %s", e)
+            logger.debug("Error closing litellm aclient_session: %s", e)
     if hasattr(litellm, "client_session") and litellm.client_session is not None:
         try:
             litellm.client_session.close()
         except Exception as e:
-            logging.debug("Error closing litellm client_session: %s", e)
+            logger.debug("Error closing litellm client_session: %s", e)
 
     # Stop model info service
     if hasattr(app.state, "model_info_service") and app.state.model_info_service:
         await app.state.model_info_service.stop()
 
     if app.state.embedding_batcher:
-        logging.info("RotatingClient and EmbeddingBatcher closed.")
+        logger.info("RotatingClient and EmbeddingBatcher closed.")
     else:
-        logging.info("RotatingClient closed.")
+        logger.info("RotatingClient closed.")
 
 
 # --- FastAPI App Setup ---
@@ -737,7 +740,7 @@ _cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "")
 if _cors_origins_env.strip():
     _cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
 else:
-    logging.warning("CORS_ALLOWED_ORIGINS not set — allowing all origins (set CORS_ALLOWED_ORIGINS to restrict)")
+    logger.warning("CORS_ALLOWED_ORIGINS not set — allowing all origins (set CORS_ALLOWED_ORIGINS to restrict)")
     _cors_origins = ["*"]
 app.add_middleware(
     CORSMiddleware,

@@ -13,8 +13,6 @@ is instantiated exactly once and shared across the process.
 Thread-safe via double-checked locking with ``threading.Lock``.
 """
 
-from __future__ import annotations
-
 import logging
 import threading
 from typing import Any, Dict, Optional

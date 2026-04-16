@@ -8,7 +8,7 @@ import litellm
 from fastapi import APIRouter, Request, Depends, HTTPException
 
 from rotator_library import RotatingClient
-from proxy_app.dependencies import get_rotating_client, verify_api_key
+from proxy_app.dependencies import get_rotating_client, verify_api_key, make_error_response
 from proxy_app.streaming import handle_litellm_error
 from proxy_app.request_logger import log_request_to_console
 
@@ -42,7 +42,7 @@ async def web_search(
         model = request_data.get("model")
         query = request_data.get("query") or request_data.get("input")
         if not query:
-            raise HTTPException(status_code=400, detail="'query' or 'input' is required")
+            raise HTTPException(status_code=400, detail=make_error_response("'query' or 'input' is required", "invalid_request_error"))
 
         # Route web search through acompletion with web_search tool
         # This leverages providers that support built-in web search tools
@@ -105,7 +105,7 @@ async def web_search(
                           litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
             raise handle_litellm_error(e, error_format="openai")
         logging.error(f"Tool operation failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=make_error_response("Internal server error", "api_error"))
 
 
 @router.post("/v1/tools/tokenizer")
@@ -133,7 +133,7 @@ async def tool_tokenizer(
         if isinstance(e, (litellm.InvalidRequestError, ValueError, litellm.AuthenticationError, litellm.RateLimitError, litellm.ServiceUnavailableError, litellm.APIConnectionError, litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
             raise handle_litellm_error(e, error_format="openai")
         logging.error(f"Tool operation failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=make_error_response("Internal server error", "api_error"))
 
 
 @router.post("/v1/tools/layout-parsing")
@@ -161,7 +161,7 @@ async def tool_layout_parsing(
         if isinstance(e, (litellm.InvalidRequestError, ValueError, litellm.AuthenticationError, litellm.RateLimitError, litellm.ServiceUnavailableError, litellm.APIConnectionError, litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
             raise handle_litellm_error(e, error_format="openai")
         logging.error(f"Tool operation failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=make_error_response("Internal server error", "api_error"))
 
 
 @router.post("/v1/tools/web-reader")
@@ -189,4 +189,4 @@ async def tool_web_reader(
         if isinstance(e, (litellm.InvalidRequestError, ValueError, litellm.AuthenticationError, litellm.RateLimitError, litellm.ServiceUnavailableError, litellm.APIConnectionError, litellm.Timeout, litellm.InternalServerError, litellm.OpenAIError)):
             raise handle_litellm_error(e, error_format="openai")
         logging.error(f"Tool operation failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=make_error_response("Internal server error", "api_error"))

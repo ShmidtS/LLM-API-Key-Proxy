@@ -20,14 +20,18 @@ import customtkinter as ctk
 from tkinter import Menu
 import asyncio
 import fnmatch
+import logging
 import platform
 import threading
 import os
 import traceback
 from pathlib import Path
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 from typing import List, Dict, Tuple, Optional, Callable, Set
 from dotenv import load_dotenv, set_key, unset_key
+from rotator_library.timeout_config import TimeoutConfig
 
 
 
@@ -524,7 +528,7 @@ class FilterEngine:
 
             return True
         except Exception as e:
-            print(f"Error saving to .env: {e}")
+            logger.error("Error saving to .env: %s", e)
             traceback.print_exc()
             return False
 
@@ -641,7 +645,7 @@ class ModelFetcher:
                 return [], f"Unknown provider: '{provider}'"
 
             # Fetch models
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=TimeoutConfig.model_filter_fetch()) as client:
                 instance = provider_class()
                 models = await instance.get_models(credential, client)
                 return models, None

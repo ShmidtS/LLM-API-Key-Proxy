@@ -16,8 +16,6 @@ Usage:
     "key" in cache               # False if expired
 """
 
-from __future__ import annotations
-
 import threading
 import time
 from collections import OrderedDict
