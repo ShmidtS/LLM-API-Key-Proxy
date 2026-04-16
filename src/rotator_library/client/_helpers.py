@@ -7,7 +7,7 @@ provider resolution."""
 
 import asyncio
 import logging
-import random
+from ..utils.http_retry import compute_backoff_with_jitter
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 from urllib.parse import urlparse
@@ -42,7 +42,7 @@ class HelpersMixin:
         self, attempt: int, deadline: float, classified_error: "ClassifiedError"
     ) -> bool:
         """Sleep using shared retry policy when remaining budget allows it."""
-        base_wait = classified_error.retry_after or (2**attempt * random.uniform(0.5, 1.5))
+        base_wait = compute_backoff_with_jitter(attempt, retry_after=classified_error.retry_after)
         wait_time = base_wait
 
         remaining_budget = deadline - time.monotonic()
@@ -75,37 +75,43 @@ class HelpersMixin:
             classified_error=classified_error,
         )
 
-    def increment_quota_failures(self, credential_id: str) -> bool:
+    async def increment_quota_failures(self, credential_id: str, provider: str) -> bool:
         """
         Increment consecutive quota failure counter for a credential.
 
         Args:
             credential_id: The credential identifier
+            provider: The provider name (for lock acquisition)
 
         Returns:
             True if rotation is needed (>= 3 consecutive failures), False otherwise
         """
-        self._consecutive_quota_failures[credential_id] = (
-            self._consecutive_quota_failures.get(credential_id, 0) + 1
-        )
-        count = self._consecutive_quota_failures[credential_id]
+        lock = await self._lock_manager.get_lock(provider)
+        async with lock:
+            self._consecutive_quota_failures[credential_id] = (
+                self._consecutive_quota_failures.get(credential_id, 0) + 1
+            )
+            count = self._consecutive_quota_failures[credential_id]
         lib_logger.debug(
             f"Quota failure increment for {mask_credential(credential_id)}: {count}/3"
         )
         return count >= 3
 
-    def reset_quota_failures(self, credential_id: str) -> None:
+    async def reset_quota_failures(self, credential_id: str, provider: str) -> None:
         """
         Reset consecutive quota failure counter for a credential on success.
 
         Args:
             credential_id: The credential identifier
+            provider: The provider name (for lock acquisition)
         """
-        if credential_id in self._consecutive_quota_failures:
-            del self._consecutive_quota_failures[credential_id]
-            lib_logger.debug(
-                f"Quota failure counter reset for {mask_credential(credential_id)}"
-            )
+        lock = await self._lock_manager.get_lock(provider)
+        async with lock:
+            if credential_id in self._consecutive_quota_failures:
+                del self._consecutive_quota_failures[credential_id]
+        lib_logger.debug(
+            f"Quota failure counter reset for {mask_credential(credential_id)}"
+        )
 
     async def _apply_quota_cooldown(
         self,
@@ -276,8 +282,10 @@ class HelpersMixin:
         """
         if classified_error.error_type == "authentication":
             self._reset_litellm_client_cache()
-            if provider and hasattr(provider, 'reset_auth_caches') and credential:
-                provider.reset_auth_caches(credential)
+            if provider:
+                provider_instance = self._get_provider_instance(provider)
+                if provider_instance and hasattr(provider_instance, 'reset_auth_caches') and credential:
+                    provider_instance.reset_auth_caches(credential)
             return True
         if raw_exception is not None:
             status = getattr(

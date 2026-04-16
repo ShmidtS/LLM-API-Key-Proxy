@@ -752,7 +752,8 @@ class AsyncResilientStateWriter:
                     encoding='utf-8'
                 )
                 await _async_resilient_os_replace(str(temp_path), str(self.file_path))
-            except Exception:
+            except Exception as e:
+                self._logger.debug("Atomic write failed, falling back to direct write: %s", e)
                 # Recovery: recreate directory if deleted
                 self.file_path.parent.mkdir(parents=True, exist_ok=True)
                 self.file_path.write_text(

@@ -368,7 +368,11 @@ class QuotaViewer:
                     )
                     return None
 
-                self.cached_stats = response.json()
+                try:
+                    self.cached_stats = response.json()
+                except ValueError:
+                    self.last_error = f"Invalid JSON in response (HTTP {response.status_code})"
+                    return None
                 self.last_error = None
                 return self.cached_stats
 
@@ -546,7 +550,11 @@ class QuotaViewer:
                     )
                     return None
 
-                result = response.json()
+                try:
+                    result = response.json()
+                except ValueError:
+                    self.last_error = f"Invalid JSON in response (HTTP {response.status_code})"
+                    return None
 
                 # If scope is provider-specific, merge into existing cache
                 if scope == "provider" and provider and self.cached_stats:

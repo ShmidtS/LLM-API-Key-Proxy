@@ -593,7 +593,8 @@ class AntigravityStreamingMixin:
                 # Other HTTP errors - raise immediately (let caller handle)
                 raise
 
-            except Exception:
+            except Exception as e:
+                lib_logger.debug("Non-HTTP streaming error: %s", e)
                 # Non-HTTP errors - raise immediately
                 raise
 
@@ -654,14 +655,12 @@ class AntigravityStreamingMixin:
             response = await client.post(
                 url, headers=headers, json=antigravity_payload, timeout=30
             )
-            response.raise_for_status()
-
-            import json as json_lib
             try:
+                response.raise_for_status()
                 data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
+            except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
                 body_preview = response.text[:200] if response.text else "<empty>"
-                lib_logger.warning("Invalid JSON in token count response: %s — body: %s", e, body_preview)
+                lib_logger.warning("OAuth/HTTP error in token count: %s — body: %s", e, body_preview)
                 raise
             unwrapped = self._unwrap_response(data)
             total = unwrapped.get("totalTokens", 0)

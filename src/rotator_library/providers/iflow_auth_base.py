@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import ClassVar, Dict, Any, Tuple, Union, Optional, List
 from urllib.parse import urlencode
 
+import orjson
 import httpx
 
 from ..http_client_pool import get_http_pool
@@ -303,8 +304,6 @@ class IFlowAuthBase(GoogleOAuthBase):
         Fetches user info (including API key) from iFlow API.
         This is critical: iFlow uses a separate API key for actual API calls.
         """
-        import json as json_lib
-
         if not access_token or not access_token.strip():
             raise ValueError("Access token is empty")
 
@@ -317,13 +316,13 @@ class IFlowAuthBase(GoogleOAuthBase):
         pool = await get_http_pool()
         client = await pool.get_client_async()
         response = await client.get(url, headers=headers)
-        response.raise_for_status()
         try:
+            response.raise_for_status()
             result = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
+        except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
             body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON response: %s — body: %s", e, body_preview)
-            raise
+            lib_logger.warning("OAuth/HTTP error in user info: %s — body: %s", e, body_preview)
+            return None
 
         if not result.get("success"):
             raise ValueError("iFlow user info request not successful")
@@ -348,8 +347,6 @@ class IFlowAuthBase(GoogleOAuthBase):
         Exchanges authorization code for access and refresh tokens.
         Uses Basic Auth with client credentials.
         """
-        import json as json_lib
-
         auth_string = f"{IFLOW_CLIENT_ID}:{IFLOW_CLIENT_SECRET}"
         basic_auth = base64.b64encode(auth_string.encode()).decode()
 
@@ -384,10 +381,10 @@ class IFlowAuthBase(GoogleOAuthBase):
 
         try:
             token_data = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
+        except (orjson.JSONDecodeError, ValueError) as e:
             body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON in token response: %s — body: %s", e, body_preview)
-            raise
+            lib_logger.warning("OAuth/HTTP error in token exchange: %s — body: %s", e, body_preview)
+            return None
 
         access_token = token_data.get("access_token")
         if not access_token:
@@ -421,8 +418,6 @@ class IFlowAuthBase(GoogleOAuthBase):
         Refreshes the OAuth tokens and re-fetches the API key.
         CRITICAL: Must re-fetch user info to get potentially updated API key.
         """
-        import json as json_lib
-
         async with await self._get_lock(path):
             cached_creds = self._credentials_cache.get(path)
             if not force and cached_creds and not self._is_token_expired(cached_creds):
@@ -472,13 +467,16 @@ class IFlowAuthBase(GoogleOAuthBase):
                     response = await client.post(
                         IFLOW_OAUTH_TOKEN_ENDPOINT, headers=headers, data=data
                     )
-                    response.raise_for_status()
                     try:
+                        response.raise_for_status()
                         new_token_data = response.json()
-                    except (json_lib.JSONDecodeError, ValueError) as e:
-                        body_preview = response.text[:200] if response.text else "<empty>"
-                        lib_logger.warning("Invalid JSON in refresh response: %s — body: %s", e, body_preview)
+                    except httpx.HTTPStatusError:
                         raise
+                    except (orjson.JSONDecodeError, ValueError) as e:
+                        body_preview = response.text[:200] if response.text else "<empty>"
+                        lib_logger.warning("OAuth/HTTP error in refresh: %s — body: %s", e, body_preview)
+                        last_error = e
+                        continue
 
                     # [FIX] Handle wrapped response format: {success: bool, data: {...}}
                     # iFlow API may return tokens nested inside a 'data' key
@@ -517,8 +515,8 @@ class IFlowAuthBase(GoogleOAuthBase):
                             error_desc = error_data.get("error_description", "")
                             if not error_desc:
                                 error_desc = error_data.get("message", error_body)
-                        except Exception:
-                            lib_logger.debug("Failed to parse OAuth error response JSON", exc_info=True)
+                        except (orjson.JSONDecodeError, ValueError) as e:
+                            lib_logger.debug("Failed to parse OAuth error response JSON: %s", e)
                             error_type = ""
                             error_desc = error_body
 

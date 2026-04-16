@@ -373,9 +373,9 @@ class GeminiCliQuotaTracker(BaseQuotaTracker):
                 error_body = e.response.text
                 if error_body:
                     error_msg = f"{error_msg}: {error_body[:200]}"
-            except Exception:
+            except Exception as e:
+                lib_logger.debug("Failed to extract Gemini CLI HTTP error body: %s", e)
                 # Best-effort extraction of HTTP error body; fall back to status-only message
-                lib_logger.debug("Failed to extract Gemini CLI HTTP error body", exc_info=True)
             lib_logger.warning(f"Failed to fetch quota for {identifier}: {error_msg}")
             return {
                 "status": "error",

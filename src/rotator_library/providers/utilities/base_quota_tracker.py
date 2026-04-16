@@ -739,8 +739,8 @@ class BaseQuotaTracker:
                     with open(credential_path, "r", encoding="utf-8") as f:
                         cred_data = json_loads(f.read())
                         tier = cred_data.get("_proxy_metadata", {}).get("tier")
-                except Exception:
-                    lib_logger.debug("Failed to load tier from credential file: %s", credential_path, exc_info=True)
+                except Exception as e:
+                    lib_logger.debug("Failed to load tier from credential file %s: %s", credential_path, e)
 
         if not tier or tier == "unknown":
             # Try to discover tier by making a fetch first

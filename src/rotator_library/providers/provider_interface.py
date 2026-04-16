@@ -220,8 +220,8 @@ class ProviderInterface(ABC):
         if hasattr(error, "response") and hasattr(error.response, "text"):
             try:
                 return error.response.text
-            except Exception:
-                logging.debug("Failed to extract error response text", exc_info=True)
+            except Exception as e:
+                logging.debug("Failed to extract error response text: %s", e)
         if hasattr(error, "body") and error.body:
             return str(error.body)
         if hasattr(error, "message"):

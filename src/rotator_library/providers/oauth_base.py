@@ -348,8 +348,8 @@ class AuthQueueMixin:
                                 error_desc = error_data.get("error_description", "")
                                 if not error_desc:
                                     error_desc = error_data.get("message", str(e))
-                            except Exception:
-                                lib_logger.debug("Failed to parse OAuth error response JSON", exc_info=True)
+                            except Exception as e:
+                                lib_logger.debug("Failed to parse OAuth error response JSON: %s", e)
                                 error_type = ""
                                 error_desc = str(e)
 

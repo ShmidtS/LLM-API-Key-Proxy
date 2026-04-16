@@ -5,6 +5,7 @@
 
 import asyncio
 import functools
+import logging
 import orjson
 import os
 import re
@@ -307,7 +308,8 @@ def _get_oauth_credentials_summary() -> dict:
             auth_instance = auth_class()
             credentials = auth_instance.list_credentials(_get_oauth_base_dir())
             oauth_summary[provider_name] = credentials
-        except Exception:  # non-critical: provider auth unavailable
+        except Exception as e:  # non-critical: provider auth unavailable
+            logging.debug("Provider auth listing failed for %s: %s", provider_name, e)
             oauth_summary[provider_name] = []
 
     return oauth_summary
@@ -545,7 +547,8 @@ def _display_provider_credentials(provider_name: str):
         auth_class = _get_provider_auth_class(provider_name)
         auth_instance = auth_class()
         credentials = auth_instance.list_credentials(_get_oauth_base_dir())
-    except Exception:  # non-critical: credential listing failed
+    except Exception as e:  # non-critical: credential listing failed
+        logging.debug("Credential listing failed for %s: %s", provider_name, e)
         credentials = []
 
     display_name = OAUTH_FRIENDLY_NAMES.get(provider_name, provider_name.title())
@@ -785,7 +788,8 @@ async def _view_oauth_credentials_detail(provider_name: str):
         auth_class = _get_provider_auth_class(provider_name)
         auth_instance = auth_class()
         credentials = auth_instance.list_credentials(_get_oauth_base_dir())
-    except Exception:  # non-critical: credential listing failed
+    except Exception as e:  # non-critical: credential listing failed
+        logging.debug("Credential listing failed for %s: %s", provider_name, e)
         credentials = []
 
     if not credentials:
@@ -2157,7 +2161,8 @@ async def export_all_provider_credentials(provider_name: str):
     try:
         auth_class = _get_provider_auth_class(provider_name)
         auth_instance = auth_class()
-    except Exception:  # non-critical: provider auth unavailable
+    except Exception as e:  # non-critical: provider auth unavailable
+        logging.debug("Provider auth instantiation failed for %s: %s", provider_name, e)
         console.print(f"[bold red]Unknown provider: {provider_name}[/bold red]")
         return
 
@@ -2227,7 +2232,8 @@ async def combine_provider_credentials(provider_name: str):
     try:
         auth_class = _get_provider_auth_class(provider_name)
         auth_instance = auth_class()
-    except Exception:  # non-critical: provider auth unavailable
+    except Exception as e:  # non-critical: provider auth unavailable
+        logging.debug("Provider auth instantiation failed for %s: %s", provider_name, e)
         console.print(f"[bold red]Unknown provider: {provider_name}[/bold red]")
         return
 
@@ -2328,7 +2334,8 @@ async def combine_all_credentials():
         try:
             auth_class = _get_provider_auth_class(provider_name)
             auth_instance = auth_class()
-        except Exception:  # non-critical: provider auth unavailable
+        except Exception as e:  # non-critical: provider auth unavailable
+            logging.debug("Provider auth instantiation skipped for %s: %s", provider_name, e)
             continue  # Skip providers that don't have auth classes
 
         credentials = auth_instance.list_credentials(_get_oauth_base_dir())

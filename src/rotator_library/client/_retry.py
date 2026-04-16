@@ -7,7 +7,6 @@ streaming_acompletion_with_retry, forced_streaming_acompletion."""
 import asyncio
 import codecs
 import logging
-import random
 import re
 import time
 from dataclasses import dataclass, field
@@ -35,6 +34,7 @@ from ..error_types import (
 from ..failure_logger import log_failure
 from ..request_sanitizer import sanitize_request_payload
 from ..utils.json_utils import STREAM_DONE
+from ..utils.http_retry import compute_backoff_with_jitter
 from ..utils.model_utils import (
     extract_provider_from_model,
     normalize_model_string,
@@ -233,8 +233,10 @@ class RetryMixin:
             await transaction_logger.log_request(kwargs)
 
         credentials_for_provider = list(self.all_credentials[provider])
-        offset = self._cred_offset.get(provider, 0)
-        self._cred_offset[provider] = (offset + 1) % len(credentials_for_provider)
+        lock = await self._lock_manager.get_lock(provider)
+        async with lock:
+            offset = self._cred_offset.get(provider, 0)
+            self._cred_offset[provider] = (offset + 1) % len(credentials_for_provider)
         credentials_for_provider = (
             credentials_for_provider[offset:] + credentials_for_provider[:offset]
         )
@@ -426,7 +428,7 @@ class RetryMixin:
                                 await transaction_logger.log_response(response_data)
 
                             # Reset consecutive quota failures on success
-                            self.reset_quota_failures(current_cred)
+                            await self.reset_quota_failures(current_cred, provider)
 
                             return response
 
@@ -492,7 +494,7 @@ class RetryMixin:
                                 await self._apply_quota_cooldown(
                                     provider, current_cred, classified_error
                                 )
-                                if self.increment_quota_failures(current_cred):
+                                if await self.increment_quota_failures(current_cred, provider):
                                     lib_logger.error(
                                         f"Cred {mask_credential(current_cred)} quota failure limit reached (3/3), forcing rotation."
                                     )
@@ -717,7 +719,7 @@ class RetryMixin:
                                 await transaction_logger.log_response(response_data)
 
                             # Reset consecutive quota failures on success
-                            self.reset_quota_failures(current_cred)
+                            await self.reset_quota_failures(current_cred, provider)
 
                             return response
 
@@ -761,7 +763,7 @@ class RetryMixin:
                                 await self._apply_quota_cooldown(
                                     provider, current_cred, classified_error
                                 )
-                                if self.increment_quota_failures(current_cred):
+                                if await self.increment_quota_failures(current_cred, provider):
                                     lib_logger.error(
                                         f"Cred {mask_credential(current_cred)} quota failure limit reached (3/3), forcing rotation."
                                     )
@@ -795,7 +797,7 @@ class RetryMixin:
                             error_message = str(e).split("\n")[0]
 
                             # Reset quota failures on connection errors (not quota-related)
-                            self.reset_quota_failures(current_cred)
+                            await self.reset_quota_failures(current_cred, provider)
 
                             # Provider-level error: don't increment consecutive failures
                             await self.usage_manager.record_failure(
@@ -817,10 +819,7 @@ class RetryMixin:
                                     break  # Move to the next key
 
                             # For temporary errors, wait before retrying with the same key.
-                            base_wait = classified_error.retry_after or (
-                                2**attempt * random.uniform(0.5, 1.5)
-                            )
-                            wait_time = base_wait
+                            wait_time = compute_backoff_with_jitter(attempt, retry_after=classified_error.retry_after)
                             remaining_budget = deadline - time.monotonic()
 
                             # If the required wait time exceeds the budget, don't wait; rotate to the next key immediately.
@@ -918,9 +917,7 @@ class RetryMixin:
                                 should_retry_same_key(classified_error)
                                 and attempt < self.max_retries - 1
                             ):
-                                base_wait = classified_error.retry_after or (
-                                    2**attempt * random.uniform(0.5, 1.5)
-                                )
+                                base_wait = compute_backoff_with_jitter(attempt, retry_after=classified_error.retry_after)
                                 wait_time = base_wait
                                 remaining_budget = deadline - time.monotonic()
                                 if wait_time <= remaining_budget:
@@ -1366,9 +1363,7 @@ class RetryMixin:
                                 ) and "client has been closed" in str(e):
                                     self._reset_litellm_client_cache()
 
-                                base_wait = classified_error.retry_after or (
-                                    2**attempt * random.uniform(0.5, 1.5)
-                                )
+                                base_wait = compute_backoff_with_jitter(attempt, retry_after=classified_error.retry_after)
                                 wait_time = base_wait
                                 remaining_budget = deadline - time.monotonic()
                                 if wait_time > remaining_budget:
@@ -1682,7 +1677,7 @@ class RetryMixin:
                                 )
 
                                 # Add exponential backoff delay before retry
-                                wait_time = 2**attempt * random.uniform(0.5, 1.5)
+                                wait_time = compute_backoff_with_jitter(attempt, retry_after=classified_error.retry_after)
                                 lib_logger.warning(
                                     f"Rate limit ({classified_error.error_type}) during litellm stream. "
                                     f"Waiting {wait_time:.2f}s before retry."

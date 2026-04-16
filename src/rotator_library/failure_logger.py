@@ -138,7 +138,8 @@ def _extract_response_body(error: Exception) -> str:
         if isinstance(inner, dict):
             try:
                 return orjson.dumps(inner, option=orjson.OPT_INDENT_2).decode("utf-8")
-            except Exception:
+            except Exception as e:
+                logging.debug("orjson serialization failed: %s", e)
                 return str(inner)
         # If data is an exception, recurse to extract from it
         if isinstance(inner, Exception):
@@ -156,7 +157,8 @@ def _extract_response_body(error: Exception) -> str:
         if hasattr(response, "content") and response.content:
             try:
                 return response.content.decode("utf-8", errors="replace")
-            except Exception:
+            except Exception as e:
+                logging.debug("Response content decode failed: %s", e)
                 return str(response.content)
 
     # Check for litellm's body attribute

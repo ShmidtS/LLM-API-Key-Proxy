@@ -1005,8 +1005,8 @@ class GeminiCliProvider(
                                     await file_logger.log_error(
                                         f"API error {response.status_code}: {error_body.decode()}"
                                     )
-                                except Exception:
-                                    lib_logger.debug("Failed to read error body for status %s", response.status_code, exc_info=True)
+                                except Exception as e:
+                                    lib_logger.debug("Failed to read error body for status %s: %s", response.status_code, e)
 
                             # This will raise an HTTPStatusError for 4xx/5xx responses
                             response.raise_for_status()
@@ -1050,8 +1050,8 @@ class GeminiCliProvider(
                         if e.response is not None:
                             try:
                                 error_body = e.response.text
-                            except Exception:
-                                lib_logger.debug("Failed to extract error body from HTTPStatusError response", exc_info=True)
+                            except Exception as e:
+                                lib_logger.debug("Failed to extract error body from HTTPStatusError response: %s", e)
 
                         # Only log to file logger (for detailed logging)
                         if error_body:
@@ -1268,14 +1268,14 @@ class GeminiCliProvider(
                 response = await client.post(
                     url, headers=headers, json=request_payload, timeout=30
                 )
-                response.raise_for_status()
-                import json as json_lib
                 try:
+                    response.raise_for_status()
                     data = response.json()
-                except (json_lib.JSONDecodeError, ValueError) as e:
+                except httpx.HTTPStatusError:
+                    raise
+                except (orjson.JSONDecodeError, ValueError) as e:
                     body_preview = response.text[:200] if response.text else "<empty>"
-                    lib_logger.warning("Invalid JSON in countTokens response: %s — body: %s", e, body_preview)
-                    # Return 0 on JSON parse failure rather than crashing
+                    lib_logger.warning("OAuth/HTTP error in countTokens: %s — body: %s", e, body_preview)
                     return {"prompt_tokens": 0, "total_tokens": 0}
 
                 # Extract token counts from response
@@ -1384,14 +1384,12 @@ class GeminiCliProvider(
             response = await client.get(
                 models_url, headers={"Authorization": f"Bearer {access_token}"}
             )
-            response.raise_for_status()
-
-            import json as json_lib
             try:
+                response.raise_for_status()
                 dynamic_data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
+            except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
                 body_preview = response.text[:200] if response.text else "<empty>"
-                lib_logger.warning("Invalid JSON in models response: %s — body: %s", e, body_preview)
+                lib_logger.warning("OAuth/HTTP error in models discovery: %s — body: %s", e, body_preview)
                 raise
             # Handle various response formats
             model_list = dynamic_data.get("models", dynamic_data.get("data", []))

@@ -551,13 +551,12 @@ class AntigravityProvider(
             response = await client.post(
                 url, json=payload, headers=headers, timeout=30.0
             )
-            response.raise_for_status()
-            import json as json_lib
             try:
+                response.raise_for_status()
                 data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
+            except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
                 body_preview = response.text[:200] if response.text else "<empty>"
-                lib_logger.warning("Invalid JSON in models response: %s — body: %s", e, body_preview)
+                lib_logger.warning("OAuth/HTTP error in models discovery: %s — body: %s", e, body_preview)
                 raise
 
             models = []

@@ -386,7 +386,8 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             success = await asyncio.to_thread(
                 safe_write_json, path, creds, lib_logger, secure_permissions=True, buffer_on_failure=self.BUFFER_ON_FAILURE
             )
-        except Exception:
+        except Exception as e:
+            lib_logger.debug("Credential save failed for %s: %s", path, e)
             self._credentials_cache.pop(path, None)
             raise
         if success:
@@ -415,8 +416,6 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
     async def _refresh_token(
         self, path: str, creds: Dict[str, Any], force: bool = False
     ) -> Dict[str, Any]:
-        import json as json_lib
-
         async with await self._get_lock(path):
             # Skip the expiry check if a refresh is being forced
             if not force and not self._is_token_expired(
@@ -452,13 +451,16 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                         },
                         timeout=30.0,
                     )
-                    response.raise_for_status()
                     try:
+                        response.raise_for_status()
                         new_token_data = response.json()
-                    except (json_lib.JSONDecodeError, ValueError) as e:
-                        body_preview = response.text[:200] if response.text else "<empty>"
-                        lib_logger.warning("Invalid JSON in refresh response: %s — body: %s", e, body_preview)
+                    except httpx.HTTPStatusError:
                         raise
+                    except (orjson.JSONDecodeError, ValueError) as e:
+                        body_preview = response.text[:200] if response.text else "<empty>"
+                        lib_logger.warning("OAuth/HTTP error in refresh: %s — body: %s", e, body_preview)
+                        last_error = e
+                        continue
                     break  # Success, exit retry loop
 
                 except httpx.HTTPStatusError as e:
@@ -802,8 +804,6 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                 server.close()
                 await server.wait_closed()
 
-        import json as json_lib
-
         lib_logger.info("Attempting to exchange authorization code for tokens...")
         pool = await get_http_pool()
         client = await pool.get_client_async()
@@ -827,13 +827,13 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                 "code_verifier": effective_verifier,
             },
         )
-        response.raise_for_status()
         try:
+            response.raise_for_status()
             token_data = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
+        except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
             body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON response: %s — body: %s", e, body_preview)
-            raise
+            lib_logger.warning("OAuth/HTTP error in token exchange: %s — body: %s", e, body_preview)
+            return None
         # Start with the full token data from the exchange
         new_creds = token_data.copy()
 
@@ -859,13 +859,13 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                 "X-Goog-Api-Client": "gl-node/22.18.0",
             },
         )
-        user_info_response.raise_for_status()
         try:
+            user_info_response.raise_for_status()
             user_info = user_info_response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
+        except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
             body_preview = user_info_response.text[:200] if user_info_response.text else "<empty>"
-            lib_logger.warning("Invalid JSON in user info response: %s — body: %s", e, body_preview)
-            raise
+            lib_logger.warning("OAuth/HTTP error in user info: %s — body: %s", e, body_preview)
+            user_info = {}
         new_creds["_proxy_metadata"] = {
             "email": user_info.get("email"),
             "last_check_timestamp": time.time(),
@@ -1016,8 +1016,6 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
     async def get_user_info(
         self, creds_or_path: Union[Dict[str, Any], str]
     ) -> Dict[str, Any]:
-        import json as json_lib
-
         path = creds_or_path if isinstance(creds_or_path, str) else None
         creds = await self._load_credentials(creds_or_path) if path else creds_or_path
 
@@ -1036,13 +1034,13 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
         pool = await get_http_pool()
         client = await pool.get_client_async()
         response = await client.get(self.USER_INFO_URI, headers=headers)
-        response.raise_for_status()
         try:
+            response.raise_for_status()
             user_info = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
+        except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
             body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON in user info response: %s — body: %s", e, body_preview)
-            raise
+            lib_logger.warning("OAuth/HTTP error in user info: %s — body: %s", e, body_preview)
+            return None
 
         # Save the retrieved info for future use
         creds["_proxy_metadata"] = {

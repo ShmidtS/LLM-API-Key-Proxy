@@ -710,14 +710,33 @@ async def lifespan(app: FastAPI):
         await litellm.close_litellm_async_clients()
     except Exception as e:
         logger.debug("Error closing litellm async clients: %s", e)
+
+    # Clear litellm's internal httpx handler cache (creates unclosed sessions)
+    try:
+        from litellm.llms import custom_httpx as _custom_httpx
+        _handler = getattr(_custom_httpx, "httpx_handler", None)
+        if _handler is not None:
+            for _attr in ("_async_client", "_client", "client", "async_client"):
+                _obj = getattr(_handler, _attr, None)
+                if _obj is not None:
+                    if hasattr(_obj, "aclose"):
+                        await _obj.aclose()
+                    elif hasattr(_obj, "close"):
+                        _obj.close()
+            _custom_httpx.httpx_handler = None
+    except Exception as e:
+        logger.debug("Error clearing custom_httpx handler: %s", e)
+
     if hasattr(litellm, "aclient_session") and litellm.aclient_session is not None:
         try:
             await litellm.aclient_session.aclose()
+            litellm.aclient_session = None
         except Exception as e:
             logger.debug("Error closing litellm aclient_session: %s", e)
     if hasattr(litellm, "client_session") and litellm.client_session is not None:
         try:
             litellm.client_session.close()
+            litellm.client_session = None
         except Exception as e:
             logger.debug("Error closing litellm client_session: %s", e)
 

@@ -141,8 +141,8 @@ class QwenAuthBase(GoogleOAuthBase):
                             error_data = e.response.json()
                             error_type = error_data.get("error", "")
                             error_desc = error_data.get("error_description", "")
-                        except Exception:
-                            lib_logger.debug("Failed to parse OAuth error response JSON", exc_info=True)
+                        except Exception as e:
+                            lib_logger.debug("Failed to parse OAuth error response JSON: %s", e)
                             error_type = ""
                             error_desc = error_body
 

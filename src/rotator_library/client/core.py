@@ -91,6 +91,7 @@ from ..utils.model_utils import (
     get_or_create_provider_instance,
     normalize_model_string,
 )
+from ..utils.provider_locks import ProviderLockManager
 from ..utils.provider_registry import get_provider_registry
 from ..config import (
     DEFAULT_MAX_RETRIES,
@@ -214,6 +215,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
             all_credentials.setdefault(provider, []).extend(paths)
         self.all_credentials = all_credentials
         self._cred_offset: Dict[str, int] = {}
+        self._lock_manager = ProviderLockManager()
 
         self.max_retries = max_retries
         self.global_timeout = global_timeout
@@ -773,22 +775,23 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
     async def get_available_models(self, provider: str) -> List[str]:
         """Returns a list of available models for a specific provider, with caching."""
         lib_logger.info(f"Getting available models for provider: {provider}")
-        if provider in self._model_list_cache:
-            lib_logger.debug(f"Returning cached models for provider: {provider}")
-            return self._model_list_cache[provider]
+        lock = await self._lock_manager.get_lock(provider)
+        async with lock:
+            if provider in self._model_list_cache:
+                lib_logger.debug(f"Returning cached models for provider: {provider}")
+                return self._model_list_cache[provider]
 
-        credentials_for_provider = self.all_credentials.get(provider)
-        if not credentials_for_provider:
-            lib_logger.warning(f"No credentials for provider: {provider}")
-            return []
+            credentials_for_provider = self.all_credentials.get(provider)
+            if not credentials_for_provider:
+                lib_logger.warning(f"No credentials for provider: {provider}")
+                return []
 
-        # Create a copy and rotate it for round-robin credential selection
-        shuffled_credentials = list(credentials_for_provider)
-        offset = self._cred_offset.get(provider, 0)
-        self._cred_offset[provider] = (offset + 1) % len(shuffled_credentials)
-        shuffled_credentials = (
-            shuffled_credentials[offset:] + shuffled_credentials[:offset]
-        )
+            shuffled_credentials = list(credentials_for_provider)
+            offset = self._cred_offset.get(provider, 0)
+            self._cred_offset[provider] = (offset + 1) % len(shuffled_credentials)
+            shuffled_credentials = (
+                shuffled_credentials[offset:] + shuffled_credentials[:offset]
+            )
 
         provider_instance = self._get_provider_instance(provider)
         if provider_instance:
@@ -832,7 +835,8 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                             f"Filtered out {len(models) - len(final_models)} models for provider {provider}."
                         )
 
-                    self._model_list_cache[provider] = final_models
+                    async with lock:
+                        self._model_list_cache[provider] = final_models
                     return final_models
                 except Exception as e:
                     classified_error = classify_error(e, provider=provider)
