@@ -90,6 +90,7 @@ class BaseTokenManager:
         """
         self._credentials_cache.pop(credential, None)
         self._unavailable_credentials.pop(credential, None)
+        self._refresh_locks.pop(credential, None)
 
 
 # =========================================================================
@@ -315,8 +316,9 @@ class AuthQueueMixin:
                         async with asyncio.timeout(self._refresh_timeout_seconds):
                             await self._refresh_token(path, creds, force=force)
 
-                        # SUCCESS: Clear retry count
+                        # SUCCESS: Clear retry count and lock
                         self._queue_retry_count.pop(path, None)
+                        self._refresh_locks.pop(path, None)
 
                     except asyncio.TimeoutError:
                         lib_logger.warning(

@@ -153,7 +153,7 @@ class BatchedPersistence:
 
                 # Check if enough time has passed or max age exceeded
                 if self._last_change is not None:
-                    age = time.time() - self._last_change
+                    age = time.monotonic() - self._last_change
                     if age >= self._config.write_interval or age >= self._config.max_dirty_age:
                         await self._write_to_disk()
         except asyncio.CancelledError:
@@ -181,7 +181,7 @@ class BatchedPersistence:
 
                 if success:
                     self._dirty = False
-                    self._last_write = time.time()
+                    self._last_write = time.monotonic()
                     self._stats["writes"] += 1
                     try:
                         self._stats["bytes_written"] += self._file_path.stat().st_size
@@ -209,7 +209,7 @@ class BatchedPersistence:
         """
         self._state = state
         self._dirty = True
-        self._last_change = time.time()
+        self._last_change = time.monotonic()
         self._stats["updates"] += 1
 
     async def update_async(self, state: Any) -> None:

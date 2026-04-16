@@ -34,6 +34,10 @@ from ..utilities.gemini_shared_utils import (
     GEMINI3_TOOL_RENAMES,
     DEFAULT_SAFETY_SETTINGS,
 )
+from ..utilities.message_transformer import (
+    _transform_user_content_default,
+    _transform_tool_message as _base_transform_tool_message,
+)
 
 
 class MessageTransformMixin:
@@ -63,9 +67,7 @@ class MessageTransformMixin:
         while messages and messages[0].get("role") == "system":
             system_content = messages.pop(0).get("content", "")
             if system_content:
-                new_parts = self._parse_content_parts(
-                    system_content, _strip_cache_control=True
-                )
+                new_parts = _transform_user_content_default(system_content)
                 system_parts.extend(new_parts)
 
         if system_parts:
@@ -96,11 +98,19 @@ class MessageTransformMixin:
                 pending_tool_parts = []
 
             if role == "user":
-                parts = self._transform_user_message(content)
+                parts = _transform_user_content_default(content)
             elif role == "assistant":
                 parts = await self._transform_assistant_message(msg, model, tool_id_to_name)
             elif role == "tool":
-                tool_parts = self._transform_tool_message(msg, model, tool_id_to_name)
+                is_gem3 = self._is_gemini_3(model)
+                tool_parts = _base_transform_tool_message(
+                    msg=msg,
+                    tool_call_id_to_name=tool_id_to_name,
+                    is_gemini_3=is_gem3,
+                    gemini3_tool_prefix=self._gemini3_tool_prefix if is_gem3 else "",
+                    enable_gemini3_tool_fix=self._enable_gemini3_tool_fix if is_gem3 else False,
+                    gemini3_tool_renames=GEMINI3_TOOL_RENAMES if is_gem3 else None,
+                )
                 # Accumulate tool responses instead of adding individually
                 pending_tool_parts.extend(tool_parts)
                 continue
@@ -114,46 +124,6 @@ class MessageTransformMixin:
             gemini_contents.append({"role": "user", "parts": pending_tool_parts})
 
         return system_instruction, gemini_contents
-
-    def _parse_content_parts(
-        self, content: Any, _strip_cache_control: bool = False
-    ) -> List[Dict[str, Any]]:
-        """Parse content into Gemini parts format."""
-        parts = []
-
-        if isinstance(content, str):
-            if content:
-                parts.append({"text": content})
-        elif isinstance(content, list):
-            for item in content:
-                if item.get("type") == "text":
-                    text = item.get("text", "")
-                    if text:
-                        parts.append({"text": text})
-                elif item.get("type") == "image_url":
-                    image_part = self._parse_image_url(item.get("image_url", {}))
-                    if image_part:
-                        parts.append(image_part)
-
-        return parts
-
-    def _parse_image_url(self, image_url: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Parse image URL into Gemini inlineData format."""
-        url = image_url.get("url", "")
-        if not url.startswith("data:"):
-            return None
-
-        try:
-            header, data = url.split(",", 1)
-            mime_type = header.split(":")[1].split(";")[0]
-            return {"inlineData": {"mimeType": mime_type, "data": data}}
-        except Exception as e:
-            lib_logger.warning(f"Failed to parse image URL: {e}")
-            return None
-
-    def _transform_user_message(self, content: Any) -> List[Dict[str, Any]]:
-        """Transform user message content to Gemini parts."""
-        return self._parse_content_parts(content)
 
     async def _transform_assistant_message(
         self, msg: Dict[str, Any], model: str, _tool_id_to_name: Dict[str, str]
@@ -302,43 +272,6 @@ class MessageTransformMixin:
             lib_logger.warning(f"Failed to parse cached thinking: {cache_key}")
 
         return parts
-
-    def _transform_tool_message(
-        self, msg: Dict[str, Any], model: str, tool_id_to_name: Dict[str, str]
-    ) -> List[Dict[str, Any]]:
-        """Transform tool response message."""
-        tool_id = msg.get("tool_call_id", "")
-        func_name = tool_id_to_name.get(tool_id, "unknown_function")
-        content = msg.get("content", "{}")
-
-        if tool_id not in tool_id_to_name:
-            lib_logger.warning(
-                f"[ID Mismatch] Tool response has ID '{tool_id}' which was not found in tool_id_to_name map. "
-                f"Available IDs: {list(tool_id_to_name.keys())}"
-            )
-
-        if self._is_gemini_3(model) and self._enable_gemini3_tool_fix:
-            func_name = GEMINI3_TOOL_RENAMES.get(func_name, func_name)
-            func_name = f"{self._gemini3_tool_prefix}{func_name}"
-
-        try:
-            parsed_content = orjson.loads(content)
-        except (orjson.JSONDecodeError, TypeError):
-            parsed_content = content
-
-        return [
-            {
-                "functionResponse": {
-                    "name": func_name,
-                    "response": {"result": parsed_content},
-                    "id": tool_id,
-                }
-            }
-        ]
-
-    # =========================================================================
-    # TOOL RESPONSE GROUPING
-    # =========================================================================
 
     # =========================================================================
     # GEMINI 3 TOOL TRANSFORMATIONS

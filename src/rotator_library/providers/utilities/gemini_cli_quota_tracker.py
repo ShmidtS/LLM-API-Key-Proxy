@@ -138,10 +138,6 @@ class GeminiCliQuotaTracker(BaseQuotaTracker):
             "Content-Type": "application/json",
         }
 
-    def _get_provider_prefix(self) -> str:
-        """Get the provider prefix for model names."""
-        return "gemini_cli"
-
     # =========================================================================
     # BaseQuotaTracker ABSTRACT METHOD IMPLEMENTATIONS
     # =========================================================================

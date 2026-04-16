@@ -30,8 +30,6 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Callable, Set
 from dotenv import load_dotenv, set_key, unset_key
 
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 # ════════════════════════════════════════════════════════════════════════════════

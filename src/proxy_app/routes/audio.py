@@ -4,8 +4,10 @@
 import logging
 
 import orjson
-from fastapi import APIRouter, Request, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Request, Depends, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
+
+logger = logging.getLogger(__name__)
 
 from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key
@@ -53,8 +55,16 @@ async def audio_speech(
     content_type = content_type_map.get(response_format, "audio/mpeg")
 
     async def _audio_stream():
-        async for chunk in response.aiter_bytes():
-            yield chunk
+        chunk_count = 0
+        try:
+            async for chunk in response.aiter_bytes():
+                yield chunk
+                chunk_count += 1
+                if chunk_count % 50 == 0 and await request.is_disconnected():
+                    logger.info("Client disconnected during audio streaming")
+                    break
+        except Exception as e:
+            logger.error(f"Audio streaming error: {e}")
 
     return StreamingResponse(
         _audio_stream(),

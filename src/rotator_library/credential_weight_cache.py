@@ -28,7 +28,7 @@ class CachedWeights:
     weights: Dict[str, float]  # credential -> weight
     total_weight: float
     credentials: List[str]  # Ordered list of available credentials
-    calculated_at: float = field(default_factory=time.time)
+    calculated_at: float = field(default_factory=time.monotonic)
     usage_snapshot: Dict[str, int] = field(
         default_factory=dict
     )  # credential -> usage at calc time
@@ -108,7 +108,7 @@ class CredentialWeightCache(metaclass=SingletonMeta):
                 return None
 
             # Check if expired
-            if time.time() - cached.calculated_at > self._ttl:
+            if time.monotonic() - cached.calculated_at > self._ttl:
                 self._stats["evictions"] += 1
                 del self._cache[key]
                 return None
@@ -273,7 +273,7 @@ class CredentialWeightCache(metaclass=SingletonMeta):
         Returns:
             Number of entries removed
         """
-        now = time.time()
+        now = time.monotonic()
         removed = 0
 
         async with self._lock:

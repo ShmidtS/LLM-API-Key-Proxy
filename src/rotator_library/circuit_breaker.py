@@ -189,7 +189,7 @@ class ProviderCircuitBreaker:
         lock = await self._provider_lock_manager.get_lock(provider)
         async with lock:
             circuit = self._get_or_create_circuit(provider)
-            current_time = time.time()
+            current_time = time.monotonic()
 
             if circuit.state == CircuitState.CLOSED:
                 return True
@@ -262,7 +262,7 @@ class ProviderCircuitBreaker:
         lock = await self._provider_lock_manager.get_lock(provider)
         async with lock:
             circuit = self._get_or_create_circuit(provider)
-            current_time = time.time()
+            current_time = time.monotonic()
             circuit.last_success_time = current_time
 
             if circuit.state == CircuitState.HALF_OPEN:
@@ -303,7 +303,7 @@ class ProviderCircuitBreaker:
         lock = await self._provider_lock_manager.get_lock(provider)
         async with lock:
             circuit = self._get_or_create_circuit(provider)
-            current_time = time.time()
+            current_time = time.monotonic()
             threshold = self._get_provider_threshold(provider)
 
             circuit.failure_count += 1
@@ -382,7 +382,7 @@ class ProviderCircuitBreaker:
         lock = await self._provider_lock_manager.get_lock(provider)
         async with lock:
             circuit = self._get_or_create_circuit(provider)
-            current_time = time.time()
+            current_time = time.monotonic()
 
             if circuit.state == CircuitState.OPEN:
                 lib_logger.debug(
@@ -425,7 +425,7 @@ class ProviderCircuitBreaker:
 
             # Check for automatic transition from OPEN to HALF_OPEN
             if circuit.state == CircuitState.OPEN and circuit.last_failure_time:
-                elapsed = time.time() - circuit.last_failure_time
+                elapsed = time.monotonic() - circuit.last_failure_time
                 recovery_timeout = circuit.custom_recovery_timeout or self._recovery_timeout
                 if elapsed >= recovery_timeout:
                     circuit.state = CircuitState.HALF_OPEN
@@ -501,7 +501,7 @@ class ProviderCircuitBreaker:
                 "half_open_active": circuit.half_open_active,
             }
 
-            now = time.time()
+            now = time.monotonic()
             if circuit.last_failure_time:
                 elapsed = now - circuit.last_failure_time
                 info["last_failure_elapsed"] = elapsed
@@ -526,7 +526,7 @@ class ProviderCircuitBreaker:
         async with lock:
             circuit = self._get_or_create_circuit(provider)
             if circuit.state == CircuitState.OPEN and circuit.last_failure_time:
-                elapsed = time.time() - circuit.last_failure_time
+                elapsed = time.monotonic() - circuit.last_failure_time
                 recovery_timeout = circuit.custom_recovery_timeout or self._recovery_timeout
                 remaining = recovery_timeout - elapsed
                 return max(0, remaining)

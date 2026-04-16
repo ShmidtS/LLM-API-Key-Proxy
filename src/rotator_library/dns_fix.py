@@ -68,8 +68,9 @@ _dns_cache: Dict[str, Tuple[List[str], float]] = {}
 _dns_cache_lock = threading.RLock()
 
 # Module-level singleton executor for async-context DNS resolution.
-# Avoids creating/destroying a ThreadPoolExecutor on every call.
-_dns_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="dns-resolver")
+# Created lazily on first use to avoid spawning threads at import time.
+_dns_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+_dns_executor_lock = threading.Lock()
 
 
 def get_dns_cache_ttl() -> int:
@@ -89,7 +90,7 @@ def _get_cached_ips(hostname: str) -> Optional[List[str]]:
         if entry is None:
             return None
         ips, expiry = entry
-        if time.time() < expiry:
+        if time.monotonic() < expiry:
             return ips
         # Expired, remove from cache
         del _dns_cache[hostname]
@@ -101,7 +102,7 @@ def _cache_ips(hostname: str, ips: List[str]) -> None:
     if ips:
         ttl = get_dns_cache_ttl()
         with _dns_cache_lock:
-            _dns_cache[hostname] = (ips, time.time() + ttl)
+            _dns_cache[hostname] = (ips, time.monotonic() + ttl)
 
 
 def get_dns_query_timeout() -> int:
@@ -377,12 +378,21 @@ def _custom_getaddrinfo(
     # We block the calling sync thread until the executor finishes, which is
     # fine because the event loop continues running on other threads.
     global _dns_executor
-    if _dns_executor is None or _dns_executor._shutdown:
-        _dns_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="dns-resolver")
-    future = _dns_executor.submit(
-        _custom_getaddrinfo_sync, host, port, family, type, proto, flags
-    )
-    return future.result(timeout=10)
+    with _dns_executor_lock:
+        if _dns_executor is None:
+            _dns_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="dns-resolver")
+    try:
+        future = _dns_executor.submit(
+            _custom_getaddrinfo_sync, host, port, family, type, proto, flags
+        )
+        return future.result(timeout=10)
+    except RuntimeError:
+        with _dns_executor_lock:
+            _dns_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="dns-resolver")
+        future = _dns_executor.submit(
+            _custom_getaddrinfo_sync, host, port, family, type, proto, flags
+        )
+        return future.result(timeout=10)
 
 
 def apply_dns_fix():

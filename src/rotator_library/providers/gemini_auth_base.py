@@ -29,17 +29,6 @@ lib_logger = logging.getLogger("rotator_library")
 # Source: gemini-cli/packages/core/src/code_assist/server.ts:284-290
 GEMINI_CLI_AUTH_HEADERS = {
     "User-Agent": "GeminiCLI/0.26.0 (win32; x64)",
-    # -------------------------------------------------------------------------
-    # COMMENTED OUT - Not sent by native gemini-cli for OAuth/Code Assist path
-    # -------------------------------------------------------------------------
-    # "X-Goog-Api-Client": "gl-node/22.17.0 gdcl/1.30.0",  # SDK mimicry - not used by native CLI
-    # "Client-Metadata": (                                  # Sent in body, not as header
-    #     "ideType=IDE_UNSPECIFIED,"
-    #     "pluginType=GEMINI,"
-    #     "ideVersion=0.26.0,"
-    #     "platform=WINDOWS_AMD64,"
-    #     "updateChannel=stable"
-    # ),
 }
 
 

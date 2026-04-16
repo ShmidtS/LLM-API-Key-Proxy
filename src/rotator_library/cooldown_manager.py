@@ -20,9 +20,10 @@ class CooldownManager:
     parallel requests to different providers do not block each other.
     """
 
+    _MAX_COOLDOWNS = 10000
+
     def __init__(self):
         self._cooldowns: Dict[str, float] = {}
-        # Per-provider locks: each provider has its own asyncio.Lock
         self._provider_lock_manager = ProviderLockManager()
 
     def _extract_provider(self, credential: str) -> str:
@@ -39,11 +40,20 @@ class CooldownManager:
             return parts[0]
         return credential
 
+    def _cleanup_expired(self) -> None:
+        now = time.monotonic()
+        self._cooldowns = {
+            k: v for k, v in self._cooldowns.items() if now < v
+        }
+        if len(self._cooldowns) > self._MAX_COOLDOWNS:
+            sorted_items = sorted(self._cooldowns.items(), key=lambda x: x[1], reverse=True)
+            self._cooldowns = dict(sorted_items[:self._MAX_COOLDOWNS])
+
     async def is_cooling_down(self, credential: str) -> bool:
         """Checks if a credential is currently in a cooldown period."""
-        # CPython dict reads are GIL-protected; no lock needed for a single lookup.
+        self._cleanup_expired()
         expiry = self._cooldowns.get(credential)
-        return expiry is not None and time.time() < expiry
+        return expiry is not None and time.monotonic() < expiry
 
     async def start_cooldown(self, credential: str, duration: int):
         """
@@ -54,7 +64,8 @@ class CooldownManager:
         provider = self._extract_provider(credential)
         lock = await self._provider_lock_manager.get_lock(provider)
         async with lock:
-            new_expiry = time.time() + duration
+            self._cleanup_expired()
+            new_expiry = time.monotonic() + duration
             existing = self._cooldowns.get(credential, 0)
             self._cooldowns[credential] = max(existing, new_expiry)
 
@@ -67,4 +78,4 @@ class CooldownManager:
         expiry = self._cooldowns.get(credential)
         if expiry is None:
             return 0
-        return max(0.0, expiry - time.time())
+        return max(0.0, expiry - time.monotonic())

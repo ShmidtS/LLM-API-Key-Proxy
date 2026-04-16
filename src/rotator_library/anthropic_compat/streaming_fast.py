@@ -313,7 +313,7 @@ async def anthropic_streaming_wrapper_fast(
         async for raw_chunk in openai_stream:
             # Check for client disconnection every 20 chunks (avoid per-chunk syscall overhead)
             _chunk_count += 1
-            if is_disconnected is not None and _chunk_count % 20 == 0 and await is_disconnected():
+            if is_disconnected is not None and _chunk_count % 50 == 0 and await is_disconnected():
                 break
 
             # STREAM_DONE sentinel: stream is complete
@@ -349,7 +349,7 @@ async def anthropic_streaming_wrapper_fast(
 
                 try:
                     chunk = json_loads(data_content)
-                except Exception:
+                except Exception as exc:
                     logger.debug("Failed to parse SSE data chunk: %s", data_content, exc_info=True)
                     continue
             else:
@@ -565,7 +565,8 @@ def _log_anthropic_response(
             if not args_str:
                 args_str = "{}"
             input_data = json_loads(args_str)
-        except Exception:
+        except Exception as exc:
+            logging.getLogger(__name__).debug("Suppressed: %s", exc)
             input_data = {}
         content_blocks.append({
             "type": "tool_use",

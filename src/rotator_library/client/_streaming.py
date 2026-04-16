@@ -57,7 +57,7 @@ class StreamingMixin:
         try:
             while True:
                 # Check disconnection every 20 chunks to avoid per-chunk syscall overhead
-                if chunk_index % 20 == 0 and request and await request.is_disconnected():
+                if chunk_index % 50 == 0 and request and await request.is_disconnected():
                     lib_logger.info(
                         f"Client disconnected. Aborting stream for credential {mask_credential(key)}."
                     )
@@ -187,8 +187,9 @@ class StreamingMixin:
                     # Check if this is a JSON decode error from fragmented chunks
                     error_str = str(e)
                     if "Expecting value" in error_str or "Unterminated string" in error_str:
-                        # Buffer the fragment and continue
-                        json_buffer_parts.append(str(e))
+                        # Buffer the raw chunk data for re-assembly, not the error string
+                        raw = chunk if isinstance(chunk, (str, bytes)) else str(chunk)
+                        json_buffer_parts.append(raw)
                         continue
 
                     # For other errors during iteration, log and break
@@ -229,7 +230,7 @@ class StreamingMixin:
                     not request or not await request.is_disconnected()
                 ):
                     yield STREAM_DONE
-            except Exception:
+            except Exception as exc:
                 lib_logger.exception("Error during stream cleanup")
 
     async def _transaction_logging_stream_wrapper(

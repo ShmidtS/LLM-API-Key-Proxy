@@ -40,46 +40,38 @@ class ReadWriteLock:
         self._readers = 0
         self._writer_waiting = 0
         self._writer_active = False
-        self._read_ready = asyncio.Condition()
-        self._write_ready = asyncio.Condition()
+        self._condition = asyncio.Condition()
 
     async def acquire_read(self) -> None:
         """Acquire read lock."""
-        async with self._read_ready:
-            # Wait if a writer is active or waiting (writers have priority)
+        async with self._condition:
             while self._writer_active or self._writer_waiting > 0:
-                await self._read_ready.wait()
+                await self._condition.wait()
             self._readers += 1
 
     async def release_read(self) -> None:
         """Release read lock."""
-        async with self._read_ready:
+        async with self._condition:
             self._readers -= 1
             if self._readers == 0:
-                # Notify waiting writers
-                async with self._write_ready:
-                    self._write_ready.notify_all()
+                self._condition.notify_all()
 
     async def acquire_write(self) -> None:
         """Acquire write lock."""
-        async with self._write_ready:
+        async with self._condition:
             self._writer_waiting += 1
             try:
-                # Wait until no readers or writers active
                 while self._readers > 0 or self._writer_active:
-                    await self._write_ready.wait()
+                    await self._condition.wait()
                 self._writer_active = True
             finally:
                 self._writer_waiting -= 1
 
     async def release_write(self) -> None:
         """Release write lock."""
-        async with self._write_ready:
+        async with self._condition:
             self._writer_active = False
-            # Notify both readers and writers
-            self._write_ready.notify_all()
-            async with self._read_ready:
-                self._read_ready.notify_all()
+            self._condition.notify_all()
 
     @asynccontextmanager
     async def read(self):

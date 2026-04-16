@@ -149,7 +149,7 @@ class IPThrottleDetector:
 
     def _cleanup_old_records(self, provider: str) -> None:
         """Remove records older than the detection window and enforce memory limit."""
-        cutoff = time.time() - self.window_seconds
+        cutoff = time.monotonic() - self.window_seconds
         with self._records_lock:
             self._records[provider] = [
                 r for r in self._records[provider] if r.timestamp > cutoff
@@ -182,7 +182,7 @@ class IPThrottleDetector:
         Returns:
             ThrottleAssessment with scope, confidence, and suggested cooldown
         """
-        now = time.time()
+        now = time.monotonic()
         error_body_hash = self._hash_error_body(error_body)
 
         # Create and store the record

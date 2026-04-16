@@ -36,6 +36,11 @@ from ..utils.resilient_io import safe_write_json
 lib_logger = logging.getLogger("rotator_library")
 
 
+def _read_file_sync(path: Path) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
 # =============================================================================
 # UTILITY FUNCTIONS
 # =============================================================================
@@ -91,8 +96,9 @@ class ProviderCache:
         self._memory_ttl = memory_ttl_seconds
         self._disk_ttl = disk_ttl_seconds
         self._rw_lock = ReadWriteLock()
-        self._sync_lock = threading.Lock()  # Used in both sync (retrieve/contains) and async contexts; asyncio.Lock would deadlock in sync callers
-        self._disk_lock = asyncio.RLock()
+        self._sync_lock = threading.Lock()  # Sync callers only (retrieve/contains)
+        self._async_lock = asyncio.Lock()   # Async callers (store_async/retrieve_async)
+        self._disk_lock = asyncio.Lock()
         self._max_entries = max_entries
         self._evicted_count = 0
 
@@ -169,8 +175,8 @@ class ProviderCache:
 
         try:
             async with self._disk_lock:
-                with open(self._cache_file, "r", encoding="utf-8") as f:
-                    data = json_loads(f.read())
+                raw = await asyncio.to_thread(_read_file_sync, self._cache_file)
+                data = json_loads(raw)
 
                 if data.get("version") != "1.0":
                     lib_logger.warning(
@@ -189,13 +195,13 @@ class ProviderCache:
                             "value", entry.get("signature", "")
                         )  # Support both formats
                         if value:
-                            with self._sync_lock:
+                            async with self._async_lock:
                                 self._cache[cache_key] = {
                                     "value": value,
                                     "timestamp": entry["timestamp"],
                                     "accessed": now,
                                 }
-                                self._cache.move_to_end(cache_key)  # Maintain LRU order
+                                self._cache.move_to_end(cache_key)
                             loaded += 1
                     else:
                         expired += 1
@@ -235,9 +241,9 @@ class ProviderCache:
             existing_entries: Dict[str, Dict[str, Any]] = {}
             if self._cache_file.exists():
                 try:
-                    with open(self._cache_file, "r", encoding="utf-8") as f:
-                        data = json_loads(f.read())
-                        existing_entries = data.get("entries", {})
+                    raw = await asyncio.to_thread(_read_file_sync, self._cache_file)
+                    data = json_loads(raw)
+                    existing_entries = data.get("entries", {})
                 except (JSONDecodeError, IOError, OSError):
                     pass  # Start fresh if corrupted or unreadable
 
@@ -251,7 +257,7 @@ class ProviderCache:
 
             # Step 3: Merge - memory entries take precedence (fresher timestamps)
             merged_entries = valid_disk_entries.copy()
-            with self._sync_lock:
+            async with self._async_lock:
                 cache_snapshot = list(self._cache.items())
             for key, entry in cache_snapshot:
                 merged_entries[key] = {"value": entry["value"], "timestamp": entry["timestamp"]}
@@ -314,17 +320,17 @@ class ProviderCache:
         try:
             while self._running:
                 await asyncio.sleep(self._write_interval)
-                with self._sync_lock:
+                async with self._async_lock:
                     if not self._dirty:
                         continue
                     self._dirty = False
                 try:
                     success = await self._save_to_disk()
                     if not success:
-                        with self._sync_lock:
+                        async with self._async_lock:
                             self._dirty = True
                 except Exception as e:
-                    with self._sync_lock:
+                    async with self._async_lock:
                         self._dirty = True
                     lib_logger.error(
                         f"ProviderCache[{self._cache_name}]: Writer error: {e}"
@@ -350,9 +356,8 @@ class ProviderCache:
         _save_to_disk() based on their own disk_ttl.
         """
         async with self._rw_lock.write():
-            with self._sync_lock:
+            async with self._async_lock:
                 now = time.time()
-                # Enforce LRU bound before TTL cleanup (O(1) via OrderedDict)
                 while len(self._cache) >= self._max_entries:
                     # popitem(last=False) removes the least-recently-used entry
                     self._cache.popitem(last=False)
@@ -390,9 +395,9 @@ class ProviderCache:
         """Async implementation of store."""
         now = time.time()
         async with self._rw_lock.write():
-            with self._sync_lock:
+            async with self._async_lock:
                 self._cache[key] = {"value": value, "timestamp": now, "accessed": now}
-                self._cache.move_to_end(key)  # Mark as most-recently-used
+                self._cache.move_to_end(key)
                 self._dirty = True
 
     async def store_async(self, key: str, value: str) -> None:
@@ -444,7 +449,7 @@ class ProviderCache:
         Use this when you can await and need guaranteed disk fallback.
         """
         # Check memory first
-        with self._sync_lock:
+        async with self._async_lock:
             if key in self._cache:
                 entry = self._cache[key]
                 if time.time() - entry["timestamp"] <= self._memory_ttl:
@@ -479,8 +484,8 @@ class ProviderCache:
                     self._disk_cache_valid = True
                     return self._disk_entry_cache
 
-                with open(self._cache_file, "r", encoding="utf-8") as f:
-                    data = json_loads(f.read())
+                raw = await asyncio.to_thread(_read_file_sync, self._cache_file)
+                data = json_loads(raw)
 
                 entries = data.get("entries", {})
                 # Filter by disk_ttl at load time to keep index lean
@@ -528,7 +533,7 @@ class ProviderCache:
                 return None
 
             async with self._rw_lock.write():
-                with self._sync_lock:
+                async with self._async_lock:
                     now = time.time()
                     self._cache[key] = {"value": value, "timestamp": ts, "accessed": now}
                     self._cache.move_to_end(key)
@@ -573,7 +578,7 @@ class ProviderCache:
     async def clear(self) -> None:
         """Clear all cached data."""
         async with self._rw_lock.write():
-            with self._sync_lock:
+            async with self._async_lock:
                 self._cache.clear()
                 self._dirty = True
             if self._enable_disk:

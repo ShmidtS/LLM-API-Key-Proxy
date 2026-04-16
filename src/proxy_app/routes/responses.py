@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
-import logging
-
 import orjson
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse

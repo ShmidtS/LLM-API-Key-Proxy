@@ -48,7 +48,7 @@ async def streaming_response_wrapper(
     try:
         async for chunk in response_stream:
             _chunk_count += 1
-            if _chunk_count % 20 == 0:
+            if _chunk_count % 50 == 0:
                 if await request.is_disconnected():
                     logging.warning("Client disconnected, stopping stream.")
                     break
@@ -233,7 +233,7 @@ async def streaming_response_wrapper(
                     headers=None,  # Headers are not available at this stage
                     body=full_response,
                 )
-            except Exception:
+            except Exception as exc:
                 logging.exception("Error during stream finalization logging")
 
 

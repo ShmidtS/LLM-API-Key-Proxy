@@ -2424,7 +2424,7 @@ class UsageManager:
         )
 
         # This loop continues as long as the global deadline has not been met.
-        while time.time() < deadline:
+        while time.monotonic() < deadline:
             now = time.time()
 
             # Group credentials by priority level (if priorities provided)
@@ -2623,7 +2623,7 @@ class UsageManager:
                             ]
                             try:
                                 async with wait_condition:
-                                    remaining_budget = deadline - time.time()
+                                    remaining_budget = deadline - time.monotonic()
                                     if remaining_budget <= 0:
                                         break
                                     await asyncio.wait_for(
@@ -2636,7 +2636,7 @@ class UsageManager:
                             await asyncio.sleep(0.1)
                         continue
 
-                    remaining_budget = deadline - time.time()
+                    remaining_budget = deadline - time.monotonic()
                     wait_needed = soonest_end - time.time()
 
                     if wait_needed > remaining_budget:
@@ -2857,7 +2857,7 @@ class UsageManager:
                             ]
                             try:
                                 async with wait_condition:
-                                    remaining_budget = deadline - time.time()
+                                    remaining_budget = deadline - time.monotonic()
                                     if remaining_budget <= 0:
                                         break
                                     await asyncio.wait_for(
@@ -2870,7 +2870,7 @@ class UsageManager:
                             await asyncio.sleep(0.1)
                         continue
 
-                    remaining_budget = deadline - time.time()
+                    remaining_budget = deadline - time.monotonic()
                     wait_needed = soonest_end - time.time()
 
                     if wait_needed > remaining_budget:
@@ -2894,7 +2894,7 @@ class UsageManager:
 
             try:
                 async with wait_condition:
-                    remaining_budget = deadline - time.time()
+                    remaining_budget = deadline - time.monotonic()
                     if remaining_budget <= 0:
                         break  # Exit if the budget has already been exceeded.
                     # Wait for a notification, but no longer than the remaining budget or 1 second.

@@ -172,10 +172,6 @@ class AntigravityQuotaTracker(BaseQuotaTracker):
     # ANTIGRAVITY-SPECIFIC HELPERS
     # =========================================================================
 
-    def _get_provider_prefix(self) -> str:
-        """Get the provider prefix for model names."""
-        return "antigravity"
-
     def _get_quota_group_for_model(self, model: str) -> Optional[str]:
         """Get the quota group name for a model."""
         clean_model = model.split("/")[-1] if "/" in model else model
@@ -480,59 +476,6 @@ class AntigravityQuotaTracker(BaseQuotaTracker):
         for cred_path in active_credentials:
             quota_data = await self.fetch_quota_from_api(cred_path)
             results[cred_path] = quota_data
-
-        return results
-
-    async def fetch_initial_baselines(
-        self,
-        credential_paths: List[str],
-    ) -> Dict[str, Dict[str, Any]]:
-        """
-        Fetch quota baselines for all credentials.
-
-        Fetches quota data from the Antigravity API for all provided credentials
-        with limited concurrency to avoid rate limiting.
-
-        Args:
-            credential_paths: All credential paths to fetch baselines for
-
-        Returns:
-            Dict mapping credential_path -> fetched quota data
-        """
-        if not credential_paths:
-            return {}
-
-        lib_logger.debug(
-            f"Fetching quota baselines for {len(credential_paths)} credentials..."
-        )
-
-        results = {}
-
-        # Use semaphore to limit concurrent requests
-        semaphore = asyncio.Semaphore(5)
-
-        async def fetch_with_semaphore(cred_path: str):
-            async with semaphore:
-                return cred_path, await self.fetch_quota_from_api(cred_path)
-
-        # Fetch all in parallel with limited concurrency
-        tasks = [fetch_with_semaphore(cred) for cred in credential_paths]
-        fetch_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        success_count = 0
-        for result in fetch_results:
-            if isinstance(result, Exception):
-                lib_logger.warning(f"Baseline fetch failed: {result}")
-                continue
-
-            cred_path, quota_data = result
-            if quota_data["status"] == "success":
-                success_count += 1
-            results[cred_path] = quota_data
-
-        lib_logger.debug(
-            f"Baseline fetch complete: {success_count}/{len(credential_paths)} successful"
-        )
 
         return results
 

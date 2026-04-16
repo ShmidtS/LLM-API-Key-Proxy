@@ -84,7 +84,7 @@ class HelpersMixin:
         base_wait = classified_error.retry_after or (2**attempt * random.uniform(0.5, 1.5))
         wait_time = base_wait
 
-        remaining_budget = deadline - time.time()
+        remaining_budget = deadline - time.monotonic()
         if wait_time > remaining_budget:
             return False
 

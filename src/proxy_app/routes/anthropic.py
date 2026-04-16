@@ -125,7 +125,7 @@ async def anthropic_count_tokens(
             "error": make_error_response(str(e), "authentication_error"),
         }
         raise HTTPException(status_code=401, detail=error_response)
-    except Exception:
+    except Exception as exc:
         logging.error("Anthropic count_tokens endpoint error", exc_info=True)
         error_response = {
             "type": "error",

@@ -4,7 +4,6 @@
 # src/rotator_library/providers/antigravity_auth_base.py
 
 import logging
-from typing import Any, Dict, List
 
 from ..utils.ttl_dict import TTLDict
 from .google_oauth_base import GoogleOAuthBase

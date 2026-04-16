@@ -104,6 +104,7 @@ class AdaptiveRateLimiter:
 
             deficit = tokens - state.tokens
             wait = deficit / state.current_rps
+            state.tokens = 0
             state.total_requests += 1
             return wait
 

@@ -43,6 +43,31 @@ from ..utils.model_utils import (
 lib_logger = logging.getLogger("rotator_library")
 
 
+class HalfOpenSlot:
+    """Async context manager that auto-releases a half-open circuit breaker slot.
+
+    Ensures the slot is released even on CancelledError or unexpected exceptions,
+    preventing slot leaks that could permanently block a provider in HALF_OPEN.
+    """
+
+    __slots__ = ("_resilience", "_provider", "_active")
+
+    def __init__(self, resilience, provider: str):
+        self._resilience = resilience
+        self._provider = provider
+        self._active = False
+
+    async def __aenter__(self):
+        self._active = True
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._active:
+            self._active = False
+            await self._resilience.release_half_open_slot(self._provider)
+        return False
+
+
 @dataclass
 class _RetryContext:
     model: str
@@ -192,7 +217,7 @@ class RetryMixin:
             )
 
         parent_log_dir = kwargs.pop("_parent_log_dir", None)
-        deadline = time.time() + self.global_timeout
+        deadline = time.monotonic() + self.global_timeout
 
         transaction_logger = None
         if self.enable_request_logging:
@@ -259,7 +284,7 @@ class RetryMixin:
         total_api_attempts = 0
 
         while (
-            len(tried_creds) < len(credentials_for_provider) and time.time() < deadline
+            len(tried_creds) < len(credentials_for_provider) and time.monotonic() < deadline
         ):
             current_cred = None
             key_acquired = False
@@ -276,7 +301,7 @@ class RetryMixin:
                     lib_logger.debug(
                         f"AdaptiveRateLimiter: {provider} rate-limited, waiting {wait:.1f}s"
                     )
-                    if time.time() + wait < deadline:
+                    if time.monotonic() + wait < deadline:
                         await asyncio.sleep(wait)
 
                 # Check circuit breaker before acquiring key
@@ -288,7 +313,7 @@ class RetryMixin:
                         f"Circuit breaker OPEN for provider '{provider}', "
                         f"backing off {backoff:.1f}s (recovery in {remaining:.0f}s)"
                     )
-                    if time.time() + backoff < deadline:
+                    if time.monotonic() + backoff < deadline:
                         await asyncio.sleep(backoff)
                     continue
 
@@ -363,12 +388,10 @@ class RetryMixin:
                                     await pre_request_callback(request, litellm_kwargs)
                                 except Exception as e:
                                     if self.abort_on_callback_error:
-                                        await self._resilience.release_half_open_slot(
-                                            provider
-                                        )
-                                        raise PreRequestCallbackError(
-                                            f"Pre-request callback failed: {e}"
-                                        ) from e
+                                        async with HalfOpenSlot(self._resilience, provider):
+                                            raise PreRequestCallbackError(
+                                                f"Pre-request callback failed: {e}"
+                                            ) from e
                                     else:
                                         lib_logger.warning(
                                             f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
@@ -446,11 +469,11 @@ class RetryMixin:
                                     str(e) if e else None,
                                     classified_error,
                                 )
-                                await self._resilience.release_half_open_slot(provider)
-                                lib_logger.error(
-                                    f"Non-recoverable error ({classified_error.error_type}) during custom provider call. Failing."
-                                )
-                                raise last_exception
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    lib_logger.error(
+                                        f"Non-recoverable error ({classified_error.error_type}) during custom provider call. Failing."
+                                    )
+                                    raise last_exception
 
                             # Only rate_limit errors can indicate IP-level throttling;
                             # quota_exceeded / invalid_request / auth errors are per-credential
@@ -476,10 +499,8 @@ class RetryMixin:
                                     await self.usage_manager.record_failure(
                                         current_cred, model, classified_error
                                     )
-                                    await self._resilience.release_half_open_slot(
-                                        provider
-                                    )
-                                    break  # Force rotation
+                                    async with HalfOpenSlot(self._resilience, provider):
+                                        break  # Force rotation
 
                             await self.usage_manager.record_failure(
                                 current_cred, model, classified_error
@@ -487,8 +508,8 @@ class RetryMixin:
                             lib_logger.warning(
                                 f"Cred {mask_credential(current_cred)} {classified_error.error_type} (HTTP {classified_error.status_code}). Rotating."
                             )
-                            await self._resilience.release_half_open_slot(provider)
-                            break  # Rotate to next credential
+                            async with HalfOpenSlot(self._resilience, provider):
+                                break  # Rotate to next credential
 
                         except (
                             APIConnectionError,
@@ -522,8 +543,8 @@ class RetryMixin:
                                 lib_logger.warning(
                                     f"Cred {mask_credential(current_cred)} failed after max retries. Rotating."
                                 )
-                                await self._resilience.release_half_open_slot(provider)
-                                break
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break
 
                             if not await self._sleep_within_budget(
                                 attempt, deadline, classified_error
@@ -534,8 +555,8 @@ class RetryMixin:
                                 lib_logger.warning(
                                     "Retry wait exceeds budget. Rotating."
                                 )
-                                await self._resilience.release_half_open_slot(provider)
-                                break
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break
 
                             lib_logger.warning(
                                 f"Cred {mask_credential(current_cred)} server error. Retrying within remaining budget."
@@ -656,12 +677,10 @@ class RetryMixin:
                                     await pre_request_callback(request, litellm_kwargs)
                                 except Exception as e:
                                     if self.abort_on_callback_error:
-                                        await self._resilience.release_half_open_slot(
-                                            provider
-                                        )
-                                        raise PreRequestCallbackError(
-                                            f"Pre-request callback failed: {e}"
-                                        ) from e
+                                        async with HalfOpenSlot(self._resilience, provider):
+                                            raise PreRequestCallbackError(
+                                                f"Pre-request callback failed: {e}"
+                                            ) from e
                                     else:
                                         lib_logger.warning(
                                             f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
@@ -749,16 +768,14 @@ class RetryMixin:
                                     await self.usage_manager.record_failure(
                                         current_cred, model, classified_error
                                     )
-                                    await self._resilience.release_half_open_slot(
-                                        provider
-                                    )
-                                    break  # Force rotation
+                                    async with HalfOpenSlot(self._resilience, provider):
+                                        break  # Force rotation
 
                             await self.usage_manager.record_failure(
                                 current_cred, model, classified_error
                             )
-                            await self._resilience.release_half_open_slot(provider)
-                            break  # Move to the next key
+                            async with HalfOpenSlot(self._resilience, provider):
+                                break  # Move to the next key
 
                         except (
                             APIConnectionError,
@@ -796,15 +813,15 @@ class RetryMixin:
                                 lib_logger.warning(
                                     f"Key {mask_credential(current_cred)} failed after max retries due to server error. Rotating."
                                 )
-                                await self._resilience.release_half_open_slot(provider)
-                                break  # Move to the next key
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break  # Move to the next key
 
                             # For temporary errors, wait before retrying with the same key.
                             base_wait = classified_error.retry_after or (
                                 2**attempt * random.uniform(0.5, 1.5)
                             )
                             wait_time = base_wait
-                            remaining_budget = deadline - time.time()
+                            remaining_budget = deadline - time.monotonic()
 
                             # If the required wait time exceeds the budget, don't wait; rotate to the next key immediately.
                             if wait_time > remaining_budget:
@@ -814,8 +831,8 @@ class RetryMixin:
                                 lib_logger.warning(
                                     f"Retry wait ({wait_time:.2f}s) exceeds budget ({remaining_budget:.2f}s). Rotating key."
                                 )
-                                await self._resilience.release_half_open_slot(provider)
-                                break
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break
 
                             lib_logger.warning(
                                 f"Key {mask_credential(current_cred)} server error. Retrying in {wait_time:.2f}s."
@@ -869,11 +886,11 @@ class RetryMixin:
                                     str(e) if e else None,
                                     classified_error,
                                 )
-                                await self._resilience.release_half_open_slot(provider)
-                                lib_logger.error(
-                                    f"Non-recoverable error ({classified_error.error_type}). Failing request."
-                                )
-                                raise last_exception
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    lib_logger.error(
+                                        f"Non-recoverable error ({classified_error.error_type}). Failing request."
+                                    )
+                                    raise last_exception
 
                             # Record in accumulator after confirming it's a rotatable error
                             error_accumulator.record_error(
@@ -905,7 +922,7 @@ class RetryMixin:
                                     2**attempt * random.uniform(0.5, 1.5)
                                 )
                                 wait_time = base_wait
-                                remaining_budget = deadline - time.time()
+                                remaining_budget = deadline - time.monotonic()
                                 if wait_time <= remaining_budget:
                                     lib_logger.warning(
                                         f"Server error, retrying same key in {wait_time:.2f}s."
@@ -924,8 +941,8 @@ class RetryMixin:
                             lib_logger.info(
                                 f"Rotating to next key after {classified_error.error_type} error."
                             )
-                            await self._resilience.release_half_open_slot(provider)
-                            break
+                            async with HalfOpenSlot(self._resilience, provider):
+                                break
 
                         except asyncio.CancelledError:
                             raise
@@ -943,8 +960,8 @@ class RetryMixin:
                                 lib_logger.warning(
                                     f"Client disconnected. Aborting retries for {mask_credential(current_cred)}."
                                 )
-                                await self._resilience.release_half_open_slot(provider)
-                                raise last_exception
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    raise last_exception
 
                             classified_error = classify_error(e, provider=provider)
                             error_message = str(e).split("\n")[0]
@@ -971,11 +988,11 @@ class RetryMixin:
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
-                                await self._resilience.release_half_open_slot(provider)
-                                lib_logger.error(
-                                    f"Non-recoverable error ({classified_error.error_type}). Failing request."
-                                )
-                                raise last_exception
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    lib_logger.error(
+                                        f"Non-recoverable error ({classified_error.error_type}). Failing request."
+                                    )
+                                    raise last_exception
 
                             # Record in accumulator after confirming it's a rotatable error
                             error_accumulator.record_error(
@@ -985,14 +1002,14 @@ class RetryMixin:
                             await self.usage_manager.record_failure(
                                 current_cred, model, classified_error
                             )
-                            await self._resilience.release_half_open_slot(provider)
-                            break  # Try next key for other errors
+                            async with HalfOpenSlot(self._resilience, provider):
+                                break  # Try next key for other errors
             finally:
                 if key_acquired and current_cred:
                     await self.usage_manager.release_key(current_cred, model)
 
         # Check if we exhausted all credentials or timed out
-        if time.time() >= deadline:
+        if time.monotonic() >= deadline:
             error_accumulator.timeout_occurred = True
 
         if error_accumulator.has_errors():
@@ -1038,7 +1055,7 @@ class RetryMixin:
         try:
             while (
                 len(tried_creds) < len(credentials_for_provider)
-                and time.time() < deadline
+                and time.monotonic() < deadline
             ):
                 current_cred = None
                 key_acquired = False
@@ -1058,7 +1075,7 @@ class RetryMixin:
                         lib_logger.debug(
                             f"AdaptiveRateLimiter: {provider} rate-limited, waiting {wait:.1f}s"
                         )
-                        if time.time() + wait < deadline:
+                        if time.monotonic() + wait < deadline:
                             await asyncio.sleep(wait)
 
                     # Check circuit breaker before acquiring key
@@ -1072,7 +1089,7 @@ class RetryMixin:
                             f"Circuit breaker OPEN for provider '{provider}', "
                             f"backing off {backoff:.1f}s (recovery in {remaining:.0f}s)"
                         )
-                        if time.time() + backoff < deadline:
+                        if time.monotonic() + backoff < deadline:
                             await asyncio.sleep(backoff)
                         continue
 
@@ -1177,12 +1194,10 @@ class RetryMixin:
                                         )
                                     except Exception as e:
                                         if self.abort_on_callback_error:
-                                            await self._resilience.release_half_open_slot(
-                                                provider
-                                            )
-                                            raise PreRequestCallbackError(
-                                                f"Pre-request callback failed: {e}"
-                                            ) from e
+                                            async with HalfOpenSlot(self._resilience, provider):
+                                                raise PreRequestCallbackError(
+                                                    f"Pre-request callback failed: {e}"
+                                                ) from e
                                         else:
                                             lib_logger.warning(
                                                 f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
@@ -1277,13 +1292,11 @@ class RetryMixin:
                                         str(e) if e else None,
                                         classified_error,
                                     )
-                                    await self._resilience.release_half_open_slot(
-                                        provider
-                                    )
-                                    lib_logger.error(
-                                        f"Non-recoverable error ({classified_error.error_type}) during custom stream. Failing."
-                                    )
-                                    raise last_exception
+                                    async with HalfOpenSlot(self._resilience, provider):
+                                        lib_logger.error(
+                                            f"Non-recoverable error ({classified_error.error_type}) during custom stream. Failing."
+                                        )
+                                        raise last_exception
 
                                 # Only rate_limit errors can indicate IP-level throttling;
                                 # quota_exceeded / invalid_request / auth errors are per-credential
@@ -1307,8 +1320,8 @@ class RetryMixin:
                                 lib_logger.warning(
                                     f"Cred {mask_credential(current_cred)} {classified_error.error_type} (HTTP {classified_error.status_code}). Rotating."
                                 )
-                                await self._resilience.release_half_open_slot(provider)
-                                break
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break
 
                             except (
                                 APIConnectionError,
@@ -1344,10 +1357,8 @@ class RetryMixin:
                                     lib_logger.warning(
                                         f"Cred {mask_credential(current_cred)} failed after max retries. Rotating."
                                     )
-                                    await self._resilience.release_half_open_slot(
-                                        provider
-                                    )
-                                    break
+                                    async with HalfOpenSlot(self._resilience, provider):
+                                        break
 
                                 # Reset LiteLLM internal HTTP client cache on connection errors
                                 if isinstance(
@@ -1359,7 +1370,7 @@ class RetryMixin:
                                     2**attempt * random.uniform(0.5, 1.5)
                                 )
                                 wait_time = base_wait
-                                remaining_budget = deadline - time.time()
+                                remaining_budget = deadline - time.monotonic()
                                 if wait_time > remaining_budget:
                                     error_accumulator.record_error(
                                         current_cred, classified_error, error_message
@@ -1367,10 +1378,8 @@ class RetryMixin:
                                     lib_logger.warning(
                                         f"Retry wait ({wait_time:.2f}s) exceeds budget. Rotating."
                                     )
-                                    await self._resilience.release_half_open_slot(
-                                        provider
-                                    )
-                                    break
+                                    async with HalfOpenSlot(self._resilience, provider):
+                                        break
 
                                 lib_logger.warning(
                                     f"Cred {mask_credential(current_cred)} server error. Retrying in {wait_time:.2f}s."
@@ -1417,8 +1426,8 @@ class RetryMixin:
                                     classified_error,
                                     increment_consecutive_failures=False,
                                 )
-                                await self._resilience.release_half_open_slot(provider)
-                                break
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break
 
                             except asyncio.CancelledError:
                                 raise
@@ -1454,13 +1463,11 @@ class RetryMixin:
                                         str(e) if e else None,
                                         classified_error,
                                     )
-                                    await self._resilience.release_half_open_slot(
-                                        provider
-                                    )
-                                    lib_logger.error(
-                                        f"Non-recoverable error ({classified_error.error_type}). Failing."
-                                    )
-                                    raise last_exception
+                                    async with HalfOpenSlot(self._resilience, provider):
+                                        lib_logger.error(
+                                            f"Non-recoverable error ({classified_error.error_type}). Failing."
+                                        )
+                                        raise last_exception
 
                                 # Only rate_limit errors can indicate IP-level throttling;
                                 # quota_exceeded / invalid_request / auth errors are per-credential
@@ -1481,8 +1488,8 @@ class RetryMixin:
                                 await self.usage_manager.record_failure(
                                     current_cred, model, classified_error
                                 )
-                                await self._resilience.release_half_open_slot(provider)
-                                break
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break
 
                         # If the inner loop breaks, it means the key failed and we need to rotate.
                         # Continue to the next iteration of the outer while loop to pick a new key.
@@ -1586,12 +1593,10 @@ class RetryMixin:
                                     await pre_request_callback(request, litellm_kwargs)
                                 except Exception as e:
                                     if self.abort_on_callback_error:
-                                        await self._resilience.release_half_open_slot(
-                                            provider
-                                        )
-                                        raise PreRequestCallbackError(
-                                            f"Pre-request callback failed: {e}"
-                                        ) from e
+                                        async with HalfOpenSlot(self._resilience, provider):
+                                            raise PreRequestCallbackError(
+                                                f"Pre-request callback failed: {e}"
+                                            ) from e
                                     else:
                                         lib_logger.warning(
                                             f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
@@ -1692,8 +1697,8 @@ class RetryMixin:
                                     f"Cred {mask_credential(current_cred)} {classified_error.error_type} "
                                     f"(HTTP {classified_error.status_code}). Rotating."
                                 )
-                                await self._resilience.release_half_open_slot(provider)
-                                break  # Rotate to next credential
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break  # Rotate to next credential
 
                             try:
                                 # The full error JSON is in the string representation of the exception.
@@ -1779,10 +1784,8 @@ class RetryMixin:
                                     lib_logger.warning(
                                         f"Cred {mask_credential(current_cred)} quota error ({consecutive_quota_failures}/3). Rotating."
                                     )
-                                    await self._resilience.release_half_open_slot(
-                                        provider
-                                    )
-                                    break
+                                    async with HalfOpenSlot(self._resilience, provider):
+                                        break
 
                             else:
                                 consecutive_quota_failures = 0
@@ -1795,7 +1798,7 @@ class RetryMixin:
                                     backoff = get_retry_backoff(
                                         classified_error, attempt, provider
                                     )
-                                    remaining_budget = deadline - time.time()
+                                    remaining_budget = deadline - time.monotonic()
                                     if backoff <= remaining_budget:
                                         lib_logger.warning(
                                             f"Mid-stream {classified_error.error_type} for {mask_credential(current_cred)} "
@@ -1830,8 +1833,8 @@ class RetryMixin:
                                 await self.usage_manager.record_failure(
                                     current_cred, model, classified_error
                                 )
-                                await self._resilience.release_half_open_slot(provider)
-                                break
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break
 
                         except (
                             APIConnectionError,
@@ -1869,8 +1872,8 @@ class RetryMixin:
                                     f"Credential {mask_credential(current_cred)} failed after max retries for model {model} due to a server error. Rotating key silently."
                                 )
                                 # [MODIFIED] Do not yield to the client here.
-                                await self._resilience.release_half_open_slot(provider)
-                                break
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break
 
                             # Reset LiteLLM internal HTTP client cache on connection errors
                             # This fixes "Cannot send a request, as the client has been closed"
@@ -1885,8 +1888,8 @@ class RetryMixin:
                                 lib_logger.warning(
                                     "Required retry wait exceeds remaining budget. Rotating key early."
                                 )
-                                await self._resilience.release_half_open_slot(provider)
-                                break
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break
 
                             lib_logger.warning(
                                 f"Credential {mask_credential(current_cred)} encountered a server error for model {model}. Reason: '{error_message_text}'. Retrying within remaining budget."
@@ -1932,8 +1935,8 @@ class RetryMixin:
                                 classified_error,
                                 increment_consecutive_failures=False,
                             )
-                            await self._resilience.release_half_open_slot(provider)
-                            break
+                            async with HalfOpenSlot(self._resilience, provider):
+                                break
 
                         except asyncio.CancelledError:
                             raise
@@ -1977,11 +1980,11 @@ class RetryMixin:
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
-                                await self._resilience.release_half_open_slot(provider)
-                                lib_logger.error(
-                                    f"Non-recoverable error ({classified_error.error_type}). Failing request."
-                                )
-                                raise last_exception
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    lib_logger.error(
+                                        f"Non-recoverable error ({classified_error.error_type}). Failing request."
+                                    )
+                                    raise last_exception
 
                             # Record failure and rotate to next key
                             await self.usage_manager.record_failure(
@@ -1990,15 +1993,15 @@ class RetryMixin:
                             lib_logger.info(
                                 f"Rotating to next key after {classified_error.error_type} error."
                             )
-                            await self._resilience.release_half_open_slot(provider)
-                            break
+                            async with HalfOpenSlot(self._resilience, provider):
+                                break
 
                 finally:
                     if key_acquired and current_cred:
                         await self.usage_manager.release_key(current_cred, model)
 
             # Build detailed error response using error accumulator
-            error_accumulator.timeout_occurred = time.time() >= deadline
+            error_accumulator.timeout_occurred = time.monotonic() >= deadline
 
             if error_accumulator.has_errors():
                 # Log concise summary for server logs

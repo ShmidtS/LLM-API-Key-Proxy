@@ -9,6 +9,7 @@
 # Do NOT reorder or simplify these imports.
 
 import os
+from typing import TYPE_CHECKING
 
 # Load .env file BEFORE reading any environment variables
 try:
@@ -35,6 +36,9 @@ patch_litellm_finish_reason()
 from ..ssl_patch import _patch_aiohttp_connector
 from ..quota_reporter import QuotaReporter
 from ..anthropic_adapter import AnthropicAdapter
+
+if TYPE_CHECKING:
+    from ..anthropic_compat.models import AnthropicMessagesRequest, AnthropicCountTokensRequest
 
 _patch_aiohttp_connector()
 
@@ -79,10 +83,6 @@ from ..model_info_service import get_model_info_service
 from ..resilience import ResilienceOrchestrator
 from ..credential_manager import CredentialManager
 from ..background_refresher import BackgroundRefresher
-from ..anthropic_compat.models import (
-    AnthropicMessagesRequest,
-    AnthropicCountTokensRequest,
-)
 from ..model_definitions import ModelDefinitions
 from ..utils.paths import get_default_root, get_logs_dir, get_oauth_dir
 from ..utils.suppress_litellm_warnings import suppress_litellm_serialization_warnings

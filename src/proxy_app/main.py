@@ -181,7 +181,8 @@ with _console.status("[dim]Initializing proxy core...", spinner="dots"):
     from proxy_app.batch_manager import EmbeddingBatcher
 
 # Import extracted modules
-from proxy_app.middleware import _NoGzipForSSE, RotatorDebugFilter, NoLiteLLMLogFilter
+from proxy_app.middleware import _NoGzipForSSE
+from proxy_app.logging_config import RotatorDebugFilter, NoLiteLLMLogFilter
 from proxy_app.dependencies import _streams_lock
 
 # Anthropic API Models (imported from library)
@@ -879,6 +880,10 @@ if __name__ == "__main__":
                 console.print("\nStarting proxy server...\n")
 
         import uvicorn
+
+        if sys.platform == "win32":
+            import signal as _signal
+            _signal.signal(_signal.SIGBREAK, lambda *_: _signal.raise_signal(_signal.SIGINT))
 
         uvicorn.run(
             app,

@@ -14,7 +14,6 @@ python-dotenv
 litellm<=1.82.6
 
 cachetools
-filelock
 httpx
 aiofiles
 aiohttp
