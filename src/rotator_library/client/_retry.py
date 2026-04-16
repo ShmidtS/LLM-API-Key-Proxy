@@ -1258,6 +1258,12 @@ class RetryMixin:
                                         current_cred, model
                                     )
                                     key_acquired = False  # prevent outer finally from double-releasing
+                                # Streaming completed successfully — mirror non-streaming bookkeeping
+                                await asyncio.gather(
+                                    self._resilience.record_success(provider),
+                                    self._resilience.record_rate_success(provider),
+                                    self.reset_quota_failures(current_cred, provider),
+                                )
                                 return
 
                             except (
@@ -1429,7 +1435,7 @@ class RetryMixin:
 
                                 lib_logger.warning(
                                     f"Cred {mask_credential(current_cred)} transport error "
-                                    f"({type(e).__name__}): {error_message}. Rotating."
+                                    f"({type(e).__name__}): {error_message}."
                                 )
 
                                 # Provider-level error: don't increment consecutive failures
@@ -1439,8 +1445,37 @@ class RetryMixin:
                                     classified_error,
                                     increment_consecutive_failures=False,
                                 )
-                                async with HalfOpenSlot(self._resilience, provider):
-                                    break
+
+                                # Mirror non-streaming: retry same key with backoff before rotating
+                                if attempt >= self.max_retries - 1:
+                                    error_accumulator.record_error(
+                                        current_cred, classified_error, error_message
+                                    )
+                                    lib_logger.warning(
+                                        f"Cred {mask_credential(current_cred)} failed after max retries. Rotating."
+                                    )
+                                    async with HalfOpenSlot(self._resilience, provider):
+                                        break
+
+                                if not await self._sleep_within_budget(
+                                    attempt, deadline, classified_error
+                                ):
+                                    error_accumulator.record_error(
+                                        current_cred, classified_error, error_message
+                                    )
+                                    lib_logger.warning(
+                                        "Retry wait exceeds budget. Rotating."
+                                    )
+                                    async with HalfOpenSlot(self._resilience, provider):
+                                        break
+
+                                lib_logger.warning(
+                                    f"Cred {mask_credential(current_cred)} transport error. Retrying within remaining budget."
+                                )
+
+                                # Ensure HTTP client is usable before retry
+                                await self._get_http_client_async(streaming=True)
+                                continue
 
                             except asyncio.CancelledError:
                                 raise
@@ -1656,6 +1691,12 @@ class RetryMixin:
                                 key_acquired = (
                                     False  # prevent outer finally from double-releasing
                                 )
+                            # Streaming completed successfully — mirror non-streaming bookkeeping
+                            await asyncio.gather(
+                                self._resilience.record_success(provider),
+                                self._resilience.record_rate_success(provider),
+                                self.reset_quota_failures(current_cred, provider),
+                            )
                             return
 
                         except (
@@ -1938,7 +1979,7 @@ class RetryMixin:
 
                             lib_logger.warning(
                                 f"Credential {mask_credential(current_cred)} transport error "
-                                f"({type(e).__name__}): {error_message_text}. Rotating."
+                                f"({type(e).__name__}): {error_message_text}."
                             )
 
                             # Provider-level error: don't increment consecutive failures
@@ -1948,8 +1989,37 @@ class RetryMixin:
                                 classified_error,
                                 increment_consecutive_failures=False,
                             )
-                            async with HalfOpenSlot(self._resilience, provider):
-                                break
+
+                            # Mirror non-streaming: retry same key with backoff before rotating
+                            if attempt >= self.max_retries - 1:
+                                error_accumulator.record_error(
+                                    current_cred, classified_error, error_message_text
+                                )
+                                lib_logger.warning(
+                                    f"Cred {mask_credential(current_cred)} failed after max retries. Rotating."
+                                )
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break
+
+                            if not await self._sleep_within_budget(
+                                attempt, deadline, classified_error
+                            ):
+                                error_accumulator.record_error(
+                                    current_cred, classified_error, error_message_text
+                                )
+                                lib_logger.warning(
+                                    "Retry wait exceeds budget. Rotating."
+                                )
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break
+
+                            lib_logger.warning(
+                                f"Cred {mask_credential(current_cred)} transport error. Retrying within remaining budget."
+                            )
+
+                            # Ensure HTTP client is usable before retry
+                            await self._get_http_client_async(streaming=True)
+                            continue
 
                         except asyncio.CancelledError:
                             raise

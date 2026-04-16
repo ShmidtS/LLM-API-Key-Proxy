@@ -142,7 +142,7 @@ class TimeoutConfig:
         """
         Timeout configuration for streaming LLM requests.
 
-        Uses a shorter read timeout (default 3 min) since we expect
+        Uses a shorter read timeout (default 5 min) since we expect
         periodic chunks. If no data arrives for this duration, the
         connection is considered stalled.
         """
@@ -153,7 +153,7 @@ class TimeoutConfig:
         """
         Timeout configuration for non-streaming LLM requests.
 
-        Uses a longer read timeout (default 10 min) since the server
+        Uses a longer read timeout (default 5 min) since the server
         may take significant time to generate the complete response
         before sending anything back.
         """

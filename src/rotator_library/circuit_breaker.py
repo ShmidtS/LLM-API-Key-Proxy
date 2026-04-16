@@ -145,11 +145,10 @@ class ProviderCircuitBreaker:
         if now - last < _CB_DEDUP_TTL:
             return True  # suppress
         _CB_DEDUP_CACHE[key] = now
-        # Evict stale entries periodically
-        if len(_CB_DEDUP_CACHE) > 64:
-            stale = [k for k, v in _CB_DEDUP_CACHE.items() if now - v > _CB_DEDUP_TTL]
-            for k in stale:
-                del _CB_DEDUP_CACHE[k]
+        # Evict stale entries on every write
+        stale = [k for k, v in _CB_DEDUP_CACHE.items() if now - v > _CB_DEDUP_TTL]
+        for k in stale:
+            del _CB_DEDUP_CACHE[k]
         return False
 
     def _get_provider_threshold(self, provider: str) -> int:

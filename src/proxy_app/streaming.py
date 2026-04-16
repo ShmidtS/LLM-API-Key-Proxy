@@ -7,6 +7,7 @@ from typing import AsyncGenerator, Any, Optional
 
 from fastapi import HTTPException, Request
 from rotator_library import STREAM_DONE
+from rotator_library.error_types import ClassifiedError
 from rotator_library.utils.json_utils import sse_data_event
 from rotator_library.utils.chunk_aggregator import ChunkAggregator
 from proxy_app.dependencies import _inc_streams, _dec_streams
@@ -68,14 +69,23 @@ async def streaming_response_wrapper(
         raise
     except Exception as e:
         logging.exception("Error during response stream")
-        # Yield a final error message to the client to ensure they are not left hanging.
-        error_payload = {
-            "error": {
-                "message": "An unexpected error occurred during the stream",
-                "type": "proxy_internal_error",
-                "code": 500,
+        # Propagate classified error type so clients can distinguish 429/503/502
+        if isinstance(e, ClassifiedError) and e.status_code:
+            error_payload = {
+                "error": {
+                    "message": str(e.original_exception or e),
+                    "type": e.error_type,
+                    "code": e.status_code,
+                }
             }
-        }
+        else:
+            error_payload = {
+                "error": {
+                    "message": "An unexpected error occurred during the stream",
+                    "type": "proxy_internal_error",
+                    "code": 500,
+                }
+            }
         yield sse_data_event(error_payload)
         yield b"data: [DONE]\n\n"
         # Also log this as a failed request
