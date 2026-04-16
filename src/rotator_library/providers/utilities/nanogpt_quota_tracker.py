@@ -22,6 +22,7 @@ import time
 from typing import Any, Dict, Optional
 
 import httpx
+
 from .lightweight_quota_mixin import LightweightQuotaMixin
 
 lib_logger = logging.getLogger("rotator_library")
@@ -90,76 +91,52 @@ class NanoGptQuotaTracker(LightweightQuotaMixin):
                 "fetched_at": float,
             }
         """
-        try:
-            url = f"{NANOGPT_API_BASE}/api/subscription/v1/usage"
-            headers = self._make_bearer_header(api_key)
+        url = f"{NANOGPT_API_BASE}/api/subscription/v1/usage"
+        headers = self._make_bearer_header(api_key)
 
-            response = await self._fetch_via_pool(url, headers, client)
-            response.raise_for_status()
-            data = response.json()
-
-            # Parse response
-            daily = data.get("daily", {})
-            monthly = data.get("monthly", {})
-            limits = data.get("limits", {})
-
+        data = await self._fetch_json(url, headers, client)
+        if data is None:
             return {
-                "status": "success",
+                "status": "error",
                 "error": None,
-                "active": data.get("active", False),
-                "state": data.get("state", "inactive"),
-                "enforce_daily_limit": data.get("enforceDailyLimit", False),
-                "limits": {
-                    "daily": limits.get("daily", 0),
-                    "monthly": limits.get("monthly", 0),
-                },
-                "daily": {
-                    "used": daily.get("used", 0),
-                    "remaining": daily.get("remaining", 0),
-                    "percent_used": daily.get("percentUsed", 0.0),
-                    # Convert epoch ms to seconds
-                    "reset_at": daily.get("resetAt", 0) / 1000.0,
-                },
-                "monthly": {
-                    "used": monthly.get("used", 0),
-                    "remaining": monthly.get("remaining", 0),
-                    "percent_used": monthly.get("percentUsed", 0.0),
-                    "reset_at": monthly.get("resetAt", 0) / 1000.0,
-                },
+                "active": False,
+                "state": "unknown",
+                "limits": {"daily": 0, "monthly": 0},
+                "daily": {"used": 0, "remaining": 0, "percent_used": 0.0, "reset_at": 0},
+                "monthly": {"used": 0, "remaining": 0, "percent_used": 0.0, "reset_at": 0},
                 "fetched_at": time.time(),
             }
 
-        except httpx.HTTPStatusError as e:
-            error_msg = f"HTTP {e.response.status_code}"
-            try:
-                error_body = e.response.text
-                if error_body:
-                    error_msg = f"{error_msg}: {error_body[:200]}"
-            except Exception:
-                lib_logger.debug("Failed to extract NanoGPT HTTP error body", exc_info=True)
-            lib_logger.warning(f"Failed to fetch NanoGPT subscription usage: {error_msg}")
-            return {
-                "status": "error",
-                "error": error_msg,
-                "active": False,
-                "state": "unknown",
-                "limits": {"daily": 0, "monthly": 0},
-                "daily": {"used": 0, "remaining": 0, "percent_used": 0.0, "reset_at": 0},
-                "monthly": {"used": 0, "remaining": 0, "percent_used": 0.0, "reset_at": 0},
-                "fetched_at": time.time(),
-            }
-        except Exception as e:
-            lib_logger.warning(f"Failed to fetch NanoGPT subscription usage: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "active": False,
-                "state": "unknown",
-                "limits": {"daily": 0, "monthly": 0},
-                "daily": {"used": 0, "remaining": 0, "percent_used": 0.0, "reset_at": 0},
-                "monthly": {"used": 0, "remaining": 0, "percent_used": 0.0, "reset_at": 0},
-                "fetched_at": time.time(),
-            }
+        # Parse response
+        daily = data.get("daily", {})
+        monthly = data.get("monthly", {})
+        limits = data.get("limits", {})
+
+        return {
+            "status": "success",
+            "error": None,
+            "active": data.get("active", False),
+            "state": data.get("state", "inactive"),
+            "enforce_daily_limit": data.get("enforceDailyLimit", False),
+            "limits": {
+                "daily": limits.get("daily", 0),
+                "monthly": limits.get("monthly", 0),
+            },
+            "daily": {
+                "used": daily.get("used", 0),
+                "remaining": daily.get("remaining", 0),
+                "percent_used": daily.get("percentUsed", 0.0),
+                # Convert epoch ms to seconds
+                "reset_at": daily.get("resetAt", 0) / 1000.0,
+            },
+            "monthly": {
+                "used": monthly.get("used", 0),
+                "remaining": monthly.get("remaining", 0),
+                "percent_used": monthly.get("percentUsed", 0.0),
+                "reset_at": monthly.get("resetAt", 0) / 1000.0,
+            },
+            "fetched_at": time.time(),
+        }
 
     def get_tier_from_state(self, state: str) -> str:
         """

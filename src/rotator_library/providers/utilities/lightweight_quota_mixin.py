@@ -24,6 +24,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import httpx
+import json as json_lib
 
 from ...http_client_pool import get_http_pool
 
@@ -77,6 +78,69 @@ class LightweightQuotaMixin:
         pool = await get_http_pool()
         new_client = await pool.get_client_async()
         return await new_client.get(url, headers=headers, timeout=timeout)
+
+    async def _fetch_json(
+        self,
+        url: str,
+        headers: Dict[str, str],
+        client: Optional[httpx.AsyncClient] = None,
+        timeout: int = 30,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a URL and parse the JSON response with robust error handling.
+
+        Checks for 5xx / 401 / 403 status codes *before* raise_for_status
+        so they are logged as warnings rather than raising HTTPStatusError.
+        Catches JSON decode errors, HTTPStatusError, and RequestError,
+        returning None (with a logged warning/error) in every failure case.
+
+        Args:
+            url: Request URL
+            headers: Request headers
+            client: Optional existing httpx client for connection reuse
+            timeout: Request timeout in seconds
+
+        Returns:
+            Parsed dict on success, or None on any failure
+        """
+        provider = getattr(self, "provider_name", "unknown")
+        try:
+            response = await self._fetch_via_pool(url, headers, client, timeout)
+
+            # Pre-check status codes that should not raise
+            if response.status_code in (401, 403):
+                lib_logger.warning(
+                    f"{provider} quota API returned {response.status_code} "
+                    f"(auth/forbidden), skipping"
+                )
+                return None
+            if response.status_code >= 500:
+                lib_logger.warning(
+                    f"{provider} quota API returned {response.status_code} "
+                    f"(server error), skipping"
+                )
+                return None
+
+            response.raise_for_status()
+
+            try:
+                return response.json()
+            except (json_lib.JSONDecodeError, ValueError) as exc:
+                lib_logger.warning(
+                    f"{provider} quota API returned invalid JSON: {exc}"
+                )
+                return None
+
+        except httpx.HTTPStatusError as exc:
+            lib_logger.warning(
+                f"{provider} quota API HTTP error: {exc.response.status_code}"
+            )
+            return None
+        except httpx.RequestError as exc:
+            lib_logger.error(
+                f"{provider} quota API request error: {exc}"
+            )
+            return None
 
     @staticmethod
     def _make_bearer_header(api_key: str) -> Dict[str, str]:

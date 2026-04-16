@@ -49,6 +49,8 @@ class OpenAICompatibleProvider(ProviderInterface):
         Fetches the list of available models from the OpenAI-compatible API.
         Combines dynamic discovery with static model definitions.
         """
+        import json as json_lib
+
         models = []
 
         # First, try to get static model definitions
@@ -67,12 +69,37 @@ class OpenAICompatibleProvider(ProviderInterface):
             response = await client.get(
                 models_url, headers={"Authorization": f"Bearer {api_key}"}
             )
+
+            # Handle HTTP errors with appropriate severity
+            if response.status_code >= 500:
+                lib_logger.warning(
+                    "Model discovery server error %d for %s, returning static models only",
+                    response.status_code, self.provider_name,
+                )
+                return models
+            if response.status_code in (401, 403):
+                lib_logger.warning(
+                    "Model discovery auth error %d for %s",
+                    response.status_code, self.provider_name,
+                )
+                return models
             response.raise_for_status()
+
+            try:
+                response_data = response.json()
+            except (json_lib.JSONDecodeError, ValueError) as e:
+                body_preview = response.text[:200] if response.text else "<empty>"
+                lib_logger.warning(
+                    "Invalid JSON in model discovery for %s: %s — body: %s",
+                    self.provider_name, e, body_preview,
+                )
+                return models
 
             dynamic_models = [
                 f"{self.provider_name}/{model['id']}"
-                for model in response.json().get("data", [])
-                if model["id"] not in {m.split("/")[-1] for m in static_models}
+                for model in response_data.get("data", [])
+                if isinstance(model, dict) and "id" in model
+                and model["id"] not in {m.split("/")[-1] for m in static_models}
             ]
 
             if dynamic_models:
@@ -81,12 +108,13 @@ class OpenAICompatibleProvider(ProviderInterface):
                     f"Discovered {len(dynamic_models)} additional models for {self.provider_name}"
                 )
 
+        except httpx.HTTPStatusError as e:
+            lib_logger.warning(
+                "Model discovery HTTP %d for %s",
+                e.response.status_code, self.provider_name,
+            )
         except httpx.RequestError:
-            # Silently ignore dynamic discovery errors
             lib_logger.debug("Dynamic model discovery request failed for %s", self.provider_name, exc_info=True)
-        except Exception:
-            # Silently ignore dynamic discovery errors
-            lib_logger.debug("Dynamic model discovery failed for %s", self.provider_name, exc_info=True)
 
         return models
 

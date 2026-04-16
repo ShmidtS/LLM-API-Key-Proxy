@@ -4,7 +4,7 @@
 # CRITICAL LOAD-BEARING IMPORT ORDER:
 # 1. AIOHTTP_NO_EXTENSIONS=1 must be set before any aiohttp import
 # 2. dns_fix.py must run before litellm/aiohttp import
-# 3. patch_litellm_finish_reason.py must run before litellm import
+# 3. litellm_patches.patch_litellm_finish_reason must run before litellm import
 # 4. SSL monkey-patch fires when HTTP_SSL_VERIFY=false
 # Do NOT reorder or simplify these imports.
 
@@ -27,7 +27,7 @@ apply_dns_fix()
 
 # CRITICAL: Apply finish_reason patch BEFORE importing litellm/openai
 # LiteLLM caches OpenAI models on import, so patch must run first
-from ..utils.patch_litellm_finish_reason import patch_litellm_finish_reason
+from ..utils.litellm_patches import patch_litellm_finish_reason
 
 patch_litellm_finish_reason()
 
@@ -85,7 +85,7 @@ from ..credential_manager import CredentialManager
 from ..background_refresher import BackgroundRefresher
 from ..model_definitions import ModelDefinitions
 from ..utils.paths import get_default_root, get_logs_dir, get_oauth_dir
-from ..utils.suppress_litellm_warnings import suppress_litellm_serialization_warnings
+from ..utils.litellm_patches import suppress_litellm_serialization_warnings
 from ..utils.model_utils import (
     extract_provider_from_model,
     get_or_create_provider_instance,
@@ -796,6 +796,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
             # For others, we might need to try multiple keys if one is invalid.
             # The current logic of iterating works for both, as the credential is not
             # always used in get_models.
+            consecutive_auth_errors = 0
             for credential in shuffled_credentials:
                 try:
                     # Display last 6 chars for API keys, or the filename for OAuth paths
@@ -806,6 +807,9 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                     models = await provider_instance.get_models(
                         credential, await self._get_http_client_async(streaming=False)
                     )
+
+                    consecutive_auth_errors = 0  # Reset on success
+
                     lib_logger.info(
                         f"Got {len(models)} models for provider: {provider}"
                     )
@@ -833,9 +837,23 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                 except Exception as e:
                     classified_error = classify_error(e, provider=provider)
                     cred_display = mask_credential(credential)
-                    lib_logger.debug(
-                        f"Failed to get models for provider {provider} with credential {cred_display}: {classified_error.error_type}. Trying next credential."
+                    is_auth_error = classified_error.error_type in (
+                        "authentication", "forbidden",
                     )
+                    if is_auth_error:
+                        consecutive_auth_errors += 1
+                        lib_logger.warning(
+                            f"Auth error for {provider} with {cred_display}: {classified_error.error_type} ({consecutive_auth_errors} consecutive)"
+                        )
+                        if consecutive_auth_errors >= 2:
+                            lib_logger.warning(
+                                f"Stopping model discovery for {provider}: {consecutive_auth_errors} consecutive auth errors"
+                            )
+                            break
+                    else:
+                        lib_logger.debug(
+                            f"Failed to get models for provider {provider} with credential {cred_display}: {classified_error.error_type}. Trying next credential."
+                        )
                     continue  # Try the next credential
 
         lib_logger.error(

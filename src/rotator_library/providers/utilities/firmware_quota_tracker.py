@@ -71,72 +71,51 @@ class FirmwareQuotaTracker(LightweightQuotaMixin):
                 "fetched_at": float,
             }
         """
-        try:
-            headers = self._make_bearer_header(api_key)
-            quota_url = self._get_quota_url()
-            response = await self._fetch_via_pool(
-                quota_url, headers, client
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            # Parse response - API returns ratio directly
-            used_raw = data.get("used")
-            # Validate used is numeric
-            if not isinstance(used_raw, (int, float)):
-                lib_logger.warning(
-                    f"Firmware.ai quota API returned non-numeric 'used' value: {used_raw}"
-                )
-                used = 0.0
-            else:
-                used = float(used_raw)
-            reset_iso = data.get("reset")
-
-            # Calculate remaining (inverse of used), clamped to 0.0-1.0
-            remaining_fraction = max(0.0, min(1.0, 1.0 - used))
-
-            # Parse ISO 8601 reset timestamp
-            reset_at = None
-            if reset_iso is not None:
-                reset_at = self._parse_iso_timestamp(reset_iso)
-            # Only mark active window if we successfully parsed the timestamp
-            has_active_window = reset_at is not None
-
+        headers = self._make_bearer_header(api_key)
+        quota_url = self._get_quota_url()
+        data = await self._fetch_json(quota_url, headers, client)
+        if data is None:
             return {
-                "status": "success",
+                "status": "error",
                 "error": None,
-                "used": used,
-                "remaining_fraction": remaining_fraction,
-                "reset_at": reset_at,
-                "has_active_window": has_active_window,
+                "used": None,
+                "remaining_fraction": None,
+                "reset_at": None,
+                "has_active_window": False,
                 "fetched_at": time.time(),
             }
 
-        except httpx.HTTPStatusError as e:
-            # Only log status code - error body may contain sensitive data
-            error_msg = f"HTTP {e.response.status_code}"
-            lib_logger.warning(f"Failed to fetch Firmware.ai quota: {error_msg}")
-            return {
-                "status": "error",
-                "error": error_msg,
-                "used": None,
-                "remaining_fraction": None,  # None preserves cached value
-                "reset_at": None,
-                "has_active_window": False,
-                "fetched_at": time.time(),
-            }
-        except Exception as e:
-            # Log exception type only - message may contain sensitive data
-            lib_logger.warning(f"Failed to fetch Firmware.ai quota: {type(e).__name__}")
-            return {
-                "status": "error",
-                "error": type(e).__name__,
-                "used": None,
-                "remaining_fraction": None,  # None preserves cached value
-                "reset_at": None,
-                "has_active_window": False,
-                "fetched_at": time.time(),
-            }
+        # Parse response - API returns ratio directly
+        used_raw = data.get("used")
+        # Validate used is numeric
+        if not isinstance(used_raw, (int, float)):
+            lib_logger.warning(
+                f"Firmware.ai quota API returned non-numeric 'used' value: {used_raw}"
+            )
+            used = 0.0
+        else:
+            used = float(used_raw)
+        reset_iso = data.get("reset")
+
+        # Calculate remaining (inverse of used), clamped to 0.0-1.0
+        remaining_fraction = max(0.0, min(1.0, 1.0 - used))
+
+        # Parse ISO 8601 reset timestamp
+        reset_at = None
+        if reset_iso is not None:
+            reset_at = self._parse_iso_timestamp(reset_iso)
+        # Only mark active window if we successfully parsed the timestamp
+        has_active_window = reset_at is not None
+
+        return {
+            "status": "success",
+            "error": None,
+            "used": used,
+            "remaining_fraction": remaining_fraction,
+            "reset_at": reset_at,
+            "has_active_window": has_active_window,
+            "fetched_at": time.time(),
+        }
 
     def _parse_iso_timestamp(self, iso_string: str) -> Optional[float]:
         """

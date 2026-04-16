@@ -222,10 +222,17 @@ class NanoGptProvider(NanoGptQuotaTracker, ProviderInterface):
                 timeout=30,
             )
             response.raise_for_status()
-            data = response.json()
+            import json as json_lib
+            try:
+                data = response.json()
+            except (json_lib.JSONDecodeError, ValueError) as e:
+                lib_logger.warning(f"Invalid JSON from nanogpt models: {e}, body={response.text[:200]}")
+                data = {}
 
             dynamic_count = 0
             for model in data.get("data", []):
+                if not isinstance(model, dict):
+                    continue
                 model_id = model.get("id", "")
                 if model_id and model_id not in seen_ids:
                     # Skip auto-model variants - these are internal routing models
@@ -242,6 +249,15 @@ class NanoGptProvider(NanoGptQuotaTracker, ProviderInterface):
                     f"Discovered {dynamic_count} models for nanogpt from API"
                 )
 
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                lib_logger.warning(f"Auth error fetching nanogpt models: {e.response.status_code}")
+            elif e.response.status_code >= 500:
+                lib_logger.warning(f"Server error fetching nanogpt models: {e.response.status_code}")
+            else:
+                lib_logger.debug(f"HTTP error fetching nanogpt models: {e}")
+        except httpx.RequestError as e:
+            lib_logger.debug(f"Request error fetching nanogpt models: {e}")
         except Exception as e:
             lib_logger.debug(f"Dynamic model discovery failed for nanogpt: {e}")
 
@@ -286,10 +302,17 @@ class NanoGptProvider(NanoGptQuotaTracker, ProviderInterface):
                 timeout=30,
             )
             response.raise_for_status()
-            data = response.json()
+            import json as json_lib
+            try:
+                data = response.json()
+            except (json_lib.JSONDecodeError, ValueError) as e:
+                lib_logger.warning(f"Invalid JSON from nanogpt subscription models: {e}, body={response.text[:200]}")
+                data = {}
 
             self._subscription_models.clear()
             for model in data.get("data", []):
+                if not isinstance(model, dict):
+                    continue
                 model_id = model.get("id", "")
                 if model_id and not model_id.startswith("auto-model"):
                     self._subscription_models.add(model_id)
@@ -297,6 +320,17 @@ class NanoGptProvider(NanoGptQuotaTracker, ProviderInterface):
             lib_logger.debug(
                 f"Discovered {len(self._subscription_models)} subscription models for nanogpt"
             )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                lib_logger.warning(f"Auth error fetching nanogpt subscription models: {e.response.status_code}")
+            elif e.response.status_code >= 500:
+                lib_logger.warning(f"Server error fetching nanogpt subscription models: {e.response.status_code}")
+            else:
+                lib_logger.debug(f"HTTP error fetching nanogpt subscription models: {e}")
+            self._subscription_models = self._discovered_models.copy()
+        except httpx.RequestError as e:
+            lib_logger.debug(f"Request error fetching nanogpt subscription models: {e}")
+            self._subscription_models = self._discovered_models.copy()
         except Exception as e:
             lib_logger.debug(f"Subscription model discovery failed for nanogpt: {e}")
             # Fall back to treating all discovered models as subscription

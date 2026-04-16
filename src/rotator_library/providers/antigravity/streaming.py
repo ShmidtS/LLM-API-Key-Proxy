@@ -658,7 +658,13 @@ class AntigravityStreamingMixin:
             )
             response.raise_for_status()
 
-            data = response.json()
+            import json as json_lib
+            try:
+                data = response.json()
+            except (json_lib.JSONDecodeError, ValueError) as e:
+                body_preview = response.text[:200] if response.text else "<empty>"
+                lib_logger.warning("Invalid JSON in token count response: %s — body: %s", e, body_preview)
+                raise
             unwrapped = self._unwrap_response(data)
             total = unwrapped.get("totalTokens", 0)
 

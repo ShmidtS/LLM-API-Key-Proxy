@@ -125,7 +125,13 @@ class QwenCodeProvider(QwenAuthBase, ACompletionMixin, ProviderInterface):
             )
             response.raise_for_status()
 
-            dynamic_data = response.json()
+            import json as json_lib
+            try:
+                dynamic_data = response.json()
+            except (json_lib.JSONDecodeError, ValueError) as e:
+                lib_logger.warning(f"Invalid JSON from qwen_code models: {e}, body={response.text[:200]}")
+                dynamic_data = {}
+
             # Handle both {data: [...]} and direct [...] formats
             model_list = (
                 dynamic_data.get("data", dynamic_data)
@@ -146,10 +152,18 @@ class QwenCodeProvider(QwenAuthBase, ACompletionMixin, ProviderInterface):
                     f"Discovered {dynamic_count} additional models for qwen_code from API"
                 )
 
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                lib_logger.warning(f"Auth error fetching qwen_code models: {e.response.status_code}")
+            elif e.response.status_code >= 500:
+                lib_logger.warning(f"Server error fetching qwen_code models: {e.response.status_code}")
+            else:
+                lib_logger.debug(f"HTTP error fetching qwen_code models: {e}")
+        except httpx.RequestError as e:
+            lib_logger.debug(f"Request error fetching qwen_code models: {e}")
         except Exception as e:
             # Silently ignore dynamic discovery errors
             lib_logger.debug(f"Dynamic model discovery failed for qwen_code: {e}")
-            pass
 
         return models
 

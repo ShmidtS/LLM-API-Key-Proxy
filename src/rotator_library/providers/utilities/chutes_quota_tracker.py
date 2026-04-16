@@ -75,44 +75,12 @@ class ChutesQuotaTracker(LightweightQuotaMixin):
                 "fetched_at": float,
             }
         """
-        try:
-            headers = self._make_bearer_header(api_key)
-            response = await self._fetch_via_pool(
-                CHUTES_QUOTA_API_URL, headers, client
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            # Parse response with null safety
-            quota = data.get("quota") or 0
-            used = data.get("used") or 0.0
-            remaining = max(0.0, quota - used)
-            remaining_fraction = (remaining / quota) if quota > 0 else 0.0
-
-            # Detect tier from quota value
-            tier = self._get_tier_from_quota(quota)
-
-            # Calculate next reset (00:00 UTC)
-            reset_at = self._calculate_next_reset()
-
+        headers = self._make_bearer_header(api_key)
+        data = await self._fetch_json(CHUTES_QUOTA_API_URL, headers, client)
+        if data is None:
             return {
-                "status": "success",
+                "status": "error",
                 "error": None,
-                "quota": quota,
-                "used": used,
-                "remaining": remaining,
-                "remaining_fraction": remaining_fraction,
-                "tier": tier,
-                "reset_at": reset_at,
-                "fetched_at": time.time(),
-            }
-
-        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadTimeout,
-                httpx.WriteTimeout, httpx.PoolTimeout, httpx.ConnectTimeout) as e:
-            lib_logger.warning(f"Transient error fetching Chutes quota: {e}")
-            return {
-                "status": "transient_error",
-                "error": str(e),
                 "quota": 0,
                 "used": 0.0,
                 "remaining": None,
@@ -121,39 +89,30 @@ class ChutesQuotaTracker(LightweightQuotaMixin):
                 "reset_at": 0,
                 "fetched_at": time.time(),
             }
-        except httpx.HTTPStatusError as e:
-            error_msg = f"HTTP {e.response.status_code}"
-            try:
-                error_body = e.response.text
-                if error_body:
-                    error_msg = f"{error_msg}: {error_body[:200]}"
-            except Exception:
-                lib_logger.debug("Failed to extract Chutes HTTP error body", exc_info=True)
-            lib_logger.warning(f"Failed to fetch Chutes quota: {error_msg}")
-            return {
-                "status": "error",
-                "error": error_msg,
-                "quota": 0,
-                "used": 0.0,
-                "remaining": 0.0,
-                "remaining_fraction": 0.0,
-                "tier": "base",
-                "reset_at": 0,
-                "fetched_at": time.time(),
-            }
-        except Exception as e:
-            lib_logger.warning(f"Failed to fetch Chutes quota: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "quota": 0,
-                "used": 0.0,
-                "remaining": 0.0,
-                "remaining_fraction": 0.0,
-                "tier": "base",
-                "reset_at": 0,
-                "fetched_at": time.time(),
-            }
+
+        # Parse response with null safety
+        quota = data.get("quota") or 0
+        used = data.get("used") or 0.0
+        remaining = max(0.0, quota - used)
+        remaining_fraction = (remaining / quota) if quota > 0 else 0.0
+
+        # Detect tier from quota value
+        tier = self._get_tier_from_quota(quota)
+
+        # Calculate next reset (00:00 UTC)
+        reset_at = self._calculate_next_reset()
+
+        return {
+            "status": "success",
+            "error": None,
+            "quota": quota,
+            "used": used,
+            "remaining": remaining,
+            "remaining_fraction": remaining_fraction,
+            "tier": tier,
+            "reset_at": reset_at,
+            "fetched_at": time.time(),
+        }
 
     def _get_tier_from_quota(self, quota: int) -> str:
         """

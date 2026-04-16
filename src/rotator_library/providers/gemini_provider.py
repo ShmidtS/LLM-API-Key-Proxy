@@ -23,7 +23,21 @@ class GeminiProvider(ProviderInterface):
                 headers={"x-goog-api-key": api_key}
             )
             response.raise_for_status()
-            return [f"gemini/{model['name'].replace('models/', '')}" for model in response.json().get("models", [])]
+            import json as json_lib
+            try:
+                data = response.json()
+            except (json_lib.JSONDecodeError, ValueError) as e:
+                lib_logger.warning(f"Invalid JSON from Gemini models: {e}, body={response.text[:200]}")
+                return []
+            return [f"gemini/{model['name'].replace('models/', '')}" for model in data.get("models", []) if isinstance(model, dict) and "name" in model]
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                lib_logger.warning(f"Auth error fetching Gemini models: {e.response.status_code}")
+            elif e.response.status_code >= 500:
+                lib_logger.warning(f"Server error fetching Gemini models: {e.response.status_code}")
+            else:
+                lib_logger.error(f"HTTP error fetching Gemini models: {e}")
+            return []
         except httpx.RequestError as e:
             lib_logger.error(f"Failed to fetch Gemini models: {e}")
             return []

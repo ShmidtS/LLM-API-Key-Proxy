@@ -1269,7 +1269,14 @@ class GeminiCliProvider(
                     url, headers=headers, json=request_payload, timeout=30
                 )
                 response.raise_for_status()
-                data = response.json()
+                import json as json_lib
+                try:
+                    data = response.json()
+                except (json_lib.JSONDecodeError, ValueError) as e:
+                    body_preview = response.text[:200] if response.text else "<empty>"
+                    lib_logger.warning("Invalid JSON in countTokens response: %s — body: %s", e, body_preview)
+                    # Return 0 on JSON parse failure rather than crashing
+                    return {"prompt_tokens": 0, "total_tokens": 0}
 
                 # Extract token counts from response
                 total_tokens = data.get("totalTokens", 0)
@@ -1379,7 +1386,13 @@ class GeminiCliProvider(
             )
             response.raise_for_status()
 
-            dynamic_data = response.json()
+            import json as json_lib
+            try:
+                dynamic_data = response.json()
+            except (json_lib.JSONDecodeError, ValueError) as e:
+                body_preview = response.text[:200] if response.text else "<empty>"
+                lib_logger.warning("Invalid JSON in models response: %s — body: %s", e, body_preview)
+                raise
             # Handle various response formats
             model_list = dynamic_data.get("models", dynamic_data.get("data", []))
 

@@ -81,74 +81,12 @@ class ZaiQuotaTracker(LightweightQuotaMixin):
                 "fetched_at": float,
             }
         """
-        try:
-            headers = self._make_bearer_header(api_key)
-            response = await self._fetch_via_pool(
-                ZAI_QUOTA_API_URL, headers, client
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            if data.get("code") != 200:
-                error_msg = data.get("msg", "unknown error")
-                return self._error_result(f"API_ERROR: {error_msg}")
-
-            quota_data = data.get("data")
-            if not quota_data:
-                return self._error_result("NO_DATA")
-
-            level = quota_data.get("level", "lite")
-            limits = quota_data.get("limits", [])
-
-            pct_5min = 0.0
-            pct_daily = 0.0
-            hourly_used = 0
-            hourly_limit = 0
-
-            for lim in limits:
-                lim_type = lim.get("type", "")
-                unit = lim.get("unit", 0)
-                if lim_type == "TOKENS_LIMIT" and unit == ZAI_UNIT_5MIN_TOKENS:
-                    pct_5min = float(lim.get("percentage", 0))
-                elif lim_type == "TOKENS_LIMIT" and unit == ZAI_UNIT_DAILY_TOKENS:
-                    pct_daily = float(lim.get("percentage", 0))
-                elif lim_type == "TIME_LIMIT" and unit == ZAI_UNIT_HOURLY_TIME:
-                    hourly_used = int(lim.get("currentValue", 0))
-                    hourly_limit = int(lim.get("usage", 0))
-
-            if hourly_limit <= 0:
-                hourly_limit = ZAI_TIER_HOURLY_LIMITS.get(level, 100)
-
-            hourly_remaining = max(0, hourly_limit - hourly_used)
-            remaining_fraction = (
-                (hourly_remaining / hourly_limit) if hourly_limit > 0 else 0.0
-            )
-
-            reset_at = self._calculate_next_hour_reset()
-
-            return {
-                "status": "success",
-                "error": None,
-                "level": level,
-                "hourly_used": hourly_used,
-                "hourly_limit": hourly_limit,
-                "hourly_remaining": hourly_remaining,
-                "remaining_fraction": remaining_fraction,
-                "pct_5min": pct_5min,
-                "pct_daily": pct_daily,
-                "quota": hourly_limit,
-                "used": float(hourly_used),
-                "remaining": float(hourly_remaining),
-                "reset_at": reset_at,
-                "fetched_at": time.time(),
-            }
-
-        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadTimeout,
-                httpx.WriteTimeout, httpx.PoolTimeout, httpx.ConnectTimeout) as e:
-            lib_logger.warning(f"Transient error fetching ZAI quota: {e}")
+        headers = self._make_bearer_header(api_key)
+        data = await self._fetch_json(ZAI_QUOTA_API_URL, headers, client)
+        if data is None:
             return {
                 "status": "transient_error",
-                "error": str(e),
+                "error": None,
                 "level": "lite",
                 "hourly_used": 0,
                 "hourly_limit": 0,
@@ -162,19 +100,60 @@ class ZaiQuotaTracker(LightweightQuotaMixin):
                 "reset_at": 0,
                 "fetched_at": time.time(),
             }
-        except httpx.HTTPStatusError as e:
-            error_msg = f"HTTP {e.response.status_code}"
-            try:
-                error_body = e.response.text
-                if error_body:
-                    error_msg = f"{error_msg}: {error_body[:200]}"
-            except Exception:
-                lib_logger.debug("Failed to extract ZAI HTTP error body", exc_info=True)
-            lib_logger.warning(f"Failed to fetch ZAI quota: {error_msg}")
-            return self._error_result(error_msg)
-        except Exception as e:
-            lib_logger.warning(f"Failed to fetch ZAI quota: {e}")
-            return self._error_result(str(e))
+
+        if data.get("code") != 200:
+            error_msg = data.get("msg", "unknown error")
+            return self._error_result(f"API_ERROR: {error_msg}")
+
+        quota_data = data.get("data")
+        if not quota_data:
+            return self._error_result("NO_DATA")
+
+        level = quota_data.get("level", "lite")
+        limits = quota_data.get("limits", [])
+
+        pct_5min = 0.0
+        pct_daily = 0.0
+        hourly_used = 0
+        hourly_limit = 0
+
+        for lim in limits:
+            lim_type = lim.get("type", "")
+            unit = lim.get("unit", 0)
+            if lim_type == "TOKENS_LIMIT" and unit == ZAI_UNIT_5MIN_TOKENS:
+                pct_5min = float(lim.get("percentage", 0))
+            elif lim_type == "TOKENS_LIMIT" and unit == ZAI_UNIT_DAILY_TOKENS:
+                pct_daily = float(lim.get("percentage", 0))
+            elif lim_type == "TIME_LIMIT" and unit == ZAI_UNIT_HOURLY_TIME:
+                hourly_used = int(lim.get("currentValue", 0))
+                hourly_limit = int(lim.get("usage", 0))
+
+        if hourly_limit <= 0:
+            hourly_limit = ZAI_TIER_HOURLY_LIMITS.get(level, 100)
+
+        hourly_remaining = max(0, hourly_limit - hourly_used)
+        remaining_fraction = (
+            (hourly_remaining / hourly_limit) if hourly_limit > 0 else 0.0
+        )
+
+        reset_at = self._calculate_next_hour_reset()
+
+        return {
+            "status": "success",
+            "error": None,
+            "level": level,
+            "hourly_used": hourly_used,
+            "hourly_limit": hourly_limit,
+            "hourly_remaining": hourly_remaining,
+            "remaining_fraction": remaining_fraction,
+            "pct_5min": pct_5min,
+            "pct_daily": pct_daily,
+            "quota": hourly_limit,
+            "used": float(hourly_used),
+            "remaining": float(hourly_remaining),
+            "reset_at": reset_at,
+            "fetched_at": time.time(),
+        }
 
     def _error_result(self, error: str) -> Dict[str, Any]:
         # remaining_fraction=0.0 on error: treat unknown state as exhausted

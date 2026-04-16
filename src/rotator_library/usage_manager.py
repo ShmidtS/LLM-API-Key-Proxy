@@ -3196,9 +3196,7 @@ class UsageManager:
                     else:
                         # Suppress LiteLLM's direct print() statements for unknown providers
                         # LiteLLM prints "Provider List: https://..." spam for unknown models
-                        from .utils.suppress_litellm_warnings import (
-                            suppress_litellm_prints,
-                        )
+                        from .utils.litellm_patches import suppress_litellm_prints
 
                         with suppress_litellm_prints():
                             if isinstance(

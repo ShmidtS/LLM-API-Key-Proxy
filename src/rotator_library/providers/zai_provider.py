@@ -174,15 +174,30 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
                 timeout=30,
             )
             response.raise_for_status()
+            import json as json_lib
+            try:
+                data = response.json()
+            except (json_lib.JSONDecodeError, ValueError) as e:
+                lib_logger.warning(f"Invalid JSON from ZAI models: {e}, body={response.text[:200]}")
+                return []
             models = [
-                model["id"] for model in response.json().get("data", [])
+                model["id"] for model in data.get("data", [])
+                if isinstance(model, dict) and "id" in model
             ]
             # Cache bare model IDs so get_models_in_quota_group can
             # propagate cooldowns/baselines to every real model.
             if models and not self._known_models:
                 self._known_models = models
             return [f"zai/{m}" for m in models]
-        except (httpx.RequestError, httpx.HTTPStatusError) as e:
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                lib_logger.warning(f"Auth error fetching ZAI models: {e.response.status_code}")
+            elif e.response.status_code >= 500:
+                lib_logger.warning(f"Server error fetching ZAI models: {e.response.status_code}")
+            else:
+                lib_logger.error(f"HTTP error fetching ZAI models: {e}")
+            return []
+        except httpx.RequestError as e:
             lib_logger.error(f"Failed to fetch ZAI models: {e}")
             return []
 
@@ -202,7 +217,14 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             timeout=60,
         )
         response.raise_for_status()
-        return response.json()
+        import json as json_lib
+        try:
+            data = response.json()
+        except (json_lib.JSONDecodeError, ValueError) as e:
+            body_preview = response.text[:200] if response.text else "<empty>"
+            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
+            raise
+        return data
 
     async def video_status(
         self, credential: str, client: httpx.AsyncClient, video_id: str
@@ -214,7 +236,14 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             timeout=30,
         )
         response.raise_for_status()
-        return response.json()
+        import json as json_lib
+        try:
+            data = response.json()
+        except (json_lib.JSONDecodeError, ValueError) as e:
+            body_preview = response.text[:200] if response.text else "<empty>"
+            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
+            raise
+        return data
 
     async def async_image_generate(
         self, credential: str, client: httpx.AsyncClient, **kwargs
@@ -227,7 +256,14 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             timeout=60,
         )
         response.raise_for_status()
-        return response.json()
+        import json as json_lib
+        try:
+            data = response.json()
+        except (json_lib.JSONDecodeError, ValueError) as e:
+            body_preview = response.text[:200] if response.text else "<empty>"
+            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
+            raise
+        return data
 
     async def async_image_status(
         self, credential: str, client: httpx.AsyncClient, image_id: str
@@ -239,7 +275,14 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             timeout=30,
         )
         response.raise_for_status()
-        return response.json()
+        import json as json_lib
+        try:
+            data = response.json()
+        except (json_lib.JSONDecodeError, ValueError) as e:
+            body_preview = response.text[:200] if response.text else "<empty>"
+            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
+            raise
+        return data
 
     async def tool_tokenizer(
         self, credential: str, client: httpx.AsyncClient, **kwargs
@@ -252,7 +295,14 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             timeout=30,
         )
         response.raise_for_status()
-        return response.json()
+        import json as json_lib
+        try:
+            data = response.json()
+        except (json_lib.JSONDecodeError, ValueError) as e:
+            body_preview = response.text[:200] if response.text else "<empty>"
+            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
+            raise
+        return data
 
     async def tool_layout_parsing(
         self, credential: str, client: httpx.AsyncClient, **kwargs
@@ -265,7 +315,14 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             timeout=60,
         )
         response.raise_for_status()
-        return response.json()
+        import json as json_lib
+        try:
+            data = response.json()
+        except (json_lib.JSONDecodeError, ValueError) as e:
+            body_preview = response.text[:200] if response.text else "<empty>"
+            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
+            raise
+        return data
 
     async def tool_web_reader(
         self, credential: str, client: httpx.AsyncClient, **kwargs
@@ -278,7 +335,14 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             timeout=30,
         )
         response.raise_for_status()
-        return response.json()
+        import json as json_lib
+        try:
+            data = response.json()
+        except (json_lib.JSONDecodeError, ValueError) as e:
+            body_preview = response.text[:200] if response.text else "<empty>"
+            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
+            raise
+        return data
 
     async def agent_chat(
         self, credential: str, client: httpx.AsyncClient, **kwargs
@@ -291,7 +355,14 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             timeout=120,
         )
         response.raise_for_status()
-        return response.json()
+        import json as json_lib
+        try:
+            data = response.json()
+        except (json_lib.JSONDecodeError, ValueError) as e:
+            body_preview = response.text[:200] if response.text else "<empty>"
+            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
+            raise
+        return data
 
     async def agent_file_upload(
         self, credential: str, client: httpx.AsyncClient, **kwargs
@@ -304,7 +375,14 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             timeout=60,
         )
         response.raise_for_status()
-        return response.json()
+        import json as json_lib
+        try:
+            data = response.json()
+        except (json_lib.JSONDecodeError, ValueError) as e:
+            body_preview = response.text[:200] if response.text else "<empty>"
+            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
+            raise
+        return data
 
     async def agent_async_result(
         self, credential: str, client: httpx.AsyncClient, task_id: str
@@ -317,7 +395,14 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             timeout=30,
         )
         response.raise_for_status()
-        return response.json()
+        import json as json_lib
+        try:
+            data = response.json()
+        except (json_lib.JSONDecodeError, ValueError) as e:
+            body_preview = response.text[:200] if response.text else "<empty>"
+            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
+            raise
+        return data
 
     async def agent_conversation(
         self, credential: str, client: httpx.AsyncClient, **kwargs
@@ -330,4 +415,11 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             timeout=120,
         )
         response.raise_for_status()
-        return response.json()
+        import json as json_lib
+        try:
+            data = response.json()
+        except (json_lib.JSONDecodeError, ValueError) as e:
+            body_preview = response.text[:200] if response.text else "<empty>"
+            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
+            raise
+        return data

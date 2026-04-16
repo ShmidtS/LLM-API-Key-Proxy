@@ -63,9 +63,24 @@ class OpencodeProvider(ProviderInterface):
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             response.raise_for_status()
+            import json as json_lib
+            try:
+                data = response.json()
+            except (json_lib.JSONDecodeError, ValueError) as e:
+                lib_logger.warning(f"Invalid JSON from OpenCode models: {e}, body={response.text[:200]}")
+                return []
             return [
-                f"opencode/{model['id']}" for model in response.json().get("data", [])
+                f"opencode/{model['id']}" for model in data.get("data", [])
+                if isinstance(model, dict) and "id" in model
             ]
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                lib_logger.warning(f"Auth error fetching OpenCode models: {e.response.status_code}")
+            elif e.response.status_code >= 500:
+                lib_logger.warning(f"Server error fetching OpenCode models: {e.response.status_code}")
+            else:
+                lib_logger.error(f"HTTP error fetching OpenCode models: {e}")
+            return []
         except httpx.RequestError as e:
             lib_logger.error(f"Failed to fetch OpenCode models: {e}")
             return []

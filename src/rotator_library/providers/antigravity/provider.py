@@ -554,7 +554,13 @@ class AntigravityProvider(
                 url, json=payload, headers=headers, timeout=30.0
             )
             response.raise_for_status()
-            data = response.json()
+            import json as json_lib
+            try:
+                data = response.json()
+            except (json_lib.JSONDecodeError, ValueError) as e:
+                body_preview = response.text[:200] if response.text else "<empty>"
+                lib_logger.warning("Invalid JSON in models response: %s — body: %s", e, body_preview)
+                raise
 
             models = []
             for model_info in data.get("models", []):

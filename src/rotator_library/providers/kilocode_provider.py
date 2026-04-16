@@ -31,15 +31,45 @@ class KilocodeProvider(ProviderInterface):
         """
         Fetches the list of available models from the Kilocode API.
         """
+        import json as json_lib
+
         try:
             response = await client.get(
                 "https://kilo.ai/api/openrouter/models",
                 headers={"Authorization": f"Bearer {api_key}"},
             )
+            if response.status_code >= 500:
+                lib_logger.warning(
+                    "Kilocode model discovery server error %d", response.status_code,
+                )
+                return []
+            if response.status_code in (401, 403):
+                lib_logger.warning(
+                    "Kilocode model discovery auth error %d", response.status_code,
+                )
+                return []
             response.raise_for_status()
+
+            try:
+                data = response.json()
+            except (json_lib.JSONDecodeError, ValueError) as e:
+                body_preview = response.text[:200] if response.text else "<empty>"
+                lib_logger.warning(
+                    "Invalid JSON in Kilocode model discovery: %s — body: %s",
+                    e, body_preview,
+                )
+                return []
+
             return [
-                f"kilocode/{model['id']}" for model in response.json().get("data", [])
+                f"kilocode/{model['id']}"
+                for model in data.get("data", [])
+                if isinstance(model, dict) and "id" in model
             ]
+        except httpx.HTTPStatusError as e:
+            lib_logger.warning(
+                "Kilocode model discovery HTTP %d", e.response.status_code,
+            )
+            return []
         except httpx.RequestError as e:
             lib_logger.error(f"Failed to fetch Kilocode models: {e}")
             return []
