@@ -9,33 +9,42 @@ from typing import Dict, Type
 
 lib_logger = logging.getLogger("rotator_library")
 
-from .provider_interface import ProviderInterface
-from .gemini_auth_base import GeminiAuthBase
-from .qwen_auth_base import QwenAuthBase
-from .iflow_auth_base import IFlowAuthBase
-from .antigravity_auth_base import AntigravityAuthBase
-from .colin_provider import ColinProvider
+from .provider_interface import ProviderInterface as _ProviderInterface
+from .gemini_auth_base import GeminiAuthBase as _GeminiAuthBase
+from .qwen_auth_base import QwenAuthBase as _QwenAuthBase
+from .iflow_auth_base import IFlowAuthBase as _IFlowAuthBase
+from .antigravity_auth_base import AntigravityAuthBase as _AntigravityAuthBase
+from .colin_provider import ColinProvider as _ColinProvider
 from .dynamic_provider import DynamicOpenAICompatibleProvider
+
+__all__ = [
+    "PROVIDER_PLUGINS",
+    "PROVIDER_AUTH_MAP",
+    "DynamicOpenAICompatibleProvider",
+    "get_provider",
+    "list_providers",
+    "get_all_providers",
+]
 
 # --- Provider Plugin System ---
 
 # Dictionary to hold discovered provider classes, mapping provider name to class
-PROVIDER_PLUGINS: Dict[str, Type[ProviderInterface]] = {}
+PROVIDER_PLUGINS: Dict[str, Type[_ProviderInterface]] = {}
 
 # Compatibility registry for auth/credential tooling imports.
 PROVIDER_AUTH_MAP: Dict[str, type] = {
-    "gemini_cli": GeminiAuthBase,
-    "qwen_code": QwenAuthBase,
-    "iflow": IFlowAuthBase,
-    "antigravity": AntigravityAuthBase,
-    "colin": ColinProvider,
+    "gemini_cli": _GeminiAuthBase,
+    "qwen_code": _QwenAuthBase,
+    "iflow": _IFlowAuthBase,
+    "antigravity": _AntigravityAuthBase,
+    "colin": _ColinProvider,
 }
 
 
 # --- Pre-register providers with custom logic ---
 # These providers implement has_custom_logic() = True and need early registration
 # to bypass the standard litellm flow
-PROVIDER_PLUGINS["colin"] = ColinProvider
+PROVIDER_PLUGINS["colin"] = _ColinProvider
 
 
 # --- Lazy Provider Loading ---
@@ -57,8 +66,8 @@ def _try_load_from_module(module_path: str, provider_name: str):
         attribute = getattr(module, attribute_name)
         if (
             isinstance(attribute, type)
-            and issubclass(attribute, ProviderInterface)
-            and attribute is not ProviderInterface
+            and issubclass(attribute, _ProviderInterface)
+            and attribute is not _ProviderInterface
         ):
             PROVIDER_PLUGINS[provider_name] = attribute
             lib_logger.debug(
@@ -170,16 +179,7 @@ def _ensure_dynamic_providers():
             )
 
 
-def __getattr__(name: str):
-    """Lazy module-level attribute access (PEP 562)."""
-    if name == "AntigravityProvider":
-        from .antigravity import AntigravityProvider
-        globals()["AntigravityProvider"] = AntigravityProvider
-        return AntigravityProvider
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def get_all_providers() -> Dict[str, Type[ProviderInterface]]:
+def get_all_providers() -> Dict[str, Type[_ProviderInterface]]:
     """
     Get all available providers, loading them lazily as needed.
     Maintains backward compatibility with code expecting PROVIDER_PLUGINS.

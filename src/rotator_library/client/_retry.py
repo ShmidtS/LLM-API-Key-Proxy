@@ -122,6 +122,49 @@ class RetryMixin:
                     e,
                 )
 
+    async def _classify_log_error(
+        self, e, provider: str, current_cred: str, model: str,
+        attempt: int, request_headers: dict,
+    ):
+        """Classify error, extract message, and log failure. Returns (ClassifiedError, str)."""
+        classified = classify_error(e, provider=provider)
+        error_message = str(e).split("\n")[0]
+        log_failure(
+            api_key=current_cred, model=model,
+            attempt=attempt, error=e,
+            request_headers=request_headers,
+        )
+        return classified, error_message
+
+    async def _apply_error_classifications(
+        self, provider, current_cred, model, e, classified_error,
+    ):
+        """Handle rate_limit and quota_exceeded classification logic.
+        Returns "force_rotate" if quota failure limit reached, "rotate" otherwise.
+        """
+        if classified_error.error_type == "rate_limit":
+            await self._process_rate_limit(
+                provider, current_cred, e,
+                str(e) if e else None, classified_error,
+            )
+            await self._resilience.record_rate_429(
+                provider, retry_after=classified_error.retry_after
+            )
+        if classified_error.error_type == "quota_exceeded":
+            await self._apply_quota_cooldown(
+                provider, current_cred, classified_error
+            )
+            if await self.increment_quota_failures(current_cred, provider):
+                lib_logger.error(
+                    "Cred %s quota failure limit reached (3/3), forcing rotation.",
+                    mask_credential(current_cred),
+                )
+                await self.usage_manager.record_failure(
+                    current_cred, model, classified_error
+                )
+                return "force_rotate"
+        return "rotate"
+
     async def _prepare_request_context(
         self,
         model: str,
@@ -491,39 +534,24 @@ class RetryMixin:
                             httpx.HTTPStatusError,
                         ) as e:
                             last_exception = e
-                            classified_error = classify_error(e, provider=provider)
-                            error_message = str(e).split("\n")[0]
+                            classified_error, error_message = await self._classify_log_error(
+                                e, provider, current_cred, model,
+                                attempt + 1, self._build_request_headers(request),
+                            )
 
-                            # Reset LiteLLM client cache on auth errors (401/403)
-                            # Bad credentials can poison cached clients; don't clear on 429/500
                             self._reset_cache_on_auth_error(
-                                classified_error,
-                                e,
-                                provider=provider,
-                                credential=current_cred,
+                                classified_error, e,
+                                provider=provider, credential=current_cred,
                             )
 
-                            log_failure(
-                                api_key=current_cred,
-                                model=model,
-                                attempt=attempt + 1,
-                                error=e,
-                                request_headers=self._build_request_headers(request),
-                            )
-
-                            # Record in accumulator for client reporting
                             error_accumulator.record_error(
                                 current_cred, classified_error, error_message
                             )
 
-                            # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
                                 await self._process_rate_limit(
-                                    provider,
-                                    current_cred,
-                                    e,
-                                    str(e) if e else None,
-                                    classified_error,
+                                    provider, current_cred, e,
+                                    str(e) if e else None, classified_error,
                                 )
                                 async with HalfOpenSlot(self._resilience, provider):
                                     lib_logger.error(
@@ -532,33 +560,12 @@ class RetryMixin:
                                     )
                                     raise last_exception
 
-                            # Only rate_limit errors can indicate IP-level throttling;
-                            # quota_exceeded / invalid_request / auth errors are per-credential
-                            if classified_error.error_type == "rate_limit":
-                                await self._process_rate_limit(
-                                    provider,
-                                    current_cred,
-                                    e,
-                                    str(e) if e else None,
-                                    classified_error,
-                                )
-                                await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
-
-                            # Track consecutive quota failures and force rotation if needed
-                            if classified_error.error_type == "quota_exceeded":
-                                await self._apply_quota_cooldown(
-                                    provider, current_cred, classified_error
-                                )
-                                if await self.increment_quota_failures(current_cred, provider):
-                                    lib_logger.error(
-                                        "Cred %s quota failure limit reached (3/3), forcing rotation.",
-                                        mask_credential(current_cred),
-                                    )
-                                    await self.usage_manager.record_failure(
-                                        current_cred, model, classified_error
-                                    )
-                                    async with HalfOpenSlot(self._resilience, provider):
-                                        break  # Force rotation
+                            action = await self._apply_error_classifications(
+                                provider, current_cred, model, e, classified_error,
+                            )
+                            if action == "force_rotate":
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break
 
                             await self.usage_manager.record_failure(
                                 current_cred, model, classified_error
@@ -570,7 +577,7 @@ class RetryMixin:
                                 classified_error.status_code,
                             )
                             async with HalfOpenSlot(self._resilience, provider):
-                                break  # Rotate to next credential
+                                break
 
                         except (
                             APIConnectionError,
@@ -798,19 +805,11 @@ class RetryMixin:
 
                         except litellm.RateLimitError as e:
                             last_exception = e
-                            log_failure(
-                                api_key=current_cred,
-                                model=model,
-                                attempt=attempt + 1,
-                                error=e,
-                                request_headers=self._build_request_headers(request),
+                            classified_error, error_message = await self._classify_log_error(
+                                e, provider, current_cred, model,
+                                attempt + 1, self._build_request_headers(request),
                             )
-                            classified_error = classify_error(e, provider=provider)
 
-                            # Extract a clean error message for the user-facing log
-                            error_message = str(e).split("\n")[0]
-
-                            # Record in accumulator for client reporting
                             error_accumulator.record_error(
                                 current_cred, classified_error, error_message
                             )
@@ -820,39 +819,18 @@ class RetryMixin:
                                 mask_credential(current_cred), model,
                             )
 
-                            # Only rate_limit errors can indicate IP-level throttling;
-                            # quota_exceeded / invalid_request / auth errors are per-credential
-                            if classified_error.error_type == "rate_limit":
-                                await self._process_rate_limit(
-                                    provider,
-                                    current_cred,
-                                    e,
-                                    str(e) if e else None,
-                                    classified_error,
-                                )
-                                await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
-
-                            # Track consecutive quota failures and force rotation if needed
-                            if classified_error.error_type == "quota_exceeded":
-                                await self._apply_quota_cooldown(
-                                    provider, current_cred, classified_error
-                                )
-                                if await self.increment_quota_failures(current_cred, provider):
-                                    lib_logger.error(
-                                        "Cred %s quota failure limit reached (3/3), forcing rotation.",
-                                        mask_credential(current_cred),
-                                    )
-                                    await self.usage_manager.record_failure(
-                                        current_cred, model, classified_error
-                                    )
-                                    async with HalfOpenSlot(self._resilience, provider):
-                                        break  # Force rotation
+                            action = await self._apply_error_classifications(
+                                provider, current_cred, model, e, classified_error,
+                            )
+                            if action == "force_rotate":
+                                async with HalfOpenSlot(self._resilience, provider):
+                                    break
 
                             await self.usage_manager.record_failure(
                                 current_cred, model, classified_error
                             )
                             async with HalfOpenSlot(self._resilience, provider):
-                                break  # Move to the next key
+                                break
 
                         except (
                             APIConnectionError,
@@ -926,26 +904,15 @@ class RetryMixin:
                             continue  # Retry with the same key
 
                         except httpx.HTTPStatusError as e:
-                            # Handle HTTP errors from httpx (e.g., from custom providers like Antigravity)
                             last_exception = e
-                            log_failure(
-                                api_key=current_cred,
-                                model=model,
-                                attempt=attempt + 1,
-                                error=e,
-                                request_headers=self._build_request_headers(request),
+                            classified_error, error_message = await self._classify_log_error(
+                                e, provider, current_cred, model,
+                                attempt + 1, self._build_request_headers(request),
                             )
 
-                            classified_error = classify_error(e, provider=provider)
-                            error_message = str(e).split("\n")[0]
-
-                            # Reset LiteLLM client cache on auth errors (401/403)
-                            # Bad credentials can poison cached clients; don't clear on 429/500
                             self._reset_cache_on_auth_error(
-                                classified_error,
-                                e,
-                                provider=provider,
-                                credential=current_cred,
+                                classified_error, e,
+                                provider=provider, credential=current_cred,
                             )
 
                             lib_logger.warning(
@@ -955,14 +922,10 @@ class RetryMixin:
                                 classified_error.error_type,
                             )
 
-                            # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
                                 await self._process_rate_limit(
-                                    provider,
-                                    current_cred,
-                                    e,
-                                    str(e) if e else None,
-                                    classified_error,
+                                    provider, current_cred, e,
+                                    str(e) if e else None, classified_error,
                                 )
                                 async with HalfOpenSlot(self._resilience, provider):
                                     lib_logger.error(
@@ -971,28 +934,14 @@ class RetryMixin:
                                     )
                                     raise last_exception
 
-                            # Record in accumulator after confirming it's a rotatable error
                             error_accumulator.record_error(
                                 current_cred, classified_error, error_message
                             )
 
-                            # Only rate_limit errors can indicate IP-level throttling;
-                            # quota_exceeded / invalid_request / auth errors are per-credential
-                            if classified_error.error_type == "rate_limit":
-                                await self._process_rate_limit(
-                                    provider,
-                                    current_cred,
-                                    e,
-                                    str(e) if e else None,
-                                    classified_error,
-                                )
-                                await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
-                            if classified_error.error_type == "quota_exceeded":
-                                await self._apply_quota_cooldown(
-                                    provider, current_cred, classified_error
-                                )
+                            await self._apply_error_classifications(
+                                provider, current_cred, model, e, classified_error,
+                            )
 
-                            # Check if we should retry same key (server errors with retries left)
                             if (
                                 should_retry_same_key(classified_error)
                                 and attempt < self.max_retries - 1
@@ -1006,11 +955,8 @@ class RetryMixin:
                                         wait_time,
                                     )
                                     await asyncio.sleep(wait_time)
-
-                                    # HTTP client pool refreshed at start of next attempt
                                     continue
 
-                            # Record failure and rotate to next key
                             await self.usage_manager.record_failure(
                                 current_cred, model, classified_error
                             )
@@ -1041,12 +987,9 @@ class RetryMixin:
                                 break
                         except Exception as e:
                             last_exception = e
-                            log_failure(
-                                api_key=current_cred,
-                                model=model,
-                                attempt=attempt + 1,
-                                error=e,
-                                request_headers=self._build_request_headers(request),
+                            classified_error, error_message = await self._classify_log_error(
+                                e, provider, current_cred, model,
+                                attempt + 1, self._build_request_headers(request),
                             )
 
                             if request and await request.is_disconnected():
@@ -1057,9 +1000,6 @@ class RetryMixin:
                                 async with HalfOpenSlot(self._resilience, provider):
                                     raise last_exception
 
-                            classified_error = classify_error(e, provider=provider)
-                            error_message = str(e).split("\n")[0]
-
                             lib_logger.warning(
                                 "Key %s %s (HTTP %s).",
                                 mask_credential(current_cred),
@@ -1067,25 +1007,12 @@ class RetryMixin:
                                 classified_error.status_code,
                             )
 
-                            # Only rate_limit errors can indicate IP-level throttling;
-                            # quota_exceeded / invalid_request / auth errors are per-credential
-                            if classified_error.error_type == "rate_limit":
-                                await self._process_rate_limit(
-                                    provider,
-                                    current_cred,
-                                    e,
-                                    str(e) if e else None,
-                                    classified_error,
-                                )
-                                await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
-                            if classified_error.error_type == "quota_exceeded":
-                                await self._apply_quota_cooldown(
-                                    provider, current_cred, classified_error
-                                )
+                            await self._apply_error_classifications(
+                                provider, current_cred, model, e, classified_error,
+                            )
 
-                            # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
-                                _cb_slot_held = False  # HalfOpenSlot will handle release
+                                _cb_slot_held = False
                                 async with HalfOpenSlot(self._resilience, provider):
                                     lib_logger.error(
                                         "Non-recoverable error (%s). Failing request.",
@@ -1093,7 +1020,6 @@ class RetryMixin:
                                     )
                                     raise last_exception
 
-                            # Record in accumulator after confirming it's a rotatable error
                             error_accumulator.record_error(
                                 current_cred, classified_error, error_message
                             )
@@ -1101,9 +1027,9 @@ class RetryMixin:
                             await self.usage_manager.record_failure(
                                 current_cred, model, classified_error
                             )
-                            _cb_slot_held = False  # HalfOpenSlot will handle release
+                            _cb_slot_held = False
                             async with HalfOpenSlot(self._resilience, provider):
-                                break  # Try next key for other errors
+                                break
             finally:
                 if key_acquired and current_cred:
                     await self.usage_manager.release_key(current_cred, model)
@@ -1413,23 +1339,13 @@ class RetryMixin:
 
                                 # Only rate_limit errors can indicate IP-level throttling;
                                 # quota_exceeded / invalid_request / auth errors are per-credential
-                                if classified_error.error_type == "rate_limit":
-                                    await self._process_rate_limit(
-                                        provider,
-                                        current_cred,
-                                        e,
-                                        str(e) if e else None,
-                                        classified_error,
-                                    )
-                                    await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
-                                if classified_error.error_type == "quota_exceeded":
-                                    await self._apply_quota_cooldown(
-                                        provider, current_cred, classified_error
-                                    )
-
-                                await self.usage_manager.record_failure(
-                                    current_cred, model, classified_error
+                                action = await self._apply_error_classifications(
+                                    provider, current_cred, model, e, classified_error,
                                 )
+                                if action != "force_rotate":
+                                    await self.usage_manager.record_failure(
+                                        current_cred, model, classified_error
+                                    )
                                 lib_logger.warning(
                                     "Cred %s %s (HTTP %s). Rotating.",
                                     mask_credential(current_cred),
@@ -1446,17 +1362,10 @@ class RetryMixin:
                                 RuntimeError,  # "Cannot send a request, as the client has been closed"
                             ) as e:
                                 last_exception = e
-                                log_failure(
-                                    api_key=current_cred,
-                                    model=model,
-                                    attempt=attempt + 1,
-                                    error=e,
-                                    request_headers=(
-                                        _cached_request_headers
-                                    ),
+                                classified_error, error_message = await self._classify_log_error(
+                                    e, provider, current_cred, model,
+                                    attempt + 1, _cached_request_headers,
                                 )
-                                classified_error = classify_error(e, provider=provider)
-                                error_message = str(e).split("\n")[0]
 
                                 # Provider-level error: don't increment consecutive failures
                                 await self.usage_manager.record_failure(
@@ -1513,17 +1422,10 @@ class RetryMixin:
                                 httpx.ConnectError,
                             ) as e:
                                 last_exception = e
-                                log_failure(
-                                    api_key=current_cred,
-                                    model=model,
-                                    attempt=attempt + 1,
-                                    error=e,
-                                    request_headers=(
-                                        _cached_request_headers
-                                    ),
+                                classified_error, error_message = await self._classify_log_error(
+                                    e, provider, current_cred, model,
+                                    attempt + 1, _cached_request_headers,
                                 )
-                                classified_error = classify_error(e, provider=provider)
-                                error_message = str(e).split("\n")[0]
 
                                 error_accumulator.record_error(
                                     current_cred, classified_error, error_message
@@ -1580,17 +1482,10 @@ class RetryMixin:
                                 raise
                             except Exception as e:
                                 last_exception = e
-                                log_failure(
-                                    api_key=current_cred,
-                                    model=model,
-                                    attempt=attempt + 1,
-                                    error=e,
-                                    request_headers=(
-                                        _cached_request_headers
-                                    ),
+                                classified_error, error_message = await self._classify_log_error(
+                                    e, provider, current_cred, model,
+                                    attempt + 1, _cached_request_headers,
                                 )
-                                classified_error = classify_error(e, provider=provider)
-                                error_message = str(e).split("\n")[0]
 
                                 # Record in accumulator
                                 error_accumulator.record_error(
@@ -1620,25 +1515,13 @@ class RetryMixin:
                                         )
                                         raise last_exception
 
-                                # Only rate_limit errors can indicate IP-level throttling;
-                                # quota_exceeded / invalid_request / auth errors are per-credential
-                                if classified_error.error_type == "rate_limit":
-                                    await self._process_rate_limit(
-                                        provider,
-                                        current_cred,
-                                        e,
-                                        str(e) if e else None,
-                                        classified_error,
-                                    )
-                                    await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
-                                if classified_error.error_type == "quota_exceeded":
-                                    await self._apply_quota_cooldown(
-                                        provider, current_cred, classified_error
-                                    )
-
-                                await self.usage_manager.record_failure(
-                                    current_cred, model, classified_error
+                                action = await self._apply_error_classifications(
+                                    provider, current_cred, model, e, classified_error,
                                 )
+                                if action != "force_rotate":
+                                    await self.usage_manager.record_failure(
+                                        current_cred, model, classified_error
+                                    )
                                 async with HalfOpenSlot(self._resilience, provider):
                                     break
 
@@ -1975,25 +1858,13 @@ class RetryMixin:
                                     classified_error.error_type,
                                 )
 
-                                # Only rate_limit errors can indicate IP-level throttling;
-                                # quota_exceeded / invalid_request / auth errors are per-credential
-                                if classified_error.error_type == "rate_limit":
-                                    await self._process_rate_limit(
-                                        provider,
-                                        current_cred,
-                                        original_exc,
-                                        str(original_exc) if original_exc else None,
-                                        classified_error,
-                                    )
-                                    await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
-                                if classified_error.error_type == "quota_exceeded":
-                                    await self._apply_quota_cooldown(
-                                        provider, current_cred, classified_error
-                                    )
-
-                                await self.usage_manager.record_failure(
-                                    current_cred, model, classified_error
+                                action = await self._apply_error_classifications(
+                                    provider, current_cred, model, original_exc, classified_error,
                                 )
+                                if action != "force_rotate":
+                                    await self.usage_manager.record_failure(
+                                        current_cred, model, classified_error
+                                    )
                                 async with HalfOpenSlot(self._resilience, provider):
                                     break
 
@@ -2005,15 +1876,10 @@ class RetryMixin:
                         ) as e:
                             consecutive_quota_failures = 0
                             last_exception = e
-                            log_failure(
-                                api_key=current_cred,
-                                model=model,
-                                attempt=attempt + 1,
-                                error=e,
-                                request_headers=self._build_request_headers(request),
+                            classified_error, error_message_text = await self._classify_log_error(
+                                e, provider, current_cred, model,
+                                attempt + 1, self._build_request_headers(request),
                             )
-                            classified_error = classify_error(e, provider=provider)
-                            error_message_text = str(e).split("\n")[0]
 
                             # Record error in accumulator (server errors are transient, not abnormal)
                             error_accumulator.record_error(
@@ -2069,15 +1935,10 @@ class RetryMixin:
                         ) as e:
                             consecutive_quota_failures = 0
                             last_exception = e
-                            log_failure(
-                                api_key=current_cred,
-                                model=model,
-                                attempt=attempt + 1,
-                                error=e,
-                                request_headers=self._build_request_headers(request),
+                            classified_error, error_message_text = await self._classify_log_error(
+                                e, provider, current_cred, model,
+                                attempt + 1, self._build_request_headers(request),
                             )
-                            classified_error = classify_error(e, provider=provider)
-                            error_message_text = str(e).split("\n")[0]
 
                             # Record error in accumulator
                             error_accumulator.record_error(
@@ -2135,15 +1996,10 @@ class RetryMixin:
                         except Exception as e:
                             consecutive_quota_failures = 0
                             last_exception = e
-                            log_failure(
-                                api_key=current_cred,
-                                model=model,
-                                attempt=attempt + 1,
-                                error=e,
-                                request_headers=self._build_request_headers(request),
+                            classified_error, error_message_text = await self._classify_log_error(
+                                e, provider, current_cred, model,
+                                attempt + 1, self._build_request_headers(request),
                             )
-                            classified_error = classify_error(e, provider=provider)
-                            error_message_text = str(e).split("\n")[0]
 
                             # Record error in accumulator
                             error_accumulator.record_error(
@@ -2158,21 +2014,9 @@ class RetryMixin:
                                 error_message_text,
                             )
 
-                            # Only rate_limit errors can indicate IP-level throttling;
-                            # quota_exceeded / invalid_request / auth errors are per-credential
-                            if classified_error.error_type == "rate_limit":
-                                await self._process_rate_limit(
-                                    provider,
-                                    current_cred,
-                                    e,
-                                    str(e) if e else None,
-                                    classified_error,
-                                )
-                                await self._resilience.record_rate_429(provider, retry_after=classified_error.retry_after)
-                            if classified_error.error_type == "quota_exceeded":
-                                await self._apply_quota_cooldown(
-                                    provider, current_cred, classified_error
-                                )
+                            action = await self._apply_error_classifications(
+                                provider, current_cred, model, e, classified_error,
+                            )
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
@@ -2185,9 +2029,10 @@ class RetryMixin:
                                     raise last_exception
 
                             # Record failure and rotate to next key
-                            await self.usage_manager.record_failure(
-                                current_cred, model, classified_error
-                            )
+                            if action != "force_rotate":
+                                await self.usage_manager.record_failure(
+                                    current_cred, model, classified_error
+                                )
                             lib_logger.info(
                                 "Rotating to next key after %s error.",
                                 classified_error.error_type,

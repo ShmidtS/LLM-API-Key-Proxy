@@ -8,8 +8,6 @@ completion path in the retry layer to avoid ~140 lines of duplicated
 aggregation logic.
 """
 
-from __future__ import annotations
-
 import time
 from typing import Any
 

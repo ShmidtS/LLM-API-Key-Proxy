@@ -3,8 +3,6 @@
 
 """Constants, exceptions, and helper functions for Antigravity provider."""
 
-from __future__ import annotations
-
 import functools
 import logging
 import random

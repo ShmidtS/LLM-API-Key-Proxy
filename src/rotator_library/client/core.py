@@ -646,13 +646,28 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
             **kwargs,
         )
 
+    def _media_request(
+        self,
+        endpoint_fn: callable,
+        request: Optional[Any] = None,
+        pre_request_callback: Optional[callable] = None,
+        **kwargs,
+    ) -> Any:
+        return self._rate_limited_execute(
+            endpoint_fn,
+            request=request,
+            pre_request_callback=pre_request_callback,
+            **kwargs,
+        )
+
     def aimage_generation(
         self,
         request: Optional[Any] = None,
         pre_request_callback: Optional[callable] = None,
         **kwargs,
     ) -> Any:
-        return self._rate_limited_execute(
+        """Generate an image via the image generation endpoint."""
+        return self._media_request(
             litellm.aimage_generation,
             request=request,
             pre_request_callback=pre_request_callback,
@@ -665,7 +680,8 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         pre_request_callback: Optional[callable] = None,
         **kwargs,
     ) -> Any:
-        return self._rate_limited_execute(
+        """Edit an image via the image edit endpoint."""
+        return self._media_request(
             litellm.aimage_edit,
             request=request,
             pre_request_callback=pre_request_callback,
@@ -678,7 +694,8 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         pre_request_callback: Optional[callable] = None,
         **kwargs,
     ) -> Any:
-        return self._rate_limited_execute(
+        """Create a variation of an image via the image variation endpoint."""
+        return self._media_request(
             litellm.aimage_variation,
             request=request,
             pre_request_callback=pre_request_callback,
@@ -691,7 +708,8 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         pre_request_callback: Optional[callable] = None,
         **kwargs,
     ) -> Any:
-        return self._rate_limited_execute(
+        """Generate speech audio via the speech endpoint."""
+        return self._media_request(
             litellm.aspeech,
             request=request,
             pre_request_callback=pre_request_callback,
@@ -704,7 +722,8 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         pre_request_callback: Optional[callable] = None,
         **kwargs,
     ) -> Any:
-        return self._rate_limited_execute(
+        """Transcribe audio via the transcription endpoint."""
+        return self._media_request(
             litellm.atranscription,
             request=request,
             pre_request_callback=pre_request_callback,

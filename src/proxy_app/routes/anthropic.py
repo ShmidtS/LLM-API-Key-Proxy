@@ -18,7 +18,7 @@ from rotator_library.anthropic_compat import (
 from proxy_app.dependencies import get_rotating_client, verify_anthropic_api_key, track_stream
 from proxy_app.detailed_logger import RawIOLogger
 from proxy_app.streaming import make_sse_response
-from proxy_app.request_logger import log_request_to_console
+from proxy_app.routes._helpers import log_request_to_console
 from proxy_app.routes.error_handler import handle_route_errors
 
 router = APIRouter(tags=["anthropic"])
@@ -44,9 +44,15 @@ async def anthropic_messages(
     enable_raw_logging = getattr(request.app.state, "enable_raw_logging", False)
     logger = RawIOLogger() if enable_raw_logging else None
 
-    # Parse raw body once with orjson to preserve payload for logging.
-    body_data = orjson.loads(await request.body())
-    body = AnthropicMessagesRequest.model_validate(body_data)
+    # Parse raw body — use model_validate_json (single parse) unless raw logging
+    # needs the original dict, in which case parse twice for correctness.
+    raw_body = await request.body()
+    if enable_raw_logging:
+        body_data = orjson.loads(raw_body)
+        body = AnthropicMessagesRequest.model_validate(body_data)
+    else:
+        body = AnthropicMessagesRequest.model_validate_json(raw_body)
+        body_data = body.model_dump()
 
     # Log raw Anthropic request if raw logging is enabled
     if logger:

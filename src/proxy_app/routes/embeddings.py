@@ -12,7 +12,7 @@ from rotator_library import RotatingClient
 from proxy_app.models import EmbeddingRequest
 from proxy_app.dependencies import get_rotating_client, get_embedding_batcher, verify_api_key, make_error_response
 from proxy_app.batch_manager import EmbeddingBatcher
-from proxy_app.request_logger import log_request_to_console
+from proxy_app.routes._helpers import log_request_to_console
 
 router = APIRouter(tags=["embeddings"])
 

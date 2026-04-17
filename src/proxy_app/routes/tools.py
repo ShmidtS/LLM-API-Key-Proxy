@@ -6,7 +6,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 
 from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key, make_error_response
-from proxy_app.request_logger import log_request_to_console
+from proxy_app.routes._helpers import log_request_to_console
 from proxy_app.routes.error_handler import handle_route_errors
 from proxy_app.routes._helpers import proxy_provider_call
 

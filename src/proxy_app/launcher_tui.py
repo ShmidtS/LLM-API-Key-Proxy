@@ -294,10 +294,10 @@ class SettingsDetector:
     def detect_provider_settings() -> dict:
         """Detect provider-specific settings (Antigravity, Gemini CLI)"""
         try:
-            from proxy_app.settings_tool import PROVIDER_SETTINGS_MAP
+            from proxy_app._provider_settings import PROVIDER_SETTINGS_MAP
         except ImportError:
             # Fallback for direct execution or testing
-            from .settings_tool import PROVIDER_SETTINGS_MAP
+            from ._provider_settings import PROVIDER_SETTINGS_MAP
 
         provider_settings = {}
         env_vars = SettingsDetector._load_local_env()
