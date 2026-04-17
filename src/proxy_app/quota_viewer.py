@@ -6,42 +6,6 @@ Lightweight Quota Stats Viewer TUI.
 
 Connects to a running proxy to display quota and usage statistics.
 Uses only httpx + rich (no heavy rotator_library imports).
-
-TODO: Missing Features & Improvements
-======================================
-
-Display Improvements:
-- [ ] Add color legend/help screen explaining status colors and symbols
-- [ ] Show credential email/project ID if available (currently just filename)
-- [ ] Add keyboard shortcut hints (e.g., "Press ? for help")
-- [ ] Support terminal resize / responsive layout
-
-Global Stats Fix:
-- [ ] HACK: Global requests currently set to current period requests only
-      (see client.py get_quota_stats). This doesn't include archived stats.
-      Fix requires tracking archived requests per quota group in usage_manager.py
-      to avoid double-counting models that share quota groups.
-
-Data & Refresh:
-- [ ] Auto-refresh option (configurable interval)
-- [ ] Show last refresh timestamp more prominently
-- [ ] Cache invalidation when switching between current/global view
-- [ ] Support for non-OAuth providers (API keys like nvapi-*, gsk_*, etc.)
-
-Remote Management:
-- [ ] Test connection before saving remote
-- [ ] Import/export remote configurations
-- [ ] SSH tunnel support for remote proxies
-
-Quota Groups:
-- [ ] Show which models are in each quota group (expandable)
-- [ ] Historical quota usage graphs (if data available)
-- [ ] Alerts/notifications when quota is low
-
-Credential Details:
-- [ ] Show per-model breakdown within quota groups
-- [ ] Edit credential priority/tier manually
-- [ ] Disable/enable individual credentials
 """
 
 import logging

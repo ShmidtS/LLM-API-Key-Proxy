@@ -139,7 +139,7 @@ class QuotaReporter:
                     if group_stats["total_requests_max"] > 0:
                         used = group_stats["total_requests_used"]
                         max_r = group_stats["total_requests_max"]
-                        group_stats["total_requests_remaining"] = max_r - used
+                        group_stats["total_requests_remaining"] = max(0, max_r - used)
                         group_stats["total_remaining_pct"] = max(
                             0, int((1 - used / max_r) * 100)
                         )
@@ -241,24 +241,14 @@ class QuotaReporter:
                                 ),
                             }
 
-                    # Recalculate credential's requests from model_groups
-                    # This fixes double-counting when models share quota groups
+                    # Recalculate only current-period requests from model_groups
+                    # to avoid double-counting shared quota pools while preserving lifetime totals.
                     if cred.get("model_groups"):
                         group_requests = sum(
                             g.get("requests_used", 0)
                             for g in cred["model_groups"].values()
                         )
                         cred["requests"] = group_requests
-
-                        # HACK: Fix global requests if present
-                        # This is a simplified fix that sets global.requests = current group_requests.
-                        # TODO: Properly track archived requests per quota group in usage_manager.py
-                        # so that global stats correctly sum: current_period + archived_periods
-                        # without double-counting models that share quota groups.
-                        # See: usage_manager.py lines 2388-2404 where global stats are built
-                        # by iterating all models (causing double-counting for grouped models).
-                        if cred.get("global"):
-                            cred["global"]["requests"] = group_requests
 
                     # Try to get email from provider's cache
                     cred_path = cred.get("full_path", "")

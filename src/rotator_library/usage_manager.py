@@ -2033,6 +2033,8 @@ class UsageManager:
             model,
             {
                 "success_count": 0,
+                "failure_count": 0,
+                "request_count": 0,
                 "prompt_tokens": 0,
                 "prompt_tokens_cached": 0,
                 "prompt_tokens_cache_creation": 0,
@@ -2043,6 +2045,8 @@ class UsageManager:
         )
 
         global_model["success_count"] += model_data.get("success_count", 0)
+        global_model["failure_count"] += model_data.get("failure_count", 0)
+        global_model["request_count"] += model_data.get("request_count", 0)
         global_model["prompt_tokens"] += model_data.get("prompt_tokens", 0)
         global_model["prompt_tokens_cached"] = global_model.get(
             "prompt_tokens_cached", 0
@@ -4082,7 +4086,12 @@ class UsageManager:
                 for model_name, model_stats in global_models.items():
                     if not isinstance(model_stats, dict):
                         continue
-                    cred_global_requests += model_stats.get("success_count", 0)
+                    req_count = model_stats.get("request_count", 0)
+                    if req_count > 0:
+                        cred_global_requests += req_count
+                    else:
+                        cred_global_requests += model_stats.get("success_count", 0)
+                        cred_global_requests += model_stats.get("failure_count", 0)
                     cred_global_tokens["input_cached"] += model_stats.get(
                         "prompt_tokens_cached", 0
                     )

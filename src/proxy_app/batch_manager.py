@@ -4,6 +4,7 @@
 """Batch embedding request aggregation. Collects individual embedding requests and merges them into batched API calls for improved throughput."""
 
 import asyncio
+from collections import defaultdict
 from typing import List, Dict, Any, Tuple
 import time
 from rotator_library import RotatingClient
@@ -30,50 +31,73 @@ class EmbeddingBatcher:
         while True:
             batch, futures = await self._gather_batch()
             if not batch:
-                # No items arrived during the timeout window — yield to event loop
                 await asyncio.sleep(0)
                 continue
 
-            try:
-                # Assume all requests in a batch use the same model and other settings
-                model = batch[0]["model"]
-                inputs = [item["input"][0] for item in batch] # Extract single string input
+            grouped_batches = defaultdict(lambda: {"batch": [], "futures": []})
+            for request, future in zip(batch, futures):
+                batch_key = (
+                    request.get("model"),
+                    request.get("input_type"),
+                    request.get("dimensions"),
+                    request.get("user"),
+                )
+                grouped_batches[batch_key]["batch"].append(request)
+                grouped_batches[batch_key]["futures"].append(future)
 
-                batched_request = {
-                    "model": model,
-                    "input": inputs
-                }
-                
-                # Pass through any other relevant parameters from the first request
-                for key in ["input_type", "dimensions", "user"]:
-                    if key in batch[0]:
-                        batched_request[key] = batch[0][key]
+            for grouped in grouped_batches.values():
+                grouped_batch = grouped["batch"]
+                grouped_futures = grouped["futures"]
 
-                response = await self.client.aembedding(**batched_request)
-                
-                # Distribute results back to the original requesters
-                for i, future in enumerate(futures):
-                    if i >= len(response.data):
-                        future.set_exception(IndexError(f"Batch response has {len(response.data)} items but batch has {len(futures)} requests"))
-                        continue
-                    # Create a new response object for each item in the batch
-                    single_response_data = {
-                        "object": response.object,
-                        "model": response.model,
-                        "data": [response.data[i]],
-                        "usage": response.usage # Usage is for the whole batch
+                try:
+                    model = grouped_batch[0]["model"]
+                    first_input = grouped_batch[0]["input"]
+                    if isinstance(first_input, list):
+                        if len(grouped_batch) != 1:
+                            raise ValueError("Embedding batch requests with list input cannot be merged")
+                        inputs = first_input
+                    else:
+                        inputs = [item["input"] for item in grouped_batch]
+
+                    batched_request = {
+                        "model": model,
+                        "input": inputs,
                     }
-                    future.set_result(single_response_data)
 
-            except asyncio.CancelledError:
-                for future in futures:
-                    if not future.done():
-                        future.cancel()
-                raise
+                    for key in ["input_type", "dimensions", "user"]:
+                        if key in grouped_batch[0]:
+                            batched_request[key] = grouped_batch[0][key]
 
-            except Exception as e:
-                for future in futures:
-                    future.set_exception(e)
+                    response = await self.client.aembedding(**batched_request)
+
+                    for i, future in enumerate(grouped_futures):
+                        if future.done():
+                            continue
+                        if i >= len(response.data):
+                            future.set_exception(
+                                IndexError(
+                                    f"Batch response has {len(response.data)} items but batch has {len(grouped_futures)} requests"
+                                )
+                            )
+                            continue
+                        single_response_data = {
+                            "object": response.object,
+                            "model": response.model,
+                            "data": [response.data[i]],
+                            "usage": None,
+                        }
+                        future.set_result(single_response_data)
+
+                except asyncio.CancelledError:
+                    for future in grouped_futures:
+                        if not future.done():
+                            future.cancel()
+                    raise
+
+                except Exception as e:
+                    for future in grouped_futures:
+                        if not future.done():
+                            future.set_exception(e)
 
     async def _gather_batch(self) -> Tuple[List[Dict[str, Any]], List[asyncio.Future]]:
         """Collect requests from the queue until batch_size or timeout is reached. Returns: Tuple of (batch request data list, corresponding futures list)."""

@@ -7,6 +7,7 @@ from typing import Callable
 
 import orjson
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from proxy_app.dependencies import make_error_response
 from proxy_app.streaming import handle_litellm_error, LITELLM_ERROR_MAP
@@ -49,6 +50,22 @@ def handle_route_errors(
                 raise HTTPException(
                     status_code=400,
                     detail=make_error_response("Invalid JSON in request body", "invalid_request_error"),
+                )
+            except ValidationError as e:
+                if error_format == "anthropic":
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "type": "error",
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": str(e),
+                            },
+                        },
+                    )
+                raise HTTPException(
+                    status_code=400,
+                    detail=make_error_response(str(e), "invalid_request_error"),
                 )
             except Exception as e:
                 if error_format in ("openai", "anthropic"):

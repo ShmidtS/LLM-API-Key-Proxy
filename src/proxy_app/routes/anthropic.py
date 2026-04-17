@@ -43,11 +43,9 @@ async def anthropic_messages(
     enable_raw_logging = getattr(request.app.state, "enable_raw_logging", False)
     logger = RawIOLogger() if enable_raw_logging else None
 
-    # Parse raw body once with orjson — avoid double Pydantic validate-then-dump round-trip
+    # Parse raw body once with orjson to preserve payload for logging.
     body_data = orjson.loads(await request.body())
-
-    # Construct Pydantic model without validation (data already validated by orjson parsing)
-    body = AnthropicMessagesRequest.model_construct(**body_data)
+    body = AnthropicMessagesRequest.model_validate(body_data)
 
     # Log raw Anthropic request if raw logging is enabled
     if logger:
