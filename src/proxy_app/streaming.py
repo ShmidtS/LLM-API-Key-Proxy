@@ -9,6 +9,7 @@ from typing import AsyncGenerator, Any, Optional
 _GENERIC_STREAM_ERROR_MESSAGE = "An unexpected error occurred during the stream"
 
 from fastapi import HTTPException, Request
+from fastapi.responses import StreamingResponse
 from rotator_library import STREAM_DONE
 from rotator_library.error_types import ClassifiedError
 from rotator_library.utils.json_utils import sse_data_event
@@ -124,6 +125,21 @@ async def streaming_response_wrapper(
                 )
             except Exception as e:
                 logging.exception("Error during stream finalization logging: %s", e)
+
+
+SSE_RESPONSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+
+def make_sse_response(generator) -> StreamingResponse:
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers=SSE_RESPONSE_HEADERS,
+    )
 
 
 LITELLM_ERROR_MAP = [

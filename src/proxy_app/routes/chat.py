@@ -5,11 +5,10 @@ import logging
 
 import orjson
 from fastapi import APIRouter, Request, Depends
-from fastapi.responses import StreamingResponse
 
 from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key
-from proxy_app.streaming import streaming_response_wrapper
+from proxy_app.streaming import streaming_response_wrapper, make_sse_response
 from proxy_app.detailed_logger import RawIOLogger
 from proxy_app.request_logger import log_request_to_console
 from proxy_app.routes.error_handler import handle_route_errors
@@ -92,16 +91,8 @@ async def chat_completions(
 
         if is_streaming:
             response_generator = client.acompletion(request=request, **request_data)
-            return StreamingResponse(
-                streaming_response_wrapper(
-                    request, response_generator, raw_logger
-                ),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
-                },
+            return make_sse_response(
+                streaming_response_wrapper(request, response_generator, raw_logger)
             )
         else:
             response = await client.acompletion(request=request, **request_data)

@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 import orjson
 import litellm
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse
 
 from rotator_library import RotatingClient
 from rotator_library.anthropic_compat import (
@@ -17,6 +17,7 @@ from rotator_library.anthropic_compat import (
 )
 from proxy_app.dependencies import get_rotating_client, verify_anthropic_api_key, track_stream
 from proxy_app.detailed_logger import RawIOLogger
+from proxy_app.streaming import make_sse_response
 from proxy_app.request_logger import log_request_to_console
 from proxy_app.routes.error_handler import handle_route_errors
 
@@ -68,15 +69,7 @@ async def anthropic_messages(
 
     if body.stream:
         # Streaming response
-        return StreamingResponse(
-            track_stream(request, result),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
+        return make_sse_response(track_stream(request, result))
     else:
         # Non-streaming response
         if logger:

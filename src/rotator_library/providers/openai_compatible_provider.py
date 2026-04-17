@@ -57,6 +57,7 @@ class OpenAICompatibleProvider(ProviderInterface):
         static_models = self.model_definitions.get_all_provider_models(
             self.provider_name
         )
+        static_model_ids = {m.split("/")[-1] for m in static_models}
         if static_models:
             models.extend(static_models)
             lib_logger.info(
@@ -98,8 +99,9 @@ class OpenAICompatibleProvider(ProviderInterface):
             dynamic_models = [
                 f"{self.provider_name}/{model['id']}"
                 for model in response_data.get("data", [])
-                if isinstance(model, dict) and "id" in model
-                and model["id"] not in {m.split("/")[-1] for m in static_models}
+                if isinstance(model, dict)
+                and "id" in model
+                and model["id"] not in static_model_ids
             ]
 
             if dynamic_models:

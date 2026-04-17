@@ -3,7 +3,6 @@
 
 import orjson
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import StreamingResponse
 
 from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key, make_error_response
@@ -74,17 +73,11 @@ async def web_search(
     is_streaming = completion_kwargs.get("stream", False)
 
     if is_streaming:
-        from proxy_app.streaming import streaming_response_wrapper
+        from proxy_app.streaming import streaming_response_wrapper, make_sse_response
 
         response_generator = client.acompletion(request=request, **completion_kwargs)
-        return StreamingResponse(
-            streaming_response_wrapper(request, response_generator),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
+        return make_sse_response(
+            streaming_response_wrapper(request, response_generator)
         )
     else:
         response = await client.acompletion(request=request, **completion_kwargs)
