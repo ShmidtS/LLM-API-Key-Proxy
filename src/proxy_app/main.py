@@ -89,7 +89,11 @@ if args.add_credential:
 _start_time = time.time()
 
 # Load all .env files from root folder (main .env first, then any additional *.env files)
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+    logger.warning("python-dotenv not installed; .env files will not be loaded")
 
 # Get the application root directory (EXE dir if frozen, else CWD)
 # Inlined here to avoid triggering heavy rotator_library imports before loading screen
@@ -99,13 +103,15 @@ else:
     _root_dir = Path.cwd()
 
 # Load main .env first
-load_dotenv(_root_dir / ".env")
+if load_dotenv is not None:
+    load_dotenv(_root_dir / ".env")
 
 # Load any additional .env files (e.g., antigravity_all_combined.env, gemini_cli_all_combined.env)
 _env_files_found = list(_root_dir.glob("*.env"))
-for _env_file in sorted(_env_files_found):  # reuse already-computed list
-    if _env_file.name != ".env":  # Skip main .env (already loaded)
-        load_dotenv(_env_file, override=False)  # Don't override existing values
+if load_dotenv is not None:
+    for _env_file in sorted(_env_files_found):  # reuse already-computed list
+        if _env_file.name != ".env":  # Skip main .env (already loaded)
+            load_dotenv(_env_file, override=False)  # Don't override existing values
 
 # Log discovered .env files for deployment verification
 if _env_files_found:
@@ -445,7 +451,7 @@ async def lifespan(app: FastAPI):
                         with open(p, "r", encoding="utf-8") as f:
                             return orjson.loads(f.read())
 
-                    data = await asyncio.get_event_loop().run_in_executor(None, _read_json, path)
+                    data = await asyncio.get_running_loop().run_in_executor(None, _read_json, path)
                     metadata = data.get("_proxy_metadata", {})
                     email = metadata.get("email")
 
@@ -573,7 +579,7 @@ async def lifespan(app: FastAPI):
                             f.truncate()
 
                     try:
-                        await asyncio.get_event_loop().run_in_executor(
+                        await asyncio.get_running_loop().run_in_executor(
                             None, _update_metadata, path, email, time.time()
                         )
                     except Exception as e:
@@ -589,6 +595,12 @@ async def lifespan(app: FastAPI):
 
     # Load global timeout from environment (default 30 seconds)
     global_timeout = int(os.getenv("GLOBAL_TIMEOUT", "30"))
+    if global_timeout < 5:
+        logger.warning("GLOBAL_TIMEOUT=%d is too low, clamping to 5", global_timeout)
+        global_timeout = 5
+    elif global_timeout > 600:
+        logger.warning("GLOBAL_TIMEOUT=%d is too high, clamping to 600", global_timeout)
+        global_timeout = 600
 
     # The client now uses the root logger configuration
     client = RotatingClient(
@@ -655,7 +667,6 @@ async def lifespan(app: FastAPI):
 
     os.environ["LITELLM_LOG"] = "ERROR"
     litellm.set_verbose = False
-    litellm.drop_params = True
     if USE_EMBEDDING_BATCHER:
         batcher = EmbeddingBatcher(client=client)
         app.state.embedding_batcher = batcher

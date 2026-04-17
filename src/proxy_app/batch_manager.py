@@ -100,23 +100,22 @@ class EmbeddingBatcher:
                             future.set_exception(e)
 
     async def _gather_batch(self) -> Tuple[List[Dict[str, Any]], List[asyncio.Future]]:
-        """Collect requests from the queue until batch_size or timeout is reached. Returns: Tuple of (batch request data list, corresponding futures list)."""
+        """Collect requests from the queue until batch_size or timeout is reached."""
         batch = []
         futures = []
-        start_time = time.time()
+        start_time = time.monotonic()
 
-        while len(batch) < self.batch_size and (time.time() - start_time) < self.timeout:
-            try:
-                # Wait for an item with a timeout
-                timeout = self.timeout - (time.time() - start_time)
-                if timeout <= 0:
+        try:
+            while len(batch) < self.batch_size:
+                remaining = self.timeout - (time.monotonic() - start_time)
+                if remaining <= 0:
                     break
-                request, future = await asyncio.wait_for(self.queue.get(), timeout=timeout)
+                request, future = await asyncio.wait_for(self.queue.get(), timeout=remaining)
                 batch.append(request)
                 futures.append(future)
-            except asyncio.TimeoutError:
-                break
-        
+        except asyncio.TimeoutError:
+            pass
+
         return batch, futures
 
     async def stop(self):

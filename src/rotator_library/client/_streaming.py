@@ -16,6 +16,7 @@ from ..utils.json_utils import STREAM_DONE
 lib_logger = logging.getLogger("rotator_library")
 
 _MAX_LOGGED_CHUNKS = 10000
+_MAX_LOGGED_BYTES = 1_048_576  # 1 MB
 
 
 class _StreamedException(Exception):
@@ -263,7 +264,9 @@ class StreamingMixin:
         from ..transaction_logger import TransactionLogger
 
         MAX_LOGGED_CHUNKS = _MAX_LOGGED_CHUNKS
+        MAX_LOGGED_BYTES = _MAX_LOGGED_BYTES
         chunks = []
+        total_bytes = 0
         try:
             async for chunk in stream:
                 yield chunk
@@ -273,8 +276,9 @@ class StreamingMixin:
                     transaction_logger
                     and isinstance(chunk, dict)
                 ):
-                    if len(chunks) < MAX_LOGGED_CHUNKS:
+                    if len(chunks) < MAX_LOGGED_CHUNKS and total_bytes < MAX_LOGGED_BYTES:
                         chunks.append(chunk)
+                        total_bytes += len(str(chunk))
                     await transaction_logger.log_stream_chunk(chunk)
         finally:
             # Assemble and log final response after stream ends

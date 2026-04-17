@@ -51,6 +51,7 @@ async def streaming_response_wrapper(
             logging.debug("stream_response: request lacks stream counter attribute on increment")
 
     try:
+        _chunk_count = 0
         async for chunk in response_stream:
 
             # STREAM_DONE sentinel: emit SSE [DONE] and stop
@@ -61,6 +62,11 @@ async def streaming_response_wrapper(
             # chunk is a dict — serialize to SSE only here (single serialize point)
             chunk_str = sse_data_event(chunk)
             yield chunk_str
+            _chunk_count += 1
+
+            # Yield control every 32 chunks to prevent event loop starvation
+            if _chunk_count % 32 == 0:
+                await asyncio.sleep(0)
 
             if not isinstance(chunk, dict):
                 continue

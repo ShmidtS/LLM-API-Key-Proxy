@@ -53,7 +53,7 @@ class ReadWriteLock:
         """Release read lock."""
         async with self._condition:
             self._readers -= 1
-            if self._readers == 0:
+            if self._readers == 0 and self._writer_waiting > 0:
                 self._condition.notify_all()
 
     async def acquire_write(self) -> None:

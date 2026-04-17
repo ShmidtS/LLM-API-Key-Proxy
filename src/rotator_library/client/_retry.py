@@ -14,27 +14,22 @@ from typing import Any, AsyncGenerator, Optional
 
 import httpx
 
+from cachetools import TTLCache
+
 from ..config.defaults import TRACE
 from ..utils.chunk_aggregator import ChunkAggregator
 
 lib_logger = logging.getLogger("rotator_library")
 
 # Deduplication cache for repeated circuit-breaker-open messages.
-_CB_OPEN_DEDUP: dict = {}
-_CB_OPEN_DEDUP_TTL = 5.0
+_CB_OPEN_DEDUP: TTLCache = TTLCache(maxsize=256, ttl=5.0)
 
 
 def _should_suppress_cb_open(provider: str) -> bool:
     """Suppress repeated 'Circuit breaker OPEN' messages within TTL window."""
-    now = time.monotonic()
-    last = _CB_OPEN_DEDUP.get(provider, 0.0)
-    if now - last < _CB_OPEN_DEDUP_TTL:
+    if provider in _CB_OPEN_DEDUP:
         return True
-    _CB_OPEN_DEDUP[provider] = now
-    if len(_CB_OPEN_DEDUP) > 64:
-        stale = [k for k, v in _CB_OPEN_DEDUP.items() if now - v > _CB_OPEN_DEDUP_TTL]
-        for k in stale:
-            del _CB_OPEN_DEDUP[k]
+    _CB_OPEN_DEDUP[provider] = True
     return False
 import litellm
 import orjson
@@ -110,6 +105,22 @@ class _RetryContext:
 
 class RetryMixin:
     """Mixin with retry logic methods for RotatingClient."""
+
+    async def _invoke_pre_request_callback(self, pre_request_callback, request, litellm_kwargs, provider: str):
+        """Invoke pre_request_callback with abort_on_callback_error handling."""
+        try:
+            await pre_request_callback(request, litellm_kwargs)
+        except Exception as e:
+            if self.abort_on_callback_error:
+                async with HalfOpenSlot(self._resilience, provider):
+                    raise PreRequestCallbackError(
+                        f"Pre-request callback failed: {e}"
+                    ) from e
+            else:
+                lib_logger.warning(
+                    "Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: %s",
+                    e,
+                )
 
     async def _prepare_request_context(
         self,
@@ -425,19 +436,7 @@ class RetryMixin:
                             )
 
                             if pre_request_callback:
-                                try:
-                                    await pre_request_callback(request, litellm_kwargs)
-                                except Exception as e:
-                                    if self.abort_on_callback_error:
-                                        async with HalfOpenSlot(self._resilience, provider):
-                                            raise PreRequestCallbackError(
-                                                f"Pre-request callback failed: {e}"
-                                            ) from e
-                                    else:
-                                        lib_logger.warning(
-                                            "Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: %s",
-                                            e,
-                                        )
+                                await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
 
                             http_client = await self._get_http_client_async(
                                 streaming=False
@@ -744,19 +743,7 @@ class RetryMixin:
                             )
 
                             if pre_request_callback:
-                                try:
-                                    await pre_request_callback(request, litellm_kwargs)
-                                except Exception as e:
-                                    if self.abort_on_callback_error:
-                                        async with HalfOpenSlot(self._resilience, provider):
-                                            raise PreRequestCallbackError(
-                                                f"Pre-request callback failed: {e}"
-                                            ) from e
-                                    else:
-                                        lib_logger.warning(
-                                            "Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: %s",
-                                            e,
-                                        )
+                                await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
 
                             # Convert model parameters for custom providers right before LiteLLM call
                             final_kwargs = self.provider_config.convert_for_litellm(
@@ -1305,21 +1292,7 @@ class RetryMixin:
                                 )
 
                                 if pre_request_callback:
-                                    try:
-                                        await pre_request_callback(
-                                            request, litellm_kwargs
-                                        )
-                                    except Exception as e:
-                                        if self.abort_on_callback_error:
-                                            async with HalfOpenSlot(self._resilience, provider):
-                                                raise PreRequestCallbackError(
-                                                    f"Pre-request callback failed: {e}"
-                                                ) from e
-                                        else:
-                                            lib_logger.warning(
-                                                "Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: %s",
-                                                e,
-                                            )
+                                    await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
 
                                 http_client = await self._get_http_client_async(
                                     streaming=True
@@ -1662,10 +1635,7 @@ class RetryMixin:
 
                     else:  # This is the standard API Key / litellm-handled provider logic
                         is_oauth = provider in self.oauth_providers
-                        if is_oauth:  # Standard OAuth provider (not custom)
-                            # ... (logic to set headers) ...
-                            pass
-                        else:  # API Key
+                        if not is_oauth:  # API Key
                             litellm_kwargs["api_key"] = current_cred
 
                     # [FIX] Remove problematic headers and add correct provider headers
@@ -1759,19 +1729,7 @@ class RetryMixin:
                             )
 
                             if pre_request_callback:
-                                try:
-                                    await pre_request_callback(request, litellm_kwargs)
-                                except Exception as e:
-                                    if self.abort_on_callback_error:
-                                        async with HalfOpenSlot(self._resilience, provider):
-                                            raise PreRequestCallbackError(
-                                                f"Pre-request callback failed: {e}"
-                                            ) from e
-                                    else:
-                                        lib_logger.warning(
-                                            "Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: %s",
-                                            e,
-                                        )
+                                await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
 
                             # Convert model parameters for custom providers right before LiteLLM call
                             final_kwargs = self.provider_config.convert_for_litellm(

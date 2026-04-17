@@ -18,6 +18,7 @@ import logging
 import os
 import ssl
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Union
 import httpx
 
@@ -61,6 +62,16 @@ class GzipRequestTransport(httpx.AsyncHTTPTransport):
         super().__init__(*args, **kwargs)
         self._compress_min_size = HTTP_COMPRESS_MIN_SIZE
         self._compress_enabled = HTTP_COMPRESS_REQUESTS
+        self._gzip_executor = ThreadPoolExecutor(max_workers=4)
+
+    def close(self) -> None:
+        self._gzip_executor.shutdown(wait=False)
+
+    def __del__(self) -> None:
+        try:
+            self._gzip_executor.shutdown(wait=False)
+        except Exception:
+            pass
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         """Compress request body if eligible before sending."""
@@ -73,7 +84,7 @@ class GzipRequestTransport(httpx.AsyncHTTPTransport):
                     if "content-encoding" not in {k.lower() for k in request.headers}:
                         loop = asyncio.get_running_loop()
                         compressed = await loop.run_in_executor(
-                            None, gzip.compress, request.content
+                            self._gzip_executor, gzip.compress, request.content
                         )
 
                         if len(compressed) < content_len * 0.9:

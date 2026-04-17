@@ -25,6 +25,7 @@ class ChunkAggregator:
     """
 
     _MAX_CONTENT_PARTS = 50000
+    _MAX_GENERIC_PARTS = 5000
 
     def __init__(self) -> None:
         self._content_parts: list[str] = []
@@ -72,7 +73,11 @@ class ChunkAggregator:
                     if key == "role":
                         self._final_message[key] = value
                     elif isinstance(value, str):
-                        self._generic_str_parts.setdefault(key, []).append(value)
+                        parts = self._generic_str_parts.setdefault(key, [])
+                        parts.append(value)
+                        if len(parts) >= self._MAX_GENERIC_PARTS:
+                            self._final_message.setdefault(key, "".join(parts))
+                            self._generic_str_parts.pop(key, None)
                     else:
                         self._final_message[key] = value
 
