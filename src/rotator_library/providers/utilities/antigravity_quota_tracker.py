@@ -428,55 +428,9 @@ class AntigravityQuotaTracker(BaseQuotaTracker):
     # BASELINE MANAGEMENT (Override for Antigravity-specific cooldown logging)
     # =========================================================================
 
-    async def refresh_active_quota_baselines(
-        self,
-        credential_paths: List[str],
-        usage_data: Dict[str, Any],
-        interval_seconds: Optional[int] = None,
-    ) -> Dict[str, Dict[str, Any]]:
-        """
-        Refresh quota baselines for credentials with recent activity.
-
-        Only refreshes credentials that were used within the interval.
-
-        Args:
-            credential_paths: All credential paths to consider
-            usage_data: Usage data from UsageManager
-            interval_seconds: Consider "active" if used within this time (default: _quota_refresh_interval)
-
-        Returns:
-            Dict mapping credential_path -> fetched quota data (for updating baselines)
-        """
-        if interval_seconds is None:
-            interval_seconds = self._quota_refresh_interval
-
-        now = time.time()
-        active_credentials = []
-
-        for cred_path in credential_paths:
-            cred_usage = usage_data.get(cred_path, {})
-            last_used = cred_usage.get("last_used_ts", 0)
-
-            if now - last_used < interval_seconds:
-                active_credentials.append(cred_path)
-
-        if not active_credentials:
-            lib_logger.debug(
-                "No recently active credentials to refresh quota baselines"
-            )
-            return {}
-
-        lib_logger.debug(
-            f"Refreshing quota baselines for {len(active_credentials)} "
-            f"recently active credentials"
-        )
-
-        results = {}
-        for cred_path in active_credentials:
-            quota_data = await self.fetch_quota_from_api(cred_path)
-            results[cred_path] = quota_data
-
-        return results
+    # refresh_active_quota_baselines inherited from BaseQuotaTracker --
+    # _fetch_quota_for_credential delegates to fetch_quota_from_api, so the
+    # base's semaphore-limited parallel fetch is equivalent (and faster).
 
     async def _store_baselines_to_usage_manager(
         self,

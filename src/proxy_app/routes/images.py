@@ -1,13 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
-import orjson
 from fastapi import APIRouter, Request, Depends
 
 from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key
-from proxy_app.request_logger import log_request_to_console
 from proxy_app.routes.error_handler import handle_route_errors
+from proxy_app.routes._helpers import proxy_provider_call, proxy_client_method
 
 router = APIRouter(tags=["images"])
 
@@ -25,17 +24,7 @@ async def image_generations(
     Accepts model, prompt, n, size, quality, response_format and other
     parameters, proxies through litellm.aimage_generation with key rotation.
     """
-    request_data = orjson.loads(await request.body())
-
-    log_request_to_console(
-        url=str(request.url),
-        headers=request.headers,
-        client_info=(request.client.host, request.client.port),
-        request_data=request_data,
-    )
-
-    response = await client.aimage_generation(request=request, **request_data)
-    return response
+    return await proxy_client_method(request, client, "aimage_generation")
 
 
 @router.post("/v1/images/edits")
@@ -51,17 +40,7 @@ async def image_edits(
     Accepts image, mask, prompt and other parameters, proxies through
     litellm.aimage_edit with key rotation.
     """
-    request_data = orjson.loads(await request.body())
-
-    log_request_to_console(
-        url=str(request.url),
-        headers=request.headers,
-        client_info=(request.client.host, request.client.port),
-        request_data=request_data,
-    )
-
-    response = await client.aimage_edit(request=request, **request_data)
-    return response
+    return await proxy_client_method(request, client, "aimage_edit")
 
 
 @router.post("/v1/images/variations")
@@ -77,17 +56,7 @@ async def image_variations(
     Accepts image and other parameters, proxies through
     litellm.aimage_variation with key rotation.
     """
-    request_data = orjson.loads(await request.body())
-
-    log_request_to_console(
-        url=str(request.url),
-        headers=request.headers,
-        client_info=(request.client.host, request.client.port),
-        request_data=request_data,
-    )
-
-    response = await client.aimage_variation(request=request, **request_data)
-    return response
+    return await proxy_client_method(request, client, "aimage_variation")
 
 
 @router.post("/v1/images/generations/async")
@@ -98,18 +67,7 @@ async def async_image_generations(
     _=Depends(verify_api_key),
 ):
     """Async image generation endpoint (ZAI-specific). Returns a task ID for polling."""
-    request_data = orjson.loads(await request.body())
-
-    log_request_to_console(
-        url=str(request.url),
-        headers=request.headers,
-        client_info=(request.client.host, request.client.port),
-        request_data=request_data,
-    )
-
-    return await client.call_provider_method(
-        "zai", "async_image_generate", **request_data
-    )
+    return await proxy_provider_call(request, client, "zai", "async_image_generate")
 
 
 @router.get("/v1/images/{image_id}")

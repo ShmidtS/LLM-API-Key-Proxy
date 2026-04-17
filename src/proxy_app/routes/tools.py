@@ -8,6 +8,7 @@ from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key, make_error_response
 from proxy_app.request_logger import log_request_to_console
 from proxy_app.routes.error_handler import handle_route_errors
+from proxy_app.routes._helpers import proxy_provider_call
 
 router = APIRouter(tags=["tools"])
 
@@ -92,18 +93,7 @@ async def tool_tokenizer(
     _=Depends(verify_api_key),
 ):
     """ZAI tokenizer tool endpoint."""
-    request_data = orjson.loads(await request.body())
-
-    log_request_to_console(
-        url=str(request.url),
-        headers=request.headers,
-        client_info=(request.client.host, request.client.port),
-        request_data=request_data,
-    )
-
-    return await client.call_provider_method(
-        "zai", "tool_tokenizer", **request_data
-    )
+    return await proxy_provider_call(request, client, "zai", "tool_tokenizer")
 
 
 @router.post("/v1/tools/layout-parsing")
@@ -114,18 +104,7 @@ async def tool_layout_parsing(
     _=Depends(verify_api_key),
 ):
     """ZAI layout parsing tool endpoint."""
-    request_data = orjson.loads(await request.body())
-
-    log_request_to_console(
-        url=str(request.url),
-        headers=request.headers,
-        client_info=(request.client.host, request.client.port),
-        request_data=request_data,
-    )
-
-    return await client.call_provider_method(
-        "zai", "tool_layout_parsing", **request_data
-    )
+    return await proxy_provider_call(request, client, "zai", "tool_layout_parsing")
 
 
 @router.post("/v1/tools/web-reader")
@@ -136,15 +115,4 @@ async def tool_web_reader(
     _=Depends(verify_api_key),
 ):
     """ZAI web reader tool endpoint."""
-    request_data = orjson.loads(await request.body())
-
-    log_request_to_console(
-        url=str(request.url),
-        headers=request.headers,
-        client_info=(request.client.host, request.client.port),
-        request_data=request_data,
-    )
-
-    return await client.call_provider_method(
-        "zai", "tool_web_reader", **request_data
-    )
+    return await proxy_provider_call(request, client, "zai", "tool_web_reader")

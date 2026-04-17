@@ -1,13 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
-import orjson
 from fastapi import APIRouter, Request, Depends
 
 from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key
-from proxy_app.request_logger import log_request_to_console
 from proxy_app.routes.error_handler import handle_route_errors
+from proxy_app.routes._helpers import proxy_provider_call
 
 router = APIRouter(tags=["agents"])
 
@@ -20,18 +19,7 @@ async def agent_chat(
     _=Depends(verify_api_key),
 ):
     """Synchronous agent chat endpoint (ZAI-specific)."""
-    request_data = orjson.loads(await request.body())
-
-    log_request_to_console(
-        url=str(request.url),
-        headers=request.headers,
-        client_info=(request.client.host, request.client.port),
-        request_data=request_data,
-    )
-
-    return await client.call_provider_method(
-        "zai", "agent_chat", **request_data
-    )
+    return await proxy_provider_call(request, client, "zai", "agent_chat")
 
 
 @router.post("/v1/agents/file-upload")
@@ -42,18 +30,7 @@ async def agent_file_upload(
     _=Depends(verify_api_key),
 ):
     """Upload a file for agent processing (ZAI-specific)."""
-    request_data = orjson.loads(await request.body())
-
-    log_request_to_console(
-        url=str(request.url),
-        headers=request.headers,
-        client_info=(request.client.host, request.client.port),
-        request_data=request_data,
-    )
-
-    return await client.call_provider_method(
-        "zai", "agent_file_upload", **request_data
-    )
+    return await proxy_provider_call(request, client, "zai", "agent_file_upload")
 
 
 @router.get("/v1/agents/async-result")
@@ -78,15 +55,4 @@ async def agent_conversation(
     _=Depends(verify_api_key),
 ):
     """Continue an agent conversation (ZAI-specific)."""
-    request_data = orjson.loads(await request.body())
-
-    log_request_to_console(
-        url=str(request.url),
-        headers=request.headers,
-        client_info=(request.client.host, request.client.port),
-        request_data=request_data,
-    )
-
-    return await client.call_provider_method(
-        "zai", "agent_conversation", **request_data
-    )
+    return await proxy_provider_call(request, client, "zai", "agent_conversation")

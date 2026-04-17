@@ -2,6 +2,7 @@
 # Copyright (c) 2026 ShmidtS
 
 import httpx
+import json as json_lib
 import os
 from ..utils.json_utils import json_loads
 from datetime import datetime, timezone, timedelta
@@ -176,7 +177,6 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
                 timeout=30,
             )
             response.raise_for_status()
-            import json as json_lib
             try:
                 data = response.json()
             except (json_lib.JSONDecodeError, ValueError) as e:
@@ -208,220 +208,135 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
 
     # --- ZAI-specific API methods (non-litellm) ---
 
+    async def _forward_request(
+        self,
+        credential: str,
+        client: httpx.AsyncClient,
+        path: str,
+        *,
+        method: str = "post",
+        params: Optional[Dict[str, str]] = None,
+        timeout: int = 30,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Shared helper for ZAI API requests with JSON error handling."""
+        headers = {"Authorization": f"Bearer {credential}"}
+        if method == "post":
+            response = await client.post(
+                f"{self.api_base}/{path}",
+                headers=headers,
+                json=kwargs,
+                timeout=timeout,
+            )
+        else:
+            response = await client.get(
+                f"{self.api_base}/{path}",
+                headers=headers,
+                params=params,
+                timeout=timeout,
+            )
+        response.raise_for_status()
+        try:
+            return response.json()
+        except (json_lib.JSONDecodeError, ValueError) as e:
+            body_preview = response.text[:200] if response.text else "<empty>"
+            lib_logger.warning(
+                "Invalid JSON response from %s: %s — body: %s",
+                self.provider_name, e, body_preview,
+            )
+            raise
+
     async def video_generate(
         self, credential: str, client: httpx.AsyncClient, **kwargs
     ) -> Dict[str, Any]:
         """Submit an async video generation request to ZAI."""
-        response = await client.post(
-            f"{self.api_base}/video/generate",
-            headers={"Authorization": f"Bearer {credential}"},
-            json=kwargs,
-            timeout=60,
+        return await self._forward_request(
+            credential, client, "video/generate", timeout=60, **kwargs
         )
-        response.raise_for_status()
-        import json as json_lib
-        try:
-            data = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
-            body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
-            raise
-        return data
 
     async def video_status(
         self, credential: str, client: httpx.AsyncClient, video_id: str
     ) -> Dict[str, Any]:
         """Check the status of an async video generation task."""
-        response = await client.get(
-            f"{self.api_base}/video/{video_id}/status",
-            headers={"Authorization": f"Bearer {credential}"},
-            timeout=30,
+        return await self._forward_request(
+            credential, client,
+            f"video/{video_id}/status",
+            method="get",
         )
-        response.raise_for_status()
-        import json as json_lib
-        try:
-            data = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
-            body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
-            raise
-        return data
 
     async def async_image_generate(
         self, credential: str, client: httpx.AsyncClient, **kwargs
     ) -> Dict[str, Any]:
         """Submit an async image generation request to ZAI."""
-        response = await client.post(
-            f"{self.api_base}/images/generations",
-            headers={"Authorization": f"Bearer {credential}"},
-            json=kwargs,
-            timeout=60,
+        return await self._forward_request(
+            credential, client, "images/generations", timeout=60, **kwargs
         )
-        response.raise_for_status()
-        import json as json_lib
-        try:
-            data = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
-            body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
-            raise
-        return data
 
     async def async_image_status(
         self, credential: str, client: httpx.AsyncClient, image_id: str
     ) -> Dict[str, Any]:
         """Retrieve status/result of an async image generation task."""
-        response = await client.get(
-            f"{self.api_base}/images/{image_id}",
-            headers={"Authorization": f"Bearer {credential}"},
-            timeout=30,
+        return await self._forward_request(
+            credential, client,
+            f"images/{image_id}",
+            method="get",
         )
-        response.raise_for_status()
-        import json as json_lib
-        try:
-            data = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
-            body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
-            raise
-        return data
 
     async def tool_tokenizer(
         self, credential: str, client: httpx.AsyncClient, **kwargs
     ) -> Dict[str, Any]:
         """Call the ZAI tokenizer tool."""
-        response = await client.post(
-            f"{self.api_base}/tools/tokenizer",
-            headers={"Authorization": f"Bearer {credential}"},
-            json=kwargs,
-            timeout=30,
+        return await self._forward_request(
+            credential, client, "tools/tokenizer", **kwargs
         )
-        response.raise_for_status()
-        import json as json_lib
-        try:
-            data = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
-            body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
-            raise
-        return data
 
     async def tool_layout_parsing(
         self, credential: str, client: httpx.AsyncClient, **kwargs
     ) -> Dict[str, Any]:
         """Call the ZAI layout parsing tool."""
-        response = await client.post(
-            f"{self.api_base}/tools/layout-parsing",
-            headers={"Authorization": f"Bearer {credential}"},
-            json=kwargs,
-            timeout=60,
+        return await self._forward_request(
+            credential, client, "tools/layout-parsing", timeout=60, **kwargs
         )
-        response.raise_for_status()
-        import json as json_lib
-        try:
-            data = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
-            body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
-            raise
-        return data
 
     async def tool_web_reader(
         self, credential: str, client: httpx.AsyncClient, **kwargs
     ) -> Dict[str, Any]:
         """Call the ZAI web reader tool."""
-        response = await client.post(
-            f"{self.api_base}/tools/web-reader",
-            headers={"Authorization": f"Bearer {credential}"},
-            json=kwargs,
-            timeout=30,
+        return await self._forward_request(
+            credential, client, "tools/web-reader", **kwargs
         )
-        response.raise_for_status()
-        import json as json_lib
-        try:
-            data = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
-            body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
-            raise
-        return data
 
     async def agent_chat(
         self, credential: str, client: httpx.AsyncClient, **kwargs
     ) -> Dict[str, Any]:
         """Synchronous agent chat endpoint."""
-        response = await client.post(
-            f"{self.api_base}/agents/chat",
-            headers={"Authorization": f"Bearer {credential}"},
-            json=kwargs,
-            timeout=120,
+        return await self._forward_request(
+            credential, client, "agents/chat", timeout=120, **kwargs
         )
-        response.raise_for_status()
-        import json as json_lib
-        try:
-            data = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
-            body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
-            raise
-        return data
 
     async def agent_file_upload(
         self, credential: str, client: httpx.AsyncClient, **kwargs
     ) -> Dict[str, Any]:
         """Upload a file for agent processing."""
-        response = await client.post(
-            f"{self.api_base}/agents/file-upload",
-            headers={"Authorization": f"Bearer {credential}"},
-            json=kwargs,
-            timeout=60,
+        return await self._forward_request(
+            credential, client, "agents/file-upload", timeout=60, **kwargs
         )
-        response.raise_for_status()
-        import json as json_lib
-        try:
-            data = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
-            body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
-            raise
-        return data
 
     async def agent_async_result(
         self, credential: str, client: httpx.AsyncClient, task_id: str
     ) -> Dict[str, Any]:
         """Retrieve async agent task result."""
-        response = await client.get(
-            f"{self.api_base}/agents/async-result",
-            headers={"Authorization": f"Bearer {credential}"},
+        return await self._forward_request(
+            credential, client,
+            "agents/async-result",
+            method="get",
             params={"task_id": task_id},
-            timeout=30,
         )
-        response.raise_for_status()
-        import json as json_lib
-        try:
-            data = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
-            body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
-            raise
-        return data
 
     async def agent_conversation(
         self, credential: str, client: httpx.AsyncClient, **kwargs
     ) -> Dict[str, Any]:
         """Continue an agent conversation."""
-        response = await client.post(
-            f"{self.api_base}/agents/conversation",
-            headers={"Authorization": f"Bearer {credential}"},
-            json=kwargs,
-            timeout=120,
+        return await self._forward_request(
+            credential, client, "agents/conversation", timeout=120, **kwargs
         )
-        response.raise_for_status()
-        import json as json_lib
-        try:
-            data = response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
-            body_preview = response.text[:200] if response.text else "<empty>"
-            lib_logger.warning("Invalid JSON response from %s: %s — body: %s", self.provider_name, e, body_preview)
-            raise
-        return data
