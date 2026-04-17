@@ -18,6 +18,7 @@ Key differences from chat/completions:
 - Supports streaming via SSE
 """
 
+import json
 import os
 import orjson
 import logging
@@ -284,7 +285,7 @@ class ColinProvider(ProviderInterface):
                                     "text", ""
                                 )
 
-                    except orjson.JSONDecodeError:
+                    except json.JSONDecodeError:
                         lib_logger.debug(f"Failed to parse SSE data: {data_str[:100]}")
                         continue
 

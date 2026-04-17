@@ -9,6 +9,7 @@ This module contains helper functions used by both GeminiCliProvider and
 AntigravityProvider, extracted to reduce code duplication.
 """
 
+import json
 import orjson
 
 from ...utils.json_utils import json_deep_copy, json_loads
@@ -357,7 +358,7 @@ def recursively_parse_json_strings(
                     f"{len(obj) - len(unescaped)} chars changed. Snippet: {snippet!r}"
                 )
                 return unescaped
-            except (orjson.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError):
                 # If unescaping fails, continue with original processing
                 pass
 
@@ -386,7 +387,7 @@ def recursively_parse_json_strings(
                     return recursively_parse_json_strings(
                         parsed, schema, parse_json_objects, log_prefix
                     )
-                except (orjson.JSONDecodeError, ValueError):
+                except (json.JSONDecodeError, ValueError):
                     lib_logger.debug("JSON parse error in gemini_shared_utils", exc_info=True)
                     pass
 
@@ -406,7 +407,7 @@ def recursively_parse_json_strings(
                         return recursively_parse_json_strings(
                             parsed, schema, parse_json_objects, log_prefix
                         )
-                except (orjson.JSONDecodeError, ValueError):
+                except (json.JSONDecodeError, ValueError):
                     lib_logger.debug("JSON parse error in gemini_shared_utils (array fix)", exc_info=True)
                     pass
 
@@ -425,7 +426,7 @@ def recursively_parse_json_strings(
                         return recursively_parse_json_strings(
                             parsed, schema, parse_json_objects, log_prefix
                         )
-                except (orjson.JSONDecodeError, ValueError):
+                except (json.JSONDecodeError, ValueError):
                     lib_logger.debug("JSON parse error in gemini_shared_utils (object fix)", exc_info=True)
                     pass
     return obj

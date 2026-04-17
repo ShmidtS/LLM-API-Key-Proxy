@@ -7,6 +7,7 @@ import hashlib
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+import json
 import orjson
 from .constants import (
     CLAUDE_USER_INTERLEAVED_THINKING_REMINDER,
@@ -561,7 +562,7 @@ class ThinkingCacheMixin:
             )
             return True
 
-        except orjson.JSONDecodeError:
+        except json.JSONDecodeError:
             lib_logger.warning(
                 "[Thinking Sanitization] Failed to parse cached thinking"
             )
@@ -653,7 +654,7 @@ class ThinkingCacheMixin:
                         f"[Thinking Recovery] Recovered thinking for msg {i}: "
                         f"{len(thinking_text)} chars"
                     )
-            except orjson.JSONDecodeError:
+            except json.JSONDecodeError:
                 lib_logger.debug("JSON decode error in thinking_cache", exc_info=True)
                 pass
 

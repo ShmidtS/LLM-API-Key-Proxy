@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 ShmidtS
 
+import json
 import orjson
 import os
 import logging
@@ -67,7 +68,7 @@ class ModelDefinitions(metaclass=SingletonMeta):
                         lib_logger.warning(
                             f"{env_var} must be a JSON object or array, got {type(models_json).__name__}"
                         )
-                except (orjson.JSONDecodeError, TypeError) as e:
+                except (json.JSONDecodeError, TypeError) as e:
                     lib_logger.warning(f"Invalid JSON in {env_var}: {e}")
 
     def get_provider_models(self, provider_name: str) -> Dict[str, Any]:

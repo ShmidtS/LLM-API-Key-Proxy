@@ -6,6 +6,7 @@ Advanced settings configuration tool for the LLM API Key Proxy.
 Provides interactive configuration for custom providers, model definitions, and concurrency limits.
 """
 
+import json
 import orjson
 import logging
 import os
@@ -185,7 +186,7 @@ class ModelDefinitionManager:
         if value:
             try:
                 return orjson.loads(value)
-            except (orjson.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError):
                 return None
         return None
 
@@ -201,7 +202,7 @@ class ModelDefinitionManager:
                         providers[provider] = len(parsed)
                     elif isinstance(parsed, list):
                         providers[provider] = len(parsed)
-                except (orjson.JSONDecodeError, ValueError):
+                except (json.JSONDecodeError, ValueError):
                     logger.debug("detect_provider_counts: invalid JSON for provider %s", provider)
         return providers
 
@@ -231,7 +232,7 @@ class ConcurrencyManager:
                 provider = key.replace("MAX_CONCURRENT_REQUESTS_PER_KEY_", "").lower()
                 try:
                     limits[provider] = int(value)
-                except (orjson.JSONDecodeError, ValueError):
+                except (json.JSONDecodeError, ValueError):
                     logger.debug("detect_concurrency_limits: invalid value for %s", provider)
         return limits
 
@@ -844,7 +845,7 @@ class SettingsTool:
                         new_count = (
                             len(parsed) if isinstance(parsed, (dict, list)) else 0
                         )
-                    except (orjson.JSONDecodeError, ValueError):
+                    except (json.JSONDecodeError, ValueError):
                         new_count = 0
                     all_models[provider] = {
                         "value": f"{new_count} model{'s' if new_count > 1 else ''}",
@@ -869,7 +870,7 @@ class SettingsTool:
                             new_count = (
                                 len(parsed) if isinstance(parsed, (dict, list)) else 0
                             )
-                        except (orjson.JSONDecodeError, ValueError):
+                        except (json.JSONDecodeError, ValueError):
                             new_count = 0
                         all_models[provider] = {
                             "value": f"{new_count} model{'s' if new_count > 1 else ''}",

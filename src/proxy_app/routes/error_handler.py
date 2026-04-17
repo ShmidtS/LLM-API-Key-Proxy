@@ -5,6 +5,7 @@ import functools
 import logging
 from typing import Callable
 
+import json
 import orjson
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -46,7 +47,7 @@ def handle_route_errors(
                 return await func(*args, **kwargs)
             except HTTPException:
                 raise
-            except orjson.JSONDecodeError:
+            except json.JSONDecodeError:
                 raise HTTPException(
                     status_code=400,
                     detail=make_error_response("Invalid JSON in request body", "invalid_request_error"),

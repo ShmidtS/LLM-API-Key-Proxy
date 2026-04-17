@@ -20,6 +20,7 @@ from rich.prompt import IntPrompt, Prompt
 from rich.panel import Panel
 from rich.text import Text
 from dotenv import load_dotenv, set_key
+from rotator_library.utils.paths import get_data_file
 from rotator_library.utils.terminal_utils import clear_screen
 
 console = Console()
@@ -39,18 +40,6 @@ def _invalidate_proxy_api_key_cache() -> None:
     _CACHED_PROXY_API_KEY = None
 
 
-def _get_env_file() -> Path:
-    """
-    Get .env file path (lightweight - no heavy imports).
-
-    Returns:
-        Path to .env file - EXE directory if frozen, else current working directory
-    """
-    if getattr(sys, "frozen", False):
-        # Running as PyInstaller EXE - use EXE's directory
-        return Path(sys.executable).parent / ".env"
-    # Running as script - use current working directory
-    return Path.cwd() / ".env"
 
 
 
@@ -80,7 +69,7 @@ class LauncherConfig:
                     if key not in config:
                         config[key] = value
                 return config
-            except (orjson.JSONDecodeError, IOError):
+            except (json.JSONDecodeError, IOError):
                 return self.defaults.copy()
         return self.defaults.copy()
 
@@ -103,7 +92,7 @@ class LauncherConfig:
     @staticmethod
     def update_proxy_api_key(new_key: str):
         """Update PROXY_API_KEY in .env only"""
-        env_file = _get_env_file()
+        env_file = get_data_file(".env")
         set_key(str(env_file), "PROXY_API_KEY", new_key)
         load_dotenv(dotenv_path=env_file, override=True)
         _invalidate_proxy_api_key_cache()
@@ -115,7 +104,7 @@ class SettingsDetector:
     @staticmethod
     def _load_local_env() -> dict:
         """Load environment variables from local .env file only"""
-        env_file = _get_env_file()
+        env_file = get_data_file(".env")
         env_dict = {}
         if not env_file.exists():
             return env_dict
@@ -255,7 +244,7 @@ class SettingsDetector:
                         models[provider] = len(parsed)
                     elif isinstance(parsed, list):
                         models[provider] = len(parsed)
-                except (orjson.JSONDecodeError, ValueError):
+                except (json.JSONDecodeError, ValueError):
                     logger.debug("detect_model_counts: invalid JSON for provider %s", provider)
         return models
 
@@ -337,7 +326,7 @@ class LauncherTUI:
         self.console = Console()
         self.config = LauncherConfig()
         self.running = True
-        self.env_file = _get_env_file()
+        self.env_file = get_data_file(".env")
         # Load .env file to ensure environment variables are available
         load_dotenv(dotenv_path=self.env_file, override=True)
 
@@ -501,7 +490,7 @@ class LauncherTUI:
         elif choice == "5":
             self.launch_quota_viewer()
         elif choice == "6":
-            load_dotenv(dotenv_path=_get_env_file(), override=True)
+            load_dotenv(dotenv_path=get_data_file(".env"), override=True)
             _invalidate_proxy_api_key_cache()
             self.config = LauncherConfig()  # Reload config
             self.console.print("\n[green]✅ Configuration reloaded![/green]")
@@ -918,7 +907,7 @@ class LauncherTUI:
         # Run the tool with from_launcher=True to skip duplicate loading screen
         run_credential_tool(from_launcher=True)
         # Reload environment after credential tool
-        load_dotenv(dotenv_path=_get_env_file(), override=True)
+        load_dotenv(dotenv_path=get_data_file(".env"), override=True)
         _invalidate_proxy_api_key_cache()
 
     def launch_settings_tool(self):
@@ -943,7 +932,7 @@ class LauncherTUI:
 
         run_settings_tool()
         # Reload environment after settings tool
-        load_dotenv(dotenv_path=_get_env_file(), override=True)
+        load_dotenv(dotenv_path=get_data_file(".env"), override=True)
 
     def launch_quota_viewer(self):
         """Launch the quota stats viewer"""
@@ -1045,10 +1034,10 @@ class LauncherTUI:
             )
 
             ensure_env_defaults()
-            load_dotenv(dotenv_path=_get_env_file(), override=True)
+            load_dotenv(dotenv_path=get_data_file(".env"), override=True)
             _invalidate_proxy_api_key_cache()
             run_credential_tool()
-            load_dotenv(dotenv_path=_get_env_file(), override=True)
+            load_dotenv(dotenv_path=get_data_file(".env"), override=True)
             _invalidate_proxy_api_key_cache()
 
             # Check again after credential tool

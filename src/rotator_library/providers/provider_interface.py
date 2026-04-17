@@ -13,6 +13,7 @@ from typing import (
     FrozenSet,
     Tuple,
 )
+import json
 import re
 import orjson
 
@@ -290,7 +291,7 @@ class ProviderInterface(ABC):
             json_match = re.search(r"\{[\s\S]*\}", body)
             if json_match:
                 data = orjson.loads(json_match.group(0))
-        except (orjson.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError):
             lib_logger.debug("JSON parse error in provider_interface", exc_info=True)
             pass
 

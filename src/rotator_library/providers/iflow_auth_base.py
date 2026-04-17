@@ -3,6 +3,7 @@
 
 # src/rotator_library/providers/iflow_auth_base.py
 
+import json
 import secrets
 import base64
 import time
@@ -320,7 +321,7 @@ class IFlowAuthBase(GoogleOAuthBase):
         try:
             response.raise_for_status()
             result = response.json()
-        except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
+        except (httpx.HTTPStatusError, json.JSONDecodeError, ValueError) as e:
             body_preview = response.text[:200] if response.text else "<empty>"
             lib_logger.warning("OAuth/HTTP error in user info: %s — body: %s", e, body_preview)
             return None
@@ -382,7 +383,7 @@ class IFlowAuthBase(GoogleOAuthBase):
 
         try:
             token_data = response.json()
-        except (orjson.JSONDecodeError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError) as e:
             body_preview = response.text[:200] if response.text else "<empty>"
             lib_logger.warning("OAuth/HTTP error in token exchange: %s — body: %s", e, body_preview)
             return None
@@ -473,7 +474,7 @@ class IFlowAuthBase(GoogleOAuthBase):
                         new_token_data = response.json()
                     except httpx.HTTPStatusError:
                         raise
-                    except (orjson.JSONDecodeError, ValueError) as e:
+                    except (json.JSONDecodeError, ValueError) as e:
                         body_preview = response.text[:200] if response.text else "<empty>"
                         lib_logger.warning("OAuth/HTTP error in refresh: %s — body: %s", e, body_preview)
                         last_error = e
@@ -516,7 +517,7 @@ class IFlowAuthBase(GoogleOAuthBase):
                             error_desc = error_data.get("error_description", "")
                             if not error_desc:
                                 error_desc = error_data.get("message", error_body)
-                        except (orjson.JSONDecodeError, ValueError) as e:
+                        except (json.JSONDecodeError, ValueError) as e:
                             lib_logger.debug("Failed to parse OAuth error response JSON: %s", e)
                             error_type = ""
                             error_desc = error_body

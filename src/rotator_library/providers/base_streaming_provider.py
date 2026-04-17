@@ -10,6 +10,7 @@ import asyncio
 import logging
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Union
 
+import json
 import orjson
 from ..utils.json_utils import json_deep_copy
 import litellm
@@ -61,7 +62,7 @@ async def parse_sse_stream(
         try:
             chunk = orjson.loads(data_str)
             yield chunk
-        except orjson.JSONDecodeError:
+        except json.JSONDecodeError:
             name = provider_name or "unknown"
             lib_logger.warning(
                 f"Could not decode JSON from {name}: {line}"

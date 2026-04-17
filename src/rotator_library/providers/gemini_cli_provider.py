@@ -3,6 +3,7 @@
 
 # src/rotator_library/providers/gemini_cli_provider.py
 
+import json
 import orjson
 from ..utils.duration import parse_duration as _parse_duration_shared
 import httpx
@@ -233,7 +234,7 @@ class GeminiCliProvider(
                             if parsed:
                                 result["retry_after"] = parsed
 
-        except (orjson.JSONDecodeError, AttributeError, TypeError):
+        except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
         if not result["retry_after"]:
@@ -1274,7 +1275,7 @@ class GeminiCliProvider(
                     data = response.json()
                 except httpx.HTTPStatusError:
                     raise
-                except (orjson.JSONDecodeError, ValueError) as e:
+                except (json.JSONDecodeError, ValueError) as e:
                     body_preview = response.text[:200] if response.text else "<empty>"
                     lib_logger.warning("OAuth/HTTP error in countTokens: %s — body: %s", e, body_preview)
                     return {"prompt_tokens": 0, "total_tokens": 0}
@@ -1388,7 +1389,7 @@ class GeminiCliProvider(
             try:
                 response.raise_for_status()
                 dynamic_data = response.json()
-            except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
+            except (httpx.HTTPStatusError, json.JSONDecodeError, ValueError) as e:
                 body_preview = response.text[:200] if response.text else "<empty>"
                 lib_logger.warning("OAuth/HTTP error in models discovery: %s — body: %s", e, body_preview)
                 raise

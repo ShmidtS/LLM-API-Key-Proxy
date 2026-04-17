@@ -34,8 +34,9 @@ class CooldownManager:
         are just the credential string itself.
         Returns a provider key suitable for lock sharding.
         """
-        # Use the first segment before '_' as provider identifier,
-        # falling back to the full credential if no '_' is found.
+        # NOTE: naive split — assumes credential format 'provider_key_N'.
+        # Will misidentify if the provider name itself contains '_' or the
+        # prefix is not the provider name.
         parts = credential.split("_")
         if len(parts) >= 2:
             return parts[0]

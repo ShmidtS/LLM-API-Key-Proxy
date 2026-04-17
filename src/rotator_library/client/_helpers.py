@@ -6,6 +6,7 @@ litellm cache reset, safety settings, model ignore/whitelist, litellm logger,
 provider resolution."""
 
 import asyncio
+import json
 import logging
 from ..utils.http_retry import compute_backoff_with_jitter
 import time
@@ -157,18 +158,7 @@ class HelpersMixin:
             )
 
     def _is_client_usable(self, client: Optional[httpx.AsyncClient]) -> bool:
-        """
-        Check if an HTTP client is usable for requests.
-
-        This is more thorough than just checking is_closed - it also checks
-        the internal transport state which can be closed independently.
-
-        Args:
-            client: The client to check
-
-        Returns:
-            True if the client is usable, False otherwise
-        """
+        """Check if an HTTP client is not closed and available for requests."""
         if client is None:
             return False
         if client.is_closed:
@@ -635,7 +625,7 @@ class HelpersMixin:
                         "Applied provider-specific headers for %s from env",
                         provider,
                     )
-            except (orjson.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError) as e:
                 lib_logger.warning(
                     "Failed to parse %s: %s",
                     provider_headers_key, e,

@@ -9,6 +9,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 import httpx
 import litellm
+import json
 import orjson
 
 from ...config import env_bool, env_int
@@ -186,7 +187,7 @@ class AntigravityProvider(
                 return None
 
             data = orjson.loads(json_match.group(0))
-        except (orjson.JSONDecodeError, AttributeError, TypeError):
+        except (json.JSONDecodeError, AttributeError, TypeError):
             return None
 
         error_obj = data.get("error", data)
@@ -557,7 +558,7 @@ class AntigravityProvider(
             try:
                 response.raise_for_status()
                 data = response.json()
-            except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
+            except (httpx.HTTPStatusError, json.JSONDecodeError, ValueError) as e:
                 body_preview = response.text[:200] if response.text else "<empty>"
                 lib_logger.warning("OAuth/HTTP error in models discovery: %s — body: %s", e, body_preview)
                 raise

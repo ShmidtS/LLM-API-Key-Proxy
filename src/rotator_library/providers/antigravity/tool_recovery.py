@@ -8,6 +8,7 @@ import uuid
 from typing import Any, Dict, Optional, Tuple
 
 import litellm
+import json
 import orjson
 from .constants import (
     lib_logger,
@@ -77,7 +78,7 @@ class ToolRecoveryMixin:
         """
         Analyze malformed JSON to detect specific errors and attempt to fix it.
 
-        Combines orjson.JSONDecodeError with heuristic pattern detection
+        Combines json.JSONDecodeError with heuristic pattern detection
         to provide actionable error information.
 
         Returns:
@@ -103,7 +104,7 @@ class ToolRecoveryMixin:
         try:
             orjson.loads(raw_args)
             return result  # Valid JSON, no errors
-        except orjson.JSONDecodeError as e:
+        except json.JSONDecodeError as e:
             result["json_error"] = e.msg
             result["json_position"] = e.pos
 
@@ -146,7 +147,7 @@ class ToolRecoveryMixin:
             parsed = orjson.loads(fixed)
             # Use compact JSON format (matches what model should produce)
             result["fixed_json"] = orjson.dumps(parsed).decode()
-        except orjson.JSONDecodeError:
+        except json.JSONDecodeError:
             # First fix didn't work - try more aggressive cleanup
             pass
 
@@ -161,7 +162,7 @@ class ToolRecoveryMixin:
                 lib_logger.debug(
                     "[Antigravity] Fixed malformed JSON with aggressive whitespace normalization"
                 )
-            except orjson.JSONDecodeError:
+            except json.JSONDecodeError:
                 lib_logger.debug("JSON decode error in tool_recovery (whitespace fix)", exc_info=True)
                 pass
 
@@ -181,7 +182,7 @@ class ToolRecoveryMixin:
                 lib_logger.debug(
                     "[Antigravity] Fixed malformed JSON by quoting unquoted string values"
                 )
-            except orjson.JSONDecodeError:
+            except json.JSONDecodeError:
                 # All fixes failed, leave as None
                 lib_logger.debug("JSON decode error in tool_recovery (unquoted fix)", exc_info=True)
                 pass
@@ -348,7 +349,7 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
         # Validate the fixed JSON is actually valid
         try:
             orjson.loads(fixed_json)
-        except orjson.JSONDecodeError:
+        except json.JSONDecodeError:
             return None
 
         tool_name = parsed_call["tool_name"]
@@ -413,7 +414,7 @@ Analyze what you did wrong, correct it, and retry the function call. Output ONLY
         # Validate the fixed JSON is actually valid
         try:
             orjson.loads(fixed_json)
-        except orjson.JSONDecodeError:
+        except json.JSONDecodeError:
             return None
 
         tool_name = parsed_call["tool_name"]

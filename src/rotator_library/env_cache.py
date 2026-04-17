@@ -52,8 +52,3 @@ def get_provider_env_cache() -> Dict[str, str]:
         return _provider_env_cache
 
 
-def invalidate_env_cache() -> None:
-    """Reset the provider env cache so the next access recomputes it from os.environ."""
-    global _provider_env_cache
-    with _env_cache_lock:
-        _provider_env_cache = None

@@ -9,6 +9,7 @@ Provides tier loading, caching, and background job methods used by both
 GeminiCliProvider and AntigravityProvider.
 """
 
+import json
 import orjson
 import logging
 from ...utils.json_utils import json_loads
@@ -88,7 +89,7 @@ class GeminiCredentialManager:
                 self.project_id_cache[credential_path] = project_id
 
             return tier
-        except (FileNotFoundError, orjson.JSONDecodeError, KeyError) as e:
+        except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
             lib_logger.debug(f"Could not lazy-load tier from {credential_path}: {e}")
             return None
 
@@ -197,7 +198,7 @@ class GeminiCredentialManager:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     return path, json_loads(f.read())
-            except (FileNotFoundError, orjson.JSONDecodeError, KeyError) as e:
+            except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
                 return path, e
 
         # Use asyncio.to_thread for parallel I/O

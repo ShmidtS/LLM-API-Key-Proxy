@@ -10,6 +10,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 import httpx
 import litellm
+import json
 import orjson
 from ...error_handler import EmptyResponseError, TransientQuotaError
 from ...timeout_config import TimeoutConfig
@@ -302,7 +303,7 @@ class AntigravityStreamingMixin:
 
                         yield litellm.ModelResponse(**openai_chunk)
                         accumulator["yielded_any"] = True
-                    except orjson.JSONDecodeError:
+                    except json.JSONDecodeError:
                         if file_logger:
                             await file_logger.log_error(f"Parse error: {data_str[:100]}")
                         continue
@@ -658,7 +659,7 @@ class AntigravityStreamingMixin:
             try:
                 response.raise_for_status()
                 data = response.json()
-            except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
+            except (httpx.HTTPStatusError, json.JSONDecodeError, ValueError) as e:
                 body_preview = response.text[:200] if response.text else "<empty>"
                 lib_logger.warning("OAuth/HTTP error in token count: %s — body: %s", e, body_preview)
                 raise

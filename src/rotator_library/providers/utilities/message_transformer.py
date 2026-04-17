@@ -15,6 +15,7 @@ Handles:
 - Gemini 3 thoughtSignature preservation
 """
 
+import json
 import logging
 import orjson
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -221,7 +222,7 @@ def _transform_assistant_message_default(
 
             try:
                 args_dict = orjson.loads(tool_call["function"]["arguments"])
-            except (orjson.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError):
                 args_dict = {}
 
             tool_id = tool_call.get("id", "")
@@ -295,7 +296,7 @@ def _transform_tool_message(
     # Try to parse content as JSON, fall back to string
     try:
         parsed_content = orjson.loads(content) if isinstance(content, str) else content
-    except (orjson.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError):
         parsed_content = content
 
     # Wrap the tool response in a 'result' object

@@ -217,7 +217,7 @@ def create_lifespan(config: LifespanConfig):
 
                         credentials_to_initialize[provider].append(path)
 
-                    except (FileNotFoundError, orjson.JSONDecodeError) as e:
+                    except (FileNotFoundError, json.JSONDecodeError) as e:
                         logger.warning(
                             f"Could not pre-read metadata from '{path}': {e}. "
                             f"Will process during initialization."

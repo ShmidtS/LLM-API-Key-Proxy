@@ -6,6 +6,7 @@ from typing import Dict, Any
 from ..utils.json_utils import json_loads
 from ..batched_persistence import UsagePersistenceManager
 import aiofiles
+import json
 import orjson
 import os
 
@@ -44,7 +45,7 @@ class UsageManagerPersistenceMixin:
             except FileNotFoundError:
                 # File deleted between exists check and open
                 self._usage_data = {}
-            except orjson.JSONDecodeError as e:
+            except json.JSONDecodeError as e:
                 lib_logger.warning(
                     f"Corrupted usage file {self.file_path}: {e}. Starting fresh."
                 )

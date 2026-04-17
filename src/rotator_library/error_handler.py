@@ -26,6 +26,7 @@ from .ip_throttle_detector import (
 if TYPE_CHECKING:
     from .circuit_breaker import ProviderCircuitBreaker
     from .cooldown_manager import CooldownManager
+import json
 import orjson
 from .utils.json_utils import json_loads
 from .utils.duration import parse_duration
@@ -289,7 +290,7 @@ def _extract_retry_from_json_body(json_text: str) -> Optional[int]:
                     if result is not None:
                         return result
 
-    except (orjson.JSONDecodeError, IndexError, KeyError, TypeError) as e:
+    except (json.JSONDecodeError, IndexError, KeyError, TypeError) as e:
         lib_logger.debug("Failed to extract retry info from response body: %s", e)
 
     return None

@@ -7,6 +7,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import json
 import orjson
 from ...config import env_bool
 from ...utils.json_utils import json_deep_copy
@@ -150,7 +151,7 @@ class MessageTransformMixin:
                     try:
                         cached_data = orjson.loads(cached_json)
                         cached_sig = cached_data.get("thought_signature", "")
-                    except orjson.JSONDecodeError:
+                    except json.JSONDecodeError:
                         lib_logger.debug("JSON decode error in message_transform", exc_info=True)
                         pass
 
@@ -190,7 +191,7 @@ class MessageTransformMixin:
 
             try:
                 args = orjson.loads(tc["function"]["arguments"])
-            except (orjson.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError):
                 args = {}
 
             tool_id = tc.get("id", "")
@@ -267,7 +268,7 @@ class MessageTransformMixin:
                 }
                 parts.append(thinking_part)
                 lib_logger.debug(f"Injected {len(thinking_text)} chars of thinking")
-        except orjson.JSONDecodeError:
+        except json.JSONDecodeError:
             lib_logger.warning(f"Failed to parse cached thinking: {cache_key}")
 
         return parts

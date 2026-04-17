@@ -8,6 +8,7 @@ import re
 import webbrowser
 from dataclasses import dataclass, field
 from typing import ClassVar, Union, Optional, List, Dict, Any
+import json
 import orjson
 import time
 import asyncio
@@ -171,7 +172,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             if "v" not in state_data:
                 raise ValueError("Missing verifier in state")
             return state_data["v"]
-        except (orjson.JSONDecodeError, UnicodeDecodeError) as e:
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise ValueError(f"Invalid state parameter: {e}")
 
     @property
@@ -456,7 +457,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                         new_token_data = response.json()
                     except httpx.HTTPStatusError:
                         raise
-                    except (orjson.JSONDecodeError, ValueError) as e:
+                    except (json.JSONDecodeError, ValueError) as e:
                         body_preview = response.text[:200] if response.text else "<empty>"
                         lib_logger.warning("OAuth/HTTP error in refresh: %s — body: %s", e, body_preview)
                         last_error = e
@@ -830,7 +831,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
         try:
             response.raise_for_status()
             token_data = response.json()
-        except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
+        except (httpx.HTTPStatusError, json.JSONDecodeError, ValueError) as e:
             body_preview = response.text[:200] if response.text else "<empty>"
             lib_logger.warning("OAuth/HTTP error in token exchange: %s — body: %s", e, body_preview)
             return None
@@ -862,7 +863,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
         try:
             user_info_response.raise_for_status()
             user_info = user_info_response.json()
-        except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
+        except (httpx.HTTPStatusError, json.JSONDecodeError, ValueError) as e:
             body_preview = user_info_response.text[:200] if user_info_response.text else "<empty>"
             lib_logger.warning("OAuth/HTTP error in user info: %s — body: %s", e, body_preview)
             user_info = {}
@@ -1037,7 +1038,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
         try:
             response.raise_for_status()
             user_info = response.json()
-        except (httpx.HTTPStatusError, orjson.JSONDecodeError, ValueError) as e:
+        except (httpx.HTTPStatusError, json.JSONDecodeError, ValueError) as e:
             body_preview = response.text[:200] if response.text else "<empty>"
             lib_logger.warning("OAuth/HTTP error in user info: %s — body: %s", e, body_preview)
             return None

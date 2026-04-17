@@ -774,16 +774,16 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
 
     async def get_available_models(self, provider: str) -> List[str]:
         """Returns a list of available models for a specific provider, with caching."""
-        lib_logger.info(f"Getting available models for provider: {provider}")
+        lib_logger.info("Getting available models for provider: %s", provider)
         lock = await self._lock_manager.get_lock(provider)
         async with lock:
             if provider in self._model_list_cache:
-                lib_logger.debug(f"Returning cached models for provider: {provider}")
+                lib_logger.debug("Returning cached models for provider: %s", provider)
                 return self._model_list_cache[provider]
 
             credentials_for_provider = self.all_credentials.get(provider)
             if not credentials_for_provider:
-                lib_logger.warning(f"No credentials for provider: {provider}")
+                lib_logger.warning("No credentials for provider: %s", provider)
                 return []
 
             shuffled_credentials = list(credentials_for_provider)

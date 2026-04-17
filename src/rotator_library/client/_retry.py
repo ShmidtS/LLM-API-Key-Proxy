@@ -6,6 +6,7 @@ streaming_acompletion_with_retry, forced_streaming_acompletion."""
 
 import asyncio
 import codecs
+import json
 import logging
 import re
 import time
@@ -1748,7 +1749,7 @@ class RetryMixin:
                                         json_str_match.group(1), "unicode_escape"
                                     )
                                     error_payload = orjson.loads(cleaned_str)
-                            except (orjson.JSONDecodeError, TypeError):
+                            except (json.JSONDecodeError, TypeError):
                                 error_payload = {}
 
                             log_failure(

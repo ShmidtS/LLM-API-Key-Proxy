@@ -140,7 +140,7 @@ DEFAULT_CUSTOM_CAP_COOLDOWN_VALUE: int = 0
 # Escalating backoff tiers for consecutive failures (seconds)
 # Key = failure count, Value = cooldown duration
 COOLDOWN_BACKOFF_TIERS: Dict[int, int] = {
-    1: 5,  # 1st failure: 10 seconds
+    1: 5,  # 1st failure: 5 seconds
     2: 10,  # 2nd failure: 30 seconds
     3: 20,  # 3rd failure: 1 minute
     4: 30,  # 4th failure: 2 minutes

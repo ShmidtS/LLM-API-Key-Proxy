@@ -101,8 +101,9 @@ class GzipRequestTransport(httpx.AsyncHTTPTransport):
                             )
 
                             lib_logger.debug(
-                                f"Gzip compressed: {content_len} -> {len(compressed)} bytes "
-                                f"({100 * (1 - len(compressed) / content_len):.1f}% reduction)"
+                                "Gzip compressed: %d -> %d bytes (%.1f%% reduction)",
+                                content_len, len(compressed),
+                                100 * (1 - len(compressed) / content_len),
                             )
 
         return await super().handle_async_request(request)
@@ -144,8 +145,9 @@ def _env_ssl_verify() -> Union[bool, List[str]]:
 
     if hosts:
         lib_logger.info(
-            f"SSL certificate verification DISABLED for hosts: {hosts}. "
-            f"These hosts will skip SSL verification."
+            "SSL certificate verification DISABLED for hosts: %s. "
+            "These hosts will skip SSL verification.",
+            hosts,
         )
         return hosts
 
@@ -229,7 +231,8 @@ class HttpClientPool(metaclass=SingletonMeta):
                 )
         else:
             lib_logger.info(
-                f"HTTP client pool: SSL verification disabled for hosts: {self._ssl_verify}"
+                "HTTP client pool: SSL verification disabled for hosts: %s",
+                self._ssl_verify,
             )
 
         # Create SSL context once (optimized - reused for all clients)
@@ -243,7 +246,7 @@ class HttpClientPool(metaclass=SingletonMeta):
                 if _IS_WIN
                 else "HTTP2_ENABLED env var"
             )
-            lib_logger.warning(f"HTTP/2 is DISABLED ({reason}). Using HTTP/1.1 only.")
+            lib_logger.warning("HTTP/2 is DISABLED (%s). Using HTTP/1.1 only.", reason)
 
         # Client instances (lazy initialization)
         self._streaming_client: Optional[httpx.AsyncClient] = None
@@ -372,9 +375,11 @@ class HttpClientPool(metaclass=SingletonMeta):
         client = httpx.AsyncClient(**client_kwargs)
 
         lib_logger.debug(
-            f"Created new HTTP client (streaming={streaming}, "
-            f"max_conn={self._max_connections}, keepalive={self._max_keepalive}, "
-            f"ssl_verify={self._ssl_verify}, http2={self._http2_enabled})"
+            "Created new HTTP client (streaming=%s, "
+            "max_conn=%d, keepalive=%d, "
+            "ssl_verify=%s, http2=%s)",
+            streaming, self._max_connections, self._max_keepalive,
+            self._ssl_verify, self._http2_enabled,
         )
 
         return client
@@ -399,8 +404,9 @@ class HttpClientPool(metaclass=SingletonMeta):
                 self._warmup_task = asyncio.create_task(self._warmup_connections())
 
             lib_logger.info(
-                f"HTTP client pool initialized "
-                f"(max_conn={self._max_connections}, keepalive={self._max_keepalive})"
+                "HTTP client pool initialized "
+                "(max_conn=%d, keepalive=%d)",
+                self._max_connections, self._max_keepalive,
             )
 
     async def _warmup_connections(self) -> None:
@@ -439,7 +445,7 @@ class HttpClientPool(metaclass=SingletonMeta):
                 task_idx += 1
                 if isinstance(result, Exception):
                     if isinstance(result, asyncio.TimeoutError):
-                        lib_logger.debug(f"Warmup timeout for {host}")
+                        lib_logger.debug("Warmup timeout for %s", host)
                     elif isinstance(result, httpx.ConnectError):
                         error_str = str(result).lower()
                         if (
@@ -449,16 +455,19 @@ class HttpClientPool(metaclass=SingletonMeta):
                         ):
                             ssl_errors.append((host, str(result)))
                             lib_logger.warning(
-                                f"SSL/TLS connection error during warmup for {host}: {result}. "
-                                f"Consider adding '{host}' to HTTP_SSL_VERIFY_HOSTS environment variable."
+                                "SSL/TLS connection error during warmup for %s: %s. "
+                                "Consider adding '%s' to HTTP_SSL_VERIFY_HOSTS environment variable.",
+                                host, result, host,
                             )
                         else:
                             lib_logger.debug(
-                                f"Warmup connection error for {host}: {type(result).__name__}: {result}"
+                                "Warmup connection error for %s: %s: %s",
+                                host, type(result).__name__, result,
                             )
                     else:
                         lib_logger.debug(
-                            f"Warmup error for {host}: {type(result).__name__}"
+                            "Warmup error for %s: %s",
+                            host, type(result).__name__,
                         )
                 else:
                     warmed += 1
@@ -467,14 +476,16 @@ class HttpClientPool(metaclass=SingletonMeta):
         elapsed = time.time() - start_time
 
         if warmed > 0:
-            lib_logger.info(f"Pre-warmed {warmed} connection(s) in {elapsed:.2f}s")
+            lib_logger.info("Pre-warmed %d connection(s) in %.2fs", warmed, elapsed)
 
         # Log summary of SSL errors if any occurred
         if ssl_errors:
             lib_logger.warning(
-                f"SSL/TLS errors occurred during warmup for {len(ssl_errors)} host(s). "
-                f"To disable SSL verification for specific hosts, set: "
-                f"HTTP_SSL_VERIFY_HOSTS={','.join(h for h, _ in ssl_errors)}"
+                "SSL/TLS errors occurred during warmup for %d host(s). "
+                "To disable SSL verification for specific hosts, set: "
+                "HTTP_SSL_VERIFY_HOSTS=%s",
+                len(ssl_errors),
+                ','.join(h for h, _ in ssl_errors),
             )
 
     def _is_client_closed(self, client: Optional[httpx.AsyncClient]) -> bool:
@@ -512,7 +523,8 @@ class HttpClientPool(metaclass=SingletonMeta):
 
         # Slow path: recreate outside lock so other requests aren't blocked
         lib_logger.warning(
-            f"{'Streaming' if streaming else 'Non-streaming'} HTTP client was closed, recreating..."
+            "%s HTTP client was closed, recreating...",
+            'Streaming' if streaming else 'Non-streaming',
         )
         new_client = await self._create_client(streaming=streaming)
 
@@ -695,11 +707,12 @@ class HttpClientPool(metaclass=SingletonMeta):
                 self._non_streaming_client = None
 
             if errors:
-                lib_logger.warning(f"Errors during client pool shutdown: {errors}")
+                lib_logger.warning("Errors during client pool shutdown: %s", errors)
             else:
                 lib_logger.info(
-                    f"HTTP client pool closed "
-                    f"(total_requests={self._stats['requests_total']})"
+                    "HTTP client pool closed "
+                    "(total_requests=%d)",
+                    self._stats['requests_total'],
                 )
 
     def record_error(self, error_type: str, message: str) -> None:
@@ -720,7 +733,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         elif error_type == "timeout":
             self._stats["timeout_errors"] += 1
 
-        lib_logger.debug(f"HTTP client error recorded: {error_type} - {message}")
+        lib_logger.debug("HTTP client error recorded: %s - %s", error_type, message)
 
     def get_stats(self) -> Dict[str, Any]:
         """Get client pool statistics."""
@@ -828,7 +841,7 @@ class HttpClientPool(metaclass=SingletonMeta):
                     self._schedule_orphan_close(new_non_streaming)
 
             if recovered:
-                lib_logger.info(f"HTTP client pool recovered: {', '.join(recovered)}")
+                lib_logger.info("HTTP client pool recovered: %s", ', '.join(recovered))
                 self._healthy = True
 
             return len(recovered) > 0 or (
