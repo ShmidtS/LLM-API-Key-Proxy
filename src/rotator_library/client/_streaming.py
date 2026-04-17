@@ -57,7 +57,8 @@ class StreamingMixin:
                 # Check disconnection every 200 chunks to avoid per-chunk syscall overhead
                 if chunk_index % 200 == 0 and request and await request.is_disconnected():
                     lib_logger.info(
-                        f"Client disconnected. Aborting stream for credential {mask_credential(key)}."
+                        "Client disconnected. Aborting stream for credential %s.",
+                        mask_credential(key),
                     )
                     break
 
@@ -66,7 +67,8 @@ class StreamingMixin:
                     chunk_index += 1
                     if json_buffer_parts:
                         lib_logger.warning(
-                            f"Discarding incomplete JSON buffer from previous chunk: {''.join(json_buffer_parts)}"
+                            "Discarding incomplete JSON buffer from previous chunk: %s",
+                            ''.join(json_buffer_parts),
                         )
                         json_buffer_parts.clear()
 
@@ -79,7 +81,8 @@ class StreamingMixin:
                             chunk_dict = chunk
                     except (KeyError, TypeError) as e:
                         lib_logger.warning(
-                            f"Skipping malformed chunk at index {chunk_index} for model {model}: {e}"
+                            "Skipping malformed chunk at index %s for model %s: %s",
+                            chunk_index, model, e,
                         )
                         continue
 
@@ -113,8 +116,9 @@ class StreamingMixin:
                             or native_finish_reason == "abort"
                         ):
                             lib_logger.warning(
-                                f"Stream abort detected for model {model} at chunk {chunk_index}. "
-                                f"finish_reason={raw_finish_reason}, native_finish_reason={native_finish_reason}"
+                                "Stream abort detected for model %s at chunk %s. "
+                                "finish_reason=%s, native_finish_reason=%s",
+                                model, chunk_index, raw_finish_reason, native_finish_reason,
                             )
                             raise _StreamedException(
                                 "Provider aborted stream mid-generation"
@@ -163,8 +167,9 @@ class StreamingMixin:
                 except (httpx.ReadTimeout, httpx.PoolTimeout) as e:
                     # Timeout errors are retriable — re-raise so upstream retry logic can act
                     lib_logger.warning(
-                        f"Timeout during streaming for model {model}, "
-                        f"credential {mask_credential(key)}, chunk {chunk_index}: {e}"
+                        "Timeout during streaming for model %s, "
+                        "credential %s, chunk %s: %s",
+                        model, mask_credential(key), chunk_index, e,
                     )
                     stream_completed = False
                     raise
@@ -172,8 +177,9 @@ class StreamingMixin:
                 except (httpx.RemoteProtocolError, httpx.ConnectError) as e:
                     # Protocol/connection errors are retriable — re-raise
                     lib_logger.warning(
-                        f"Protocol/connection error during streaming for model {model}, "
-                        f"credential {mask_credential(key)}, chunk {chunk_index}: {e}"
+                        "Protocol/connection error during streaming for model %s, "
+                        "credential %s, chunk %s: %s",
+                        model, mask_credential(key), chunk_index, e,
                     )
                     stream_completed = False
                     raise
@@ -193,8 +199,9 @@ class StreamingMixin:
 
                     # For other errors during iteration, log and break
                     lib_logger.error(
-                        f"Error during streaming for model {model}, "
-                        f"credential {mask_credential(key)}, chunk {chunk_index}: {e}"
+                        "Error during streaming for model %s, "
+                        "credential %s, chunk %s: %s",
+                        model, mask_credential(key), chunk_index, e,
                     )
                     stream_completed = False
                     break
@@ -210,7 +217,8 @@ class StreamingMixin:
         except Exception as e:
             # Catch any unexpected errors in the wrapper itself
             lib_logger.error(
-                f"Unexpected error in streaming wrapper for model {model}: {e}"
+                "Unexpected error in streaming wrapper for model %s: %s",
+                model, e,
             )
             # Try to emit an error chunk to the client
             error_data = {
@@ -278,5 +286,6 @@ class StreamingMixin:
                     await transaction_logger.log_response(final_response)
                 except Exception as e:
                     lib_logger.warning(
-                        f"TransactionLogger: Failed to assemble/log final response: {e}"
+                        "TransactionLogger: Failed to assemble/log final response: %s",
+                        e,
                     )

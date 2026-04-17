@@ -137,7 +137,7 @@ class RetryMixin:
         # This ensures consistent model ID usage for acquisition, release, and tracking
         resolved_model = await self._resolve_model_id(model, provider)
         if resolved_model != model:
-            lib_logger.info(f"Resolved model '{model}' to '{resolved_model}'")
+            lib_logger.info("Resolved model '%s' to '%s'", model, resolved_model)
             model = resolved_model
 
         # [NEW] Filter by model tier requirement and build priority map
@@ -176,25 +176,31 @@ class RetryMixin:
                     credentials_for_provider = tier_compatible_creds
                     if compatible_creds and unknown_creds:
                         lib_logger.info(
-                            f"Model {model} requires priority <= {required_tier}. "
-                            f"Using {len(compatible_creds)} known-compatible + {len(unknown_creds)} unknown-tier credentials."
+                            "Model %s requires priority <= %s. "
+                            "Using %s known-compatible + %s unknown-tier credentials.",
+                            model, required_tier,
+                            len(compatible_creds), len(unknown_creds),
                         )
                     elif compatible_creds:
                         lib_logger.info(
-                            f"Model {model} requires priority <= {required_tier}. "
-                            f"Using {len(compatible_creds)} known-compatible credentials."
+                            "Model %s requires priority <= %s. "
+                            "Using %s known-compatible credentials.",
+                            model, required_tier, len(compatible_creds),
                         )
                     else:
                         lib_logger.info(
-                            f"Model {model} requires priority <= {required_tier}. "
-                            f"Using {len(unknown_creds)} unknown-tier credentials (will discover on use)."
+                            "Model %s requires priority <= %s. "
+                            "Using %s unknown-tier credentials (will discover on use).",
+                            model, required_tier, len(unknown_creds),
                         )
                 elif incompatible_creds:
                     # Only known-incompatible credentials remain
                     lib_logger.warning(
-                        f"Model {model} requires priority <= {required_tier} credentials, "
-                        f"but all {len(incompatible_creds)} known credentials have priority > {required_tier}. "
-                        "Request will likely fail."
+                        "Model %s requires priority <= %s credentials, "
+                        "but all %s known credentials have priority > %s. "
+                        "Request will likely fail.",
+                        model, required_tier,
+                        len(incompatible_creds), required_tier,
                     )
 
         # Build priority map and tier names map for usage_manager (using cache)
@@ -205,7 +211,9 @@ class RetryMixin:
         if credential_priorities:
             lib_logger.log(
                 TRACE,
-                f"Credential priorities for {provider}: {', '.join(f'P{p}={len([c for c in credentials_for_provider if credential_priorities.get(c) == p])}' for p in sorted(set(credential_priorities.values())))}"
+                "Credential priorities for %s: %s",
+                provider,
+                ', '.join(f'P{p}={len([c for c in credentials_for_provider if credential_priorities.get(c) == p])}' for p in sorted(set(credential_priorities.values()))),
             )
 
         # Initialize error accumulator for tracking errors across credential rotation
@@ -323,7 +331,8 @@ class RetryMixin:
                 if rate_wait > 0:
                     wait = min(rate_wait, 5.0)
                     lib_logger.debug(
-                        f"AdaptiveRateLimiter: {provider} rate-limited, waiting {wait:.1f}s"
+                        "AdaptiveRateLimiter: %s rate-limited, waiting %1.1fs",
+                        provider, wait,
                     )
                     if time.monotonic() + wait < deadline:
                         await asyncio.sleep(wait)
@@ -334,8 +343,9 @@ class RetryMixin:
                     remaining = await self._resilience.get_cooldown_remaining(provider)
                     backoff = min(remaining, 5.0)
                     lib_logger.debug(
-                        f"Circuit breaker OPEN for provider '{provider}', "
-                        f"backing off {backoff:.1f}s (recovery in {remaining:.0f}s)"
+                        "Circuit breaker OPEN for provider '%s', "
+                        "backing off %1.1fs (recovery in %0.0fs)",
+                        provider, backoff, remaining,
                     )
                     if time.monotonic() + backoff < deadline:
                         await asyncio.sleep(backoff)
@@ -363,7 +373,8 @@ class RetryMixin:
                 )
 
                 lib_logger.info(
-                    f"Acquiring key for model {model}. Tried keys: {len(tried_creds)}/{available_count}({total_count}{exclusion_str})"
+                    "Acquiring key for model %s. Tried keys: %s/%s(%s%s)",
+                    model, len(tried_creds), available_count, total_count, exclusion_str,
                 )
                 max_concurrent = self.max_concurrent_requests_per_key.get(provider, 1)
 
@@ -385,7 +396,8 @@ class RetryMixin:
 
                 if provider_plugin and provider_plugin.has_custom_logic():
                     lib_logger.debug(
-                        f"Provider '{provider}' has custom logic. Delegating call."
+                        "Provider '%s' has custom logic. Delegating call.",
+                        provider,
                     )
                     litellm_kwargs["credential_identifier"] = current_cred
                     litellm_kwargs["transaction_context"] = (
@@ -397,14 +409,16 @@ class RetryMixin:
                         total_api_attempts += 1
                         if total_api_attempts > MAX_TOTAL_ATTEMPTS:
                             lib_logger.warning(
-                                f"Total API attempts ({total_api_attempts}) exceeded MAX_TOTAL_ATTEMPTS ({MAX_TOTAL_ATTEMPTS}). Aborting."
+                                "Total API attempts (%s) exceeded MAX_TOTAL_ATTEMPTS (%s). Aborting.",
+                                total_api_attempts, MAX_TOTAL_ATTEMPTS,
                             )
                             raise last_exception or NoAvailableKeysError(
                                 f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
                             )
                         try:
                             lib_logger.info(
-                                f"Attempting call with credential {mask_credential(current_cred)} (Attempt {attempt + 1}/{self.max_retries})"
+                                "Attempting call with credential %s (Attempt %s/%s)",
+                                mask_credential(current_cred), attempt + 1, self.max_retries,
                             )
 
                             if pre_request_callback:
@@ -418,7 +432,8 @@ class RetryMixin:
                                             ) from e
                                     else:
                                         lib_logger.warning(
-                                            f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
+                                            "Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: %s",
+                                            e,
                                         )
 
                             http_client = await self._get_http_client_async(
@@ -495,7 +510,8 @@ class RetryMixin:
                                 )
                                 async with HalfOpenSlot(self._resilience, provider):
                                     lib_logger.error(
-                                        f"Non-recoverable error ({classified_error.error_type}) during custom provider call. Failing."
+                                        "Non-recoverable error (%s) during custom provider call. Failing.",
+                                        classified_error.error_type,
                                     )
                                     raise last_exception
 
@@ -518,7 +534,8 @@ class RetryMixin:
                                 )
                                 if await self.increment_quota_failures(current_cred, provider):
                                     lib_logger.error(
-                                        f"Cred {mask_credential(current_cred)} quota failure limit reached (3/3), forcing rotation."
+                                        "Cred %s quota failure limit reached (3/3), forcing rotation.",
+                                        mask_credential(current_cred),
                                     )
                                     await self.usage_manager.record_failure(
                                         current_cred, model, classified_error
@@ -530,7 +547,10 @@ class RetryMixin:
                                 current_cred, model, classified_error
                             )
                             lib_logger.warning(
-                                f"Cred {mask_credential(current_cred)} {classified_error.error_type} (HTTP {classified_error.status_code}). Rotating."
+                                "Cred %s %s (HTTP %s). Rotating.",
+                                mask_credential(current_cred),
+                                classified_error.error_type,
+                                classified_error.status_code,
                             )
                             async with HalfOpenSlot(self._resilience, provider):
                                 break  # Rotate to next credential
@@ -565,7 +585,8 @@ class RetryMixin:
                                     current_cred, classified_error, error_message
                                 )
                                 lib_logger.warning(
-                                    f"Cred {mask_credential(current_cred)} failed after max retries. Rotating."
+                                    "Cred %s failed after max retries. Rotating.",
+                                    mask_credential(current_cred),
                                 )
                                 async with HalfOpenSlot(self._resilience, provider):
                                     break
@@ -583,7 +604,8 @@ class RetryMixin:
                                     break
 
                             lib_logger.warning(
-                                f"Cred {mask_credential(current_cred)} server error. Retrying within remaining budget."
+                                "Cred %s server error. Retrying within remaining budget.",
+                                mask_credential(current_cred),
                             )
 
                             # Reset LiteLLM internal HTTP client cache on connection errors
@@ -681,14 +703,16 @@ class RetryMixin:
                         total_api_attempts += 1
                         if total_api_attempts > MAX_TOTAL_ATTEMPTS:
                             lib_logger.warning(
-                                f"Total API attempts ({total_api_attempts}) exceeded MAX_TOTAL_ATTEMPTS ({MAX_TOTAL_ATTEMPTS}). Aborting."
+                                "Total API attempts (%s) exceeded MAX_TOTAL_ATTEMPTS (%s). Aborting.",
+                                total_api_attempts, MAX_TOTAL_ATTEMPTS,
                             )
                             raise last_exception or NoAvailableKeysError(
                                 f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
                             )
                         try:
                             lib_logger.info(
-                                f"Attempting call with credential {mask_credential(current_cred)} (Attempt {attempt + 1}/{self.max_retries})"
+                                "Attempting call with credential %s (Attempt %s/%s)",
+                                mask_credential(current_cred), attempt + 1, self.max_retries,
                             )
 
                             if pre_request_callback:
@@ -702,7 +726,8 @@ class RetryMixin:
                                             ) from e
                                     else:
                                         lib_logger.warning(
-                                            f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
+                                            "Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: %s",
+                                            e,
                                         )
 
                             # Convert model parameters for custom providers right before LiteLLM call
@@ -760,7 +785,8 @@ class RetryMixin:
                             )
 
                             lib_logger.info(
-                                f"Key {mask_credential(current_cred)} hit rate limit for {model}. Rotating key."
+                                "Key %s hit rate limit for %s. Rotating key.",
+                                mask_credential(current_cred), model,
                             )
 
                             # Only rate_limit errors can indicate IP-level throttling;
@@ -782,7 +808,8 @@ class RetryMixin:
                                 )
                                 if await self.increment_quota_failures(current_cred, provider):
                                     lib_logger.error(
-                                        f"Cred {mask_credential(current_cred)} quota failure limit reached (3/3), forcing rotation."
+                                        "Cred %s quota failure limit reached (3/3), forcing rotation.",
+                                        mask_credential(current_cred),
                                     )
                                     await self.usage_manager.record_failure(
                                         current_cred, model, classified_error
@@ -830,7 +857,8 @@ class RetryMixin:
                                     current_cred, classified_error, error_message
                                 )
                                 lib_logger.warning(
-                                    f"Key {mask_credential(current_cred)} failed after max retries due to server error. Rotating."
+                                    "Key %s failed after max retries due to server error. Rotating.",
+                                    mask_credential(current_cred),
                                 )
                                 async with HalfOpenSlot(self._resilience, provider):
                                     break  # Move to the next key
@@ -845,13 +873,15 @@ class RetryMixin:
                                     current_cred, classified_error, error_message
                                 )
                                 lib_logger.warning(
-                                    f"Retry wait ({wait_time:.2f}s) exceeds budget ({remaining_budget:.2f}s). Rotating key."
+                                    "Retry wait (%2.2fs) exceeds budget (%2.2fs). Rotating key.",
+                                    wait_time, remaining_budget,
                                 )
                                 async with HalfOpenSlot(self._resilience, provider):
                                     break
 
                             lib_logger.warning(
-                                f"Key {mask_credential(current_cred)} server error. Retrying in {wait_time:.2f}s."
+                                "Key %s server error. Retrying in %2.2fs.",
+                                mask_credential(current_cred), wait_time,
                             )
                             await asyncio.sleep(wait_time)
 
@@ -890,7 +920,10 @@ class RetryMixin:
                             )
 
                             lib_logger.warning(
-                                f"Key {mask_credential(current_cred)} HTTP {e.response.status_code} ({classified_error.error_type})."
+                                "Key %s HTTP %s (%s).",
+                                mask_credential(current_cred),
+                                e.response.status_code,
+                                classified_error.error_type,
                             )
 
                             # Check if this error should trigger rotation
@@ -904,7 +937,8 @@ class RetryMixin:
                                 )
                                 async with HalfOpenSlot(self._resilience, provider):
                                     lib_logger.error(
-                                        f"Non-recoverable error ({classified_error.error_type}). Failing request."
+                                        "Non-recoverable error (%s). Failing request.",
+                                        classified_error.error_type,
                                     )
                                     raise last_exception
 
@@ -939,7 +973,8 @@ class RetryMixin:
                                 remaining_budget = deadline - time.monotonic()
                                 if wait_time <= remaining_budget:
                                     lib_logger.warning(
-                                        f"Server error, retrying same key in {wait_time:.2f}s."
+                                        "Server error, retrying same key in %2.2fs.",
+                                        wait_time,
                                     )
                                     await asyncio.sleep(wait_time)
 
@@ -953,7 +988,8 @@ class RetryMixin:
                                 current_cred, model, classified_error
                             )
                             lib_logger.info(
-                                f"Rotating to next key after {classified_error.error_type} error."
+                                "Rotating to next key after %s error.",
+                                classified_error.error_type,
                             )
                             async with HalfOpenSlot(self._resilience, provider):
                                 break
@@ -972,7 +1008,8 @@ class RetryMixin:
 
                             if request and await request.is_disconnected():
                                 lib_logger.warning(
-                                    f"Client disconnected. Aborting retries for {mask_credential(current_cred)}."
+                                    "Client disconnected. Aborting retries for %s.",
+                                    mask_credential(current_cred),
                                 )
                                 async with HalfOpenSlot(self._resilience, provider):
                                     raise last_exception
@@ -981,7 +1018,10 @@ class RetryMixin:
                             error_message = str(e).split("\n")[0]
 
                             lib_logger.warning(
-                                f"Key {mask_credential(current_cred)} {classified_error.error_type} (HTTP {classified_error.status_code})."
+                                "Key %s %s (HTTP %s).",
+                                mask_credential(current_cred),
+                                classified_error.error_type,
+                                classified_error.status_code,
                             )
 
                             # Only rate_limit errors can indicate IP-level throttling;
@@ -1004,7 +1044,8 @@ class RetryMixin:
                             if not should_rotate_on_error(classified_error):
                                 async with HalfOpenSlot(self._resilience, provider):
                                     lib_logger.error(
-                                        f"Non-recoverable error ({classified_error.error_type}). Failing request."
+                                        "Non-recoverable error (%s). Failing request.",
+                                        classified_error.error_type,
                                     )
                                     raise last_exception
 
@@ -1082,7 +1123,8 @@ class RetryMixin:
                     ]
                     if not creds_to_try:
                         lib_logger.warning(
-                            f"All credentials for provider {provider} have been tried. No more credentials to rotate to."
+                            "All credentials for provider %s have been tried. No more credentials to rotate to.",
+                            provider,
                         )
                         break
 
@@ -1090,7 +1132,8 @@ class RetryMixin:
                     if rate_wait > 0:
                         wait = min(rate_wait, 5.0)
                         lib_logger.debug(
-                            f"AdaptiveRateLimiter: {provider} rate-limited, waiting {wait:.1f}s"
+                            "AdaptiveRateLimiter: %s rate-limited, waiting %1.1fs",
+                            provider, wait,
                         )
                         if time.monotonic() + wait < deadline:
                             await asyncio.sleep(wait)
@@ -1104,8 +1147,9 @@ class RetryMixin:
                         backoff = min(remaining, 5.0)
                         if not _should_suppress_cb_open(provider):
                             lib_logger.debug(
-                                f"Circuit breaker OPEN for provider '{provider}', "
-                                f"backing off {backoff:.1f}s (recovery in {remaining:.0f}s)"
+                                "Circuit breaker OPEN for provider '%s', "
+                                "backing off %1.1fs (recovery in %0.0fs)",
+                                provider, backoff, remaining,
                             )
                         if time.monotonic() + backoff < deadline:
                             await asyncio.sleep(backoff)
@@ -1133,7 +1177,8 @@ class RetryMixin:
                     )
 
                     lib_logger.info(
-                        f"Acquiring credential for model {model}. Tried credentials: {len(tried_creds)}/{available_count}({total_count}{exclusion_str})"
+                        "Acquiring credential for model %s. Tried credentials: %s/%s(%s%s)",
+                        model, len(tried_creds), available_count, total_count, exclusion_str,
                     )
                     max_concurrent = self.max_concurrent_requests_per_key.get(
                         provider, 1
@@ -1182,7 +1227,8 @@ class RetryMixin:
                                     litellm_kwargs[key] = value
                     if provider_plugin and provider_plugin.has_custom_logic():
                         lib_logger.debug(
-                            f"Provider '{provider}' has custom logic. Delegating call."
+                            "Provider '%s' has custom logic. Delegating call.",
+                            provider,
                         )
                         litellm_kwargs["credential_identifier"] = current_cred
                         litellm_kwargs["transaction_context"] = (
@@ -1195,14 +1241,16 @@ class RetryMixin:
                             total_api_attempts += 1
                             if total_api_attempts > MAX_TOTAL_ATTEMPTS:
                                 lib_logger.warning(
-                                    f"Total API attempts ({total_api_attempts}) exceeded MAX_TOTAL_ATTEMPTS ({MAX_TOTAL_ATTEMPTS}). Aborting."
+                                    "Total API attempts (%s) exceeded MAX_TOTAL_ATTEMPTS (%s). Aborting.",
+                                    total_api_attempts, MAX_TOTAL_ATTEMPTS,
                                 )
                                 raise last_exception or NoAvailableKeysError(
                                     f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
                                 )
                             try:
                                 lib_logger.info(
-                                    f"Attempting stream with credential {mask_credential(current_cred)} (Attempt {attempt + 1}/{self.max_retries})"
+                                    "Attempting stream with credential %s (Attempt %s/%s)",
+                                    mask_credential(current_cred), attempt + 1, self.max_retries,
                                 )
 
                                 if pre_request_callback:
@@ -1218,7 +1266,8 @@ class RetryMixin:
                                                 ) from e
                                         else:
                                             lib_logger.warning(
-                                                f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
+                                                "Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: %s",
+                                                e,
                                             )
 
                                 http_client = await self._get_http_client_async(
@@ -1229,7 +1278,8 @@ class RetryMixin:
                                 )
 
                                 lib_logger.info(
-                                    f"Stream connection established for credential {mask_credential(current_cred)}. Processing response."
+                                    "Stream connection established for credential %s. Processing response.",
+                                    mask_credential(current_cred),
                                 )
 
                                 stream_generator = self._safe_streaming_wrapper(
@@ -1318,7 +1368,8 @@ class RetryMixin:
                                     )
                                     async with HalfOpenSlot(self._resilience, provider):
                                         lib_logger.error(
-                                            f"Non-recoverable error ({classified_error.error_type}) during custom stream. Failing."
+                                            "Non-recoverable error (%s) during custom stream. Failing.",
+                                            classified_error.error_type,
                                         )
                                         raise last_exception
 
@@ -1342,7 +1393,10 @@ class RetryMixin:
                                     current_cred, model, classified_error
                                 )
                                 lib_logger.warning(
-                                    f"Cred {mask_credential(current_cred)} {classified_error.error_type} (HTTP {classified_error.status_code}). Rotating."
+                                    "Cred %s %s (HTTP %s). Rotating.",
+                                    mask_credential(current_cred),
+                                    classified_error.error_type,
+                                    classified_error.status_code,
                                 )
                                 async with HalfOpenSlot(self._resilience, provider):
                                     break
@@ -1379,7 +1433,8 @@ class RetryMixin:
                                         current_cred, classified_error, error_message
                                     )
                                     lib_logger.warning(
-                                        f"Cred {mask_credential(current_cred)} failed after max retries. Rotating."
+                                        "Cred %s failed after max retries. Rotating.",
+                                        mask_credential(current_cred),
                                     )
                                     async with HalfOpenSlot(self._resilience, provider):
                                         break
@@ -1398,13 +1453,15 @@ class RetryMixin:
                                         current_cred, classified_error, error_message
                                     )
                                     lib_logger.warning(
-                                        f"Retry wait ({wait_time:.2f}s) exceeds budget. Rotating."
+                                        "Retry wait (%2.2fs) exceeds budget. Rotating.",
+                                        wait_time,
                                     )
                                     async with HalfOpenSlot(self._resilience, provider):
                                         break
 
                                 lib_logger.warning(
-                                    f"Cred {mask_credential(current_cred)} server error. Retrying in {wait_time:.2f}s."
+                                    "Cred %s server error. Retrying in %2.2fs.",
+                                    mask_credential(current_cred), wait_time,
                                 )
                                 await asyncio.sleep(wait_time)
 
@@ -1437,8 +1494,10 @@ class RetryMixin:
                                 )
 
                                 lib_logger.warning(
-                                    f"Cred {mask_credential(current_cred)} transport error "
-                                    f"({type(e).__name__}): {error_message}."
+                                    "Cred %s transport error "
+                                    "(%s): %s.",
+                                    mask_credential(current_cred),
+                                    type(e).__name__, error_message,
                                 )
 
                                 # Provider-level error: don't increment consecutive failures
@@ -1455,7 +1514,8 @@ class RetryMixin:
                                         current_cred, classified_error, error_message
                                     )
                                     lib_logger.warning(
-                                        f"Cred {mask_credential(current_cred)} failed after max retries. Rotating."
+                                        "Cred %s failed after max retries. Rotating.",
+                                        mask_credential(current_cred),
                                     )
                                     async with HalfOpenSlot(self._resilience, provider):
                                         break
@@ -1473,7 +1533,8 @@ class RetryMixin:
                                         break
 
                                 lib_logger.warning(
-                                    f"Cred {mask_credential(current_cred)} transport error. Retrying within remaining budget."
+                                    "Cred %s transport error. Retrying within remaining budget.",
+                                    mask_credential(current_cred),
                                 )
 
                                 # Ensure HTTP client is usable before retry
@@ -1502,7 +1563,10 @@ class RetryMixin:
                                 )
 
                                 lib_logger.warning(
-                                    f"Cred {mask_credential(current_cred)} {classified_error.error_type} (HTTP {classified_error.status_code})."
+                                    "Cred %s %s (HTTP %s).",
+                                    mask_credential(current_cred),
+                                    classified_error.error_type,
+                                    classified_error.status_code,
                                 )
 
                                 # Check if this error should trigger rotation
@@ -1516,7 +1580,8 @@ class RetryMixin:
                                     )
                                     async with HalfOpenSlot(self._resilience, provider):
                                         lib_logger.error(
-                                            f"Non-recoverable error ({classified_error.error_type}). Failing."
+                                            "Non-recoverable error (%s). Failing.",
+                                            classified_error.error_type,
                                         )
                                         raise last_exception
 
@@ -1629,14 +1694,16 @@ class RetryMixin:
                         total_api_attempts += 1
                         if total_api_attempts > MAX_TOTAL_ATTEMPTS:
                             lib_logger.warning(
-                                f"Total API attempts ({total_api_attempts}) exceeded MAX_TOTAL_ATTEMPTS ({MAX_TOTAL_ATTEMPTS}). Aborting."
+                                "Total API attempts (%s) exceeded MAX_TOTAL_ATTEMPTS (%s). Aborting.",
+                                total_api_attempts, MAX_TOTAL_ATTEMPTS,
                             )
                             raise last_exception or NoAvailableKeysError(
                                 f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
                             )
                         try:
                             lib_logger.info(
-                                f"Attempting stream with credential {mask_credential(current_cred)} (Attempt {attempt + 1}/{self.max_retries})"
+                                "Attempting stream with credential %s (Attempt %d/%d)",
+                                mask_credential(current_cred), attempt + 1, self.max_retries,
                             )
 
                             if pre_request_callback:
@@ -1650,7 +1717,8 @@ class RetryMixin:
                                             ) from e
                                     else:
                                         lib_logger.warning(
-                                            f"Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: {e}"
+                                            "Pre-request callback failed but abort_on_callback_error is False. Proceeding with request. Error: %s",
+                                            e,
                                         )
 
                             # Convert model parameters for custom providers right before LiteLLM call
@@ -1664,7 +1732,8 @@ class RetryMixin:
                             )
 
                             lib_logger.info(
-                                f"Stream connection established for credential {mask_credential(current_cred)}. Processing response."
+                                "Stream connection established for credential %s. Processing response.",
+                                mask_credential(current_cred),
                             )
 
                             stream_generator = self._safe_streaming_wrapper(
@@ -1741,8 +1810,9 @@ class RetryMixin:
                                 # Add exponential backoff delay before retry
                                 wait_time = compute_backoff_with_jitter(attempt, max_wait=30.0, retry_after=classified_error.retry_after)
                                 lib_logger.warning(
-                                    f"Rate limit ({classified_error.error_type}) during litellm stream. "
-                                    f"Waiting {wait_time:.2f}s before retry."
+                                    "Rate limit (%s) during litellm stream. "
+                                    "Waiting %2.2fs before retry.",
+                                    classified_error.error_type, wait_time,
                                 )
                                 await asyncio.sleep(wait_time)
 
@@ -1751,8 +1821,11 @@ class RetryMixin:
                                     current_cred, model, classified_error
                                 )
                                 lib_logger.warning(
-                                    f"Cred {mask_credential(current_cred)} {classified_error.error_type} "
-                                    f"(HTTP {classified_error.status_code}). Rotating."
+                                    "Cred %s %s "
+                                    "(HTTP %s). Rotating.",
+                                    mask_credential(current_cred),
+                                    classified_error.error_type,
+                                    classified_error.status_code,
                                 )
                                 async with HalfOpenSlot(self._resilience, provider):
                                     break  # Rotate to next credential
@@ -1827,7 +1900,8 @@ class RetryMixin:
                                         f"Limit: {quota_value} (Quota ID: {quota_id})"
                                     )
                                     lib_logger.error(
-                                        f"Fatal quota error for {mask_credential(current_cred)}. ID: {quota_id}, Limit: {quota_value}"
+                                        "Fatal quota error for %s. ID: %s, Limit: %s",
+                                        mask_credential(current_cred), quota_id, quota_value,
                                     )
                                     yield {
                                         "error": {
@@ -1839,7 +1913,9 @@ class RetryMixin:
                                     return
                                 else:
                                     lib_logger.warning(
-                                        f"Cred {mask_credential(current_cred)} quota error ({consecutive_quota_failures}/3). Rotating."
+                                        "Cred %s quota error (%s/3). Rotating.",
+                                        mask_credential(current_cred),
+                                        consecutive_quota_failures,
                                     )
                                     async with HalfOpenSlot(self._resilience, provider):
                                         break
@@ -1858,8 +1934,11 @@ class RetryMixin:
                                     remaining_budget = deadline - time.monotonic()
                                     if backoff <= remaining_budget:
                                         lib_logger.warning(
-                                            f"Mid-stream {classified_error.error_type} for {mask_credential(current_cred)} "
-                                            f"(attempt {attempt + 1}/{self.max_retries}). Retrying same key in {backoff:.2f}s."
+                                            "Mid-stream %s for %s "
+                                            "(attempt %s/%s). Retrying same key in %2.2fs.",
+                                            classified_error.error_type,
+                                            mask_credential(current_cred),
+                                            attempt + 1, self.max_retries, backoff,
                                         )
                                         await asyncio.sleep(backoff)
                                         await self._get_http_client_async(
@@ -1868,7 +1947,9 @@ class RetryMixin:
                                         continue  # Retry same key instead of rotating
 
                                 lib_logger.warning(
-                                    f"Cred {mask_credential(current_cred)} {classified_error.error_type}. Rotating."
+                                    "Cred %s %s. Rotating.",
+                                    mask_credential(current_cred),
+                                    classified_error.error_type,
                                 )
 
                                 # Only rate_limit errors can indicate IP-level throttling;
@@ -1926,7 +2007,8 @@ class RetryMixin:
 
                             if attempt >= self.max_retries - 1:
                                 lib_logger.warning(
-                                    f"Credential {mask_credential(current_cred)} failed after max retries for model {model} due to a server error. Rotating key silently."
+                                    "Credential %s failed after max retries for model %s due to a server error. Rotating key silently.",
+                                    mask_credential(current_cred), model,
                                 )
                                 # [MODIFIED] Do not yield to the client here.
                                 async with HalfOpenSlot(self._resilience, provider):
@@ -1949,7 +2031,8 @@ class RetryMixin:
                                     break
 
                             lib_logger.warning(
-                                f"Credential {mask_credential(current_cred)} encountered a server error for model {model}. Reason: '{error_message_text}'. Retrying within remaining budget."
+                                "Credential %s encountered a server error for model %s. Reason: '%s'. Retrying within remaining budget.",
+                                mask_credential(current_cred), model, error_message_text,
                             )
 
                             # CRITICAL: Ensure HTTP client is usable before retry
@@ -1981,8 +2064,10 @@ class RetryMixin:
                             )
 
                             lib_logger.warning(
-                                f"Credential {mask_credential(current_cred)} transport error "
-                                f"({type(e).__name__}): {error_message_text}."
+                                "Credential %s transport error "
+                                "(%s): %s.",
+                                mask_credential(current_cred),
+                                type(e).__name__, error_message_text,
                             )
 
                             # Provider-level error: don't increment consecutive failures
@@ -1999,7 +2084,8 @@ class RetryMixin:
                                     current_cred, classified_error, error_message_text
                                 )
                                 lib_logger.warning(
-                                    f"Cred {mask_credential(current_cred)} failed after max retries. Rotating."
+                                    "Cred %s failed after max retries. Rotating.",
+                                    mask_credential(current_cred),
                                 )
                                 async with HalfOpenSlot(self._resilience, provider):
                                     break
@@ -2045,7 +2131,11 @@ class RetryMixin:
                             )
 
                             lib_logger.warning(
-                                f"Credential {mask_credential(current_cred)} failed with {classified_error.error_type} (Status: {classified_error.status_code}). Error: {error_message_text}."
+                                "Credential %s failed with %s (Status: %s). Error: %s.",
+                                mask_credential(current_cred),
+                                classified_error.error_type,
+                                classified_error.status_code,
+                                error_message_text,
                             )
 
                             # Only rate_limit errors can indicate IP-level throttling;
@@ -2068,7 +2158,8 @@ class RetryMixin:
                             if not should_rotate_on_error(classified_error):
                                 async with HalfOpenSlot(self._resilience, provider):
                                     lib_logger.error(
-                                        f"Non-recoverable error ({classified_error.error_type}). Failing request."
+                                        "Non-recoverable error (%s). Failing request.",
+                                        classified_error.error_type,
                                     )
                                     raise last_exception
 
@@ -2077,7 +2168,8 @@ class RetryMixin:
                                 current_cred, model, classified_error
                             )
                             lib_logger.info(
-                                f"Rotating to next key after {classified_error.error_type} error."
+                                "Rotating to next key after %s error.",
+                                classified_error.error_type,
                             )
                             async with HalfOpenSlot(self._resilience, provider):
                                 break
@@ -2115,7 +2207,8 @@ class RetryMixin:
 
         except NoAvailableKeysError as e:
             lib_logger.error(
-                f"A streaming request failed because no keys were available within the time budget: {e}"
+                "A streaming request failed because no keys were available within the time budget: %s",
+                e,
             )
             error_data = {"error": {"message": str(e), "type": "proxy_busy"}}
             yield error_data
@@ -2123,7 +2216,8 @@ class RetryMixin:
         except Exception as e:
             # This will now only catch fatal errors that should be raised, like invalid requests.
             lib_logger.error(
-                f"An unhandled exception occurred in streaming retry logic: {e}",
+                "An unhandled exception occurred in streaming retry logic: %s",
+                e,
                 exc_info=True,
             )
             error_data = {

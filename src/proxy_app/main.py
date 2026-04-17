@@ -188,7 +188,6 @@ with _console.status("[dim]Initializing proxy core...", spinner="dots"):
 # Import extracted modules
 from proxy_app.middleware import _NoGzipForSSE, SecurityHeadersMiddleware
 from proxy_app.logging_config import RotatorDebugFilter, NoLiteLLMLogFilter
-from proxy_app.dependencies import _inc_streams, _dec_streams
 
 # Anthropic API Models (imported from library)
 logger.info("Discovering provider plugins...")

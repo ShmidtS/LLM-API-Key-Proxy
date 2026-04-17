@@ -32,6 +32,7 @@ class HelpersMixin:
     """Mixin with helper methods for RotatingClient."""
 
     _last_cache_reset_time: float = 0.0
+    _pool_init_lock: asyncio.Lock | None = None
 
     def _build_request_headers(self, request: Optional[Any]) -> Dict[str, Any]:
         """Build a stable request headers dict for failure logging."""
@@ -95,7 +96,8 @@ class HelpersMixin:
             )
             count = self._consecutive_quota_failures[credential_id]
         lib_logger.debug(
-            f"Quota failure increment for {mask_credential(credential_id)}: {count}/3"
+            "Quota failure increment for %s: %s/3",
+            mask_credential(credential_id), count,
         )
         return count >= 3
 
@@ -112,7 +114,8 @@ class HelpersMixin:
             if credential_id in self._consecutive_quota_failures:
                 del self._consecutive_quota_failures[credential_id]
         lib_logger.debug(
-            f"Quota failure counter reset for {mask_credential(credential_id)}"
+            "Quota failure counter reset for %s",
+            mask_credential(credential_id),
         )
 
     async def _apply_quota_cooldown(
@@ -140,15 +143,17 @@ class HelpersMixin:
             for cred in provider_creds:
                 await self._resilience.cooldown.start_cooldown(cred, retry_after)
             lib_logger.warning(
-                f"Account-level quota (INSUFFICIENT_BALANCE) for '{provider}': "
-                f"all {len(provider_creds)} credentials cooled down for {retry_after}s "
-                f"(until next day)."
+                "Account-level quota (INSUFFICIENT_BALANCE) for '%s': "
+                "all %s credentials cooled down for %ss "
+                "(until next day).",
+                provider, len(provider_creds), retry_after,
             )
         else:
             await self._resilience.cooldown.start_cooldown(credential, retry_after)
             lib_logger.info(
-                f"Per-credential quota cooldown for {mask_credential(credential)}: "
-                f"{retry_after}s."
+                "Per-credential quota cooldown for %s: "
+                "%ss.",
+                mask_credential(credential), retry_after,
             )
 
     def _is_client_usable(self, client: Optional[httpx.AsyncClient]) -> bool:
@@ -283,7 +288,7 @@ class HelpersMixin:
 
         except Exception as e:
             # Non-critical - just log and continue
-            lib_logger.debug(f"Could not reset LiteLLM client cache: {e}")
+            lib_logger.debug("Could not reset LiteLLM client cache: %s", e)
 
     def _reset_cache_on_auth_error(
         self, classified_error, raw_exception: Optional[Exception] = None,
@@ -318,8 +323,16 @@ class HelpersMixin:
 
         Uses the global singleton pool for optimal connection sharing.
         Pre-warms connections to known provider endpoints.
+        Double-check locking prevents concurrent initialization.
         """
-        if self._http_pool is None or not self._pool_initialized:
+        if self._http_pool is not None and self._pool_initialized:
+            return self._http_pool
+        if self._pool_init_lock is None:
+            self._pool_init_lock = asyncio.Lock()
+        async with self._pool_init_lock:
+            # Double-check after acquiring lock
+            if self._http_pool is not None and self._pool_initialized:
+                return self._http_pool
             self._http_pool = await get_http_pool()
             if not self._http_pool.is_initialized:
                 # Build list of endpoints to pre-warm
@@ -492,8 +505,9 @@ class HelpersMixin:
         error_message = " ".join(error_message.split())  # Sanitize
 
         lib_logger.debug(
-            f"LiteLLM Callback Handled Error: Model={model} | "
-            f"Type={error_class} | Message='{error_message}'"
+            "LiteLLM Callback Handled Error: Model=%s | "
+            "Type=%s | Message='%s'",
+            model, error_class, error_message,
         )
 
     def _apply_default_safety_settings(
@@ -592,7 +606,8 @@ class HelpersMixin:
                         headers_dict.pop(key)
             if removed:
                 lib_logger.debug(
-                    f"Removed {source} headers that may interfere with litellm: {removed}"
+                    "Removed %s headers that may interfere with litellm: %s",
+                    source, removed,
                 )
 
         # Remove problematic headers from existing headers dict
@@ -617,11 +632,13 @@ class HelpersMixin:
                     _remove_problematic_headers(headers_dict, "provider env")
                     litellm_kwargs["headers"].update(headers_dict)
                     lib_logger.debug(
-                        f"Applied provider-specific headers for {provider} from env"
+                        "Applied provider-specific headers for %s from env",
+                        provider,
                     )
             except (orjson.JSONDecodeError, ValueError) as e:
                 lib_logger.warning(
-                    f"Failed to parse {provider_headers_key}: {e}"
+                    "Failed to parse %s: %s",
+                    provider_headers_key, e,
                 )
 
 

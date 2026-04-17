@@ -46,7 +46,7 @@ def get_rotating_client(request: Request) -> RotatingClient:
         client = request.app.state.rotating_client
     except AttributeError as e:
         logger.error("Failed to get rotating client from app state: %s", e)
-        raise HTTPException(status_code=500, detail="Server not initialized: rotating client unavailable") from e
+        client = None
     if client is None:
         raise HTTPException(status_code=500, detail="Server not initialized: rotating client unavailable")
     return client
@@ -58,7 +58,7 @@ def get_embedding_batcher(request: Request) -> EmbeddingBatcher:
         batcher = request.app.state.embedding_batcher
     except AttributeError as e:
         logger.error("Failed to get embedding batcher from app state: %s", e)
-        raise HTTPException(status_code=500, detail="Server not initialized: embedding batcher unavailable") from e
+        batcher = None
     if batcher is None:
         raise HTTPException(status_code=500, detail="Server not initialized: embedding batcher unavailable")
     return batcher

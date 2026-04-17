@@ -12,7 +12,6 @@ Detection heuristics:
 - Identical error_body hash between credentials (same error from same IP)
 """
 
-import asyncio
 import hashlib
 import logging
 import time
@@ -21,6 +20,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Any
 
+from .utils.provider_locks import ProviderLockManager
 from .utils.singleton import SingletonMeta
 
 lib_logger = logging.getLogger("rotator_library")
@@ -127,8 +127,8 @@ class IPThrottleDetector(metaclass=SingletonMeta):
         self.ip_cooldown = ip_cooldown
         self.credential_cooldown = credential_cooldown
 
-        # Lock for _records access
-        self._records_lock = asyncio.Lock()
+        # Per-provider sharded locks (lazy init)
+        self._locks = ProviderLockManager()
 
         # Per-provider tracking: provider -> list of _ThrottleRecord
         self._records: Dict[str, List[_ThrottleRecord]] = defaultdict(list)
@@ -149,7 +149,8 @@ class IPThrottleDetector(metaclass=SingletonMeta):
     async def _cleanup_old_records(self, provider: str) -> None:
         """Remove records older than the detection window and enforce memory limit."""
         cutoff = time.monotonic() - self.window_seconds
-        async with self._records_lock:
+        lock = await self._locks.get_lock(provider)
+        async with lock:
             self._records[provider] = [
                 r for r in self._records[provider] if r.timestamp > cutoff
             ]
@@ -192,7 +193,8 @@ class IPThrottleDetector(metaclass=SingletonMeta):
             retry_after=retry_after,
             error_body=error_body[:500] if error_body else None,  # Truncate for storage
         )
-        async with self._records_lock:
+        lock = await self._locks.get_lock(provider)
+        async with lock:
             self._records[provider].append(record)
 
         # Cleanup old records
