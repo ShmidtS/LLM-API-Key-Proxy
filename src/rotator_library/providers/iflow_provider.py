@@ -3,6 +3,7 @@
 
 # src/rotator_library/providers/iflow_provider.py
 
+import json
 import time
 import os
 import httpx
@@ -159,10 +160,9 @@ class IFlowProvider(IFlowAuthBase, ACompletionMixin, ProviderInterface):
             )
             response.raise_for_status()
 
-            import json as json_lib
             try:
                 dynamic_data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError) as e:
                 lib_logger.warning(f"Invalid JSON from iflow models: {e}, body={response.text[:200]}")
                 dynamic_data = {}
 

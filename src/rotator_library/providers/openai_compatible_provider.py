@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 ShmidtS
 
+import json
 import os
 import httpx
 import logging
@@ -30,10 +31,9 @@ class OpenAICompatibleProvider(ProviderInterface):
     For known providers, setting _API_BASE will override their default endpoint.
     """
 
-    skip_cost_calculation: bool = True  # Skip cost calculation for custom providers
-
-    def __init__(self, provider_name: str):
+    def __init__(self, provider_name: str, skip_cost_calculation: bool = True):
         self.provider_name = provider_name
+        self.skip_cost_calculation = skip_cost_calculation
         # Get API base URL from environment (using _API_BASE pattern)
         self.api_base = os.getenv(f"{provider_name.upper()}_API_BASE")
         if not self.api_base:
@@ -49,8 +49,6 @@ class OpenAICompatibleProvider(ProviderInterface):
         Fetches the list of available models from the OpenAI-compatible API.
         Combines dynamic discovery with static model definitions.
         """
-        import json as json_lib
-
         models = []
 
         # First, try to get static model definitions
@@ -88,7 +86,7 @@ class OpenAICompatibleProvider(ProviderInterface):
 
             try:
                 response_data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError) as e:
                 body_preview = response.text[:200] if response.text else "<empty>"
                 lib_logger.warning(
                     "Invalid JSON in model discovery for %s: %s — body: %s",

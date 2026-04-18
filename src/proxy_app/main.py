@@ -158,26 +158,9 @@ with _console.status("[dim]Loading LiteLLM library...", spinner="dots"):
 
     # CRITICAL: Apply SSL patches IMMEDIATELY after litellm import
     # This must happen BEFORE rotator_library import and BEFORE any API calls
+    from rotator_library.ssl_patch import _patch_litellm_ssl
 
-    _ssl_verify_env = os.environ.get("HTTP_SSL_VERIFY", "true").lower()
-    if _ssl_verify_env == "false":
-        logger.info("[SSL-FIX-MAIN] HTTP_SSL_VERIFY=false - Applying SSL patches in main.py")
-
-        # 1. Set litellm's SSL verification to False
-        litellm.ssl_verify = False
-        logger.info("[SSL-FIX-MAIN] Set litellm.ssl_verify = False")
-
-        # 2. Create pre-configured httpx clients with SSL verification disabled
-        # This is the MOST RELIABLE way to disable SSL in litellm
-        from rotator_library.timeout_config import TimeoutConfig
-        _litellm_timeout = TimeoutConfig.non_streaming()
-        litellm.client_session = httpx.Client(verify=False, timeout=_litellm_timeout)
-        litellm.aclient_session = httpx.AsyncClient(verify=False, timeout=_litellm_timeout)
-        logger.info("[SSL-FIX-MAIN] Created litellm.client_session and aclient_session with verify=False")
-
-        # 3. Set environment variable for litellm
-        os.environ["SSL_VERIFY"] = "False"
-        logger.info("[SSL-FIX-MAIN] Set SSL_VERIFY=False environment variable")
+    _patch_litellm_ssl()
 
 # Phase 4: Application imports
 from proxy_app.middleware import _NoGzipForSSE, SecurityHeadersMiddleware

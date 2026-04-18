@@ -2,6 +2,7 @@
 # Copyright (c) 2026 ShmidtS
 
 import httpx
+import json
 import logging
 from typing import List, Dict, Any
 from .provider_interface import ProviderInterface  # strip_provider_prefix intentionally not used — nvidia preserves org prefix
@@ -55,10 +56,9 @@ class NvidiaProvider(ProviderInterface):
                 headers={"Authorization": f"Bearer {api_key}"}
             )
             response.raise_for_status()
-            import json as json_lib
             try:
                 data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError) as e:
                 lib_logger.warning(f"Invalid JSON from NVIDIA models: {e}, body={response.text[:200]}")
                 return []
             models = [f"nvidia/{model['id']}" for model in data.get("data", []) if isinstance(model, dict) and "id" in model]

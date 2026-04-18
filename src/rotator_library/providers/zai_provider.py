@@ -2,7 +2,7 @@
 # Copyright (c) 2026 ShmidtS
 
 import httpx
-import json as json_lib
+import json
 import os
 from ..utils.json_utils import json_loads
 from datetime import datetime, timezone, timedelta
@@ -179,7 +179,7 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             response.raise_for_status()
             try:
                 data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError) as e:
                 lib_logger.warning(f"Invalid JSON from ZAI models: {e}, body={response.text[:200]}")
                 return []
             models = [
@@ -238,7 +238,7 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
         response.raise_for_status()
         try:
             return response.json()
-        except (json_lib.JSONDecodeError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError) as e:
             body_preview = response.text[:200] if response.text else "<empty>"
             lib_logger.warning(
                 "Invalid JSON response from %s: %s — body: %s",

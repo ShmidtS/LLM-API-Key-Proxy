@@ -11,6 +11,7 @@ Environment variables:
 """
 
 import httpx
+import json
 import os
 from typing import Any, Dict, List, Optional
 
@@ -122,10 +123,9 @@ class FirmwareProvider(FirmwareQuotaTracker, ProviderInterface):
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             response.raise_for_status()
-            import json as json_lib
             try:
                 data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError) as e:
                 lib_logger.warning(f"Invalid JSON from Firmware.ai models: {e}, body={response.text[:200]}")
                 return []
             return [

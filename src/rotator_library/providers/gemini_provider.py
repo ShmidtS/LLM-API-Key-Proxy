@@ -2,6 +2,7 @@
 # Copyright (c) 2026 ShmidtS
 
 import httpx
+import json
 import logging
 from typing import List, Dict, Any
 from .provider_interface import ProviderInterface
@@ -23,10 +24,9 @@ class GeminiProvider(ProviderInterface):
                 headers={"x-goog-api-key": api_key}
             )
             response.raise_for_status()
-            import json as json_lib
             try:
                 data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError) as e:
                 lib_logger.warning(f"Invalid JSON from Gemini models: {e}, body={response.text[:200]}")
                 return []
             return [f"gemini/{model['name'].replace('models/', '')}" for model in data.get("models", []) if isinstance(model, dict) and "name" in model]

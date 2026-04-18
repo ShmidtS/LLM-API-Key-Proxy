@@ -3,6 +3,7 @@
 
 # src/rotator_library/providers/qwen_code_provider.py
 
+import json
 import time
 import os
 import httpx
@@ -125,10 +126,9 @@ class QwenCodeProvider(QwenAuthBase, ACompletionMixin, ProviderInterface):
             )
             response.raise_for_status()
 
-            import json as json_lib
             try:
                 dynamic_data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError) as e:
                 lib_logger.warning(f"Invalid JSON from qwen_code models: {e}, body={response.text[:200]}")
                 dynamic_data = {}
 

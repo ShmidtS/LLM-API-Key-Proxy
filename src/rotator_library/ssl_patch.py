@@ -75,4 +75,37 @@ def _patch_aiohttp_connector():
     except ImportError:
         pass
     except Exception as e:
-        logging.error(f"[SSL-FIX] Failed to patch: {e}")
+        logging.error(f"[SSL-FIX] Failed to patch aiohttp connector: {e}")
+
+
+def _patch_litellm_ssl():
+    """Patch litellm to disable SSL verification when HTTP_SSL_VERIFY=false.
+
+    Must be called immediately after litellm import, before any API calls.
+    Sets litellm.ssl_verify=False, creates httpx clients with verify=False,
+    and sets SSL_VERIFY=False env var so litellm internals respect the flag.
+    """
+    _ssl_verify_env = os.environ.get("HTTP_SSL_VERIFY", "true").lower()
+    if _ssl_verify_env != "false":
+        return
+
+    try:
+        import litellm
+        import httpx
+        from rotator_library.timeout_config import TimeoutConfig
+
+        litellm.ssl_verify = False
+        logging.info("[SSL-FIX] Set litellm.ssl_verify = False")
+
+        _litellm_timeout = TimeoutConfig.non_streaming()
+        litellm.client_session = httpx.Client(verify=False, timeout=_litellm_timeout)
+        litellm.aclient_session = httpx.AsyncClient(verify=False, timeout=_litellm_timeout)
+        logging.info("[SSL-FIX] Created litellm.client_session and aclient_session with verify=False")
+
+        os.environ["SSL_VERIFY"] = "False"
+        logging.info("[SSL-FIX] Set SSL_VERIFY=False environment variable")
+
+    except ImportError:
+        pass
+    except Exception as e:
+        logging.error(f"[SSL-FIX] Failed to patch litellm SSL: {e}")

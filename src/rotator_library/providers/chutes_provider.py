@@ -2,6 +2,7 @@
 # Copyright (c) 2026 ShmidtS
 
 import httpx
+import json
 from typing import Any, Dict, List, Optional
 from .provider_interface import ProviderInterface, UsageResetConfigDef
 from .utilities.chutes_quota_tracker import ChutesQuotaTracker
@@ -83,10 +84,9 @@ class ChutesProvider(ChutesQuotaTracker, ProviderInterface):
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             response.raise_for_status()
-            import json as json_lib
             try:
                 data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError) as e:
                 lib_logger.warning(f"Invalid JSON from chutes.ai models: {e}, body={response.text[:200]}")
                 return []
             return [

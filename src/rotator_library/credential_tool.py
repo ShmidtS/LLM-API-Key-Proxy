@@ -1195,7 +1195,7 @@ async def setup_api_key():
     # Discover custom providers from project's provider registry
     # -------------------------------------------------------------------------
     _, PROVIDER_PLUGINS = _ensure_providers_loaded()
-    from .providers import DynamicOpenAICompatibleProvider
+    from .providers import OpenAICompatibleProvider
 
     # Build a set of API key env vars already in SCRAPED_PROVIDERS
     litellm_api_keys = set()
@@ -1268,7 +1268,7 @@ async def setup_api_key():
         # Check if this is a dynamic OpenAI-compatible provider
         try:
             is_dynamic = isinstance(provider_class, type) and issubclass(
-                provider_class, DynamicOpenAICompatibleProvider
+                provider_class, OpenAICompatibleProvider
             )
         except TypeError:
             is_dynamic = False

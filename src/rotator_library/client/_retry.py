@@ -10,28 +10,21 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Optional
 
 import httpx
 
-from cachetools import TTLCache
-
 from ..config.defaults import TRACE
 from ..utils.chunk_aggregator import ChunkAggregator
+from .retry_base import (
+    HalfOpenSlot,
+    _RetryContext,
+    _KeySelectionResult,
+    RetryBaseMixin,
+)
 
 lib_logger = logging.getLogger("rotator_library")
 
-# Deduplication cache for repeated circuit-breaker-open messages.
-_CB_OPEN_DEDUP: TTLCache = TTLCache(maxsize=256, ttl=5.0)
-
-
-def _should_suppress_cb_open(provider: str) -> bool:
-    """Suppress repeated 'Circuit breaker OPEN' messages within TTL window."""
-    if provider in _CB_OPEN_DEDUP:
-        return True
-    _CB_OPEN_DEDUP[provider] = True
-    return False
 import litellm
 import orjson
 from litellm.exceptions import APIConnectionError, BadRequestError, InvalidRequestError
@@ -63,54 +56,100 @@ from ..utils.model_utils import (
 )
 
 
-class HalfOpenSlot:
-    """Async context manager that auto-releases a half-open circuit breaker slot.
-
-    Ensures the slot is released even on CancelledError or unexpected exceptions,
-    preventing slot leaks that could permanently block a provider in HALF_OPEN.
-    """
-
-    __slots__ = ("_resilience", "_provider", "_active")
-
-    def __init__(self, resilience, provider: str):
-        self._resilience = resilience
-        self._provider = provider
-        self._active = False
-
-    async def __aenter__(self):
-        self._active = True
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self._active:
-            self._active = False
-            await self._resilience.release_half_open_slot(self._provider)
-        return False
-
-
-@dataclass
-class _RetryContext:
-    model: str
-    provider: str
-    credentials_for_provider: list
-    provider_plugin: Any
-    deadline: float
-    transaction_logger: Any
-    tried_creds: set = field(default_factory=set)
-    last_exception: Optional[Exception] = None
-    parent_log_dir: Optional[str] = None
-    credential_priorities: dict = field(default_factory=dict)
-    credential_tier_names: dict = field(default_factory=dict)
-    error_accumulator: Any = None
-
-
-class RetryMixin:
+class RetryMixin(RetryBaseMixin):
     """Mixin with retry logic methods for RotatingClient."""
+
+    def _apply_common_provider_overrides(
+        self,
+        litellm_kwargs: dict,
+        model: str,
+        provider: str,
+        provider_plugin: Any,
+        log_label: str = "",
+    ):
+        """Apply shared provider-specific overrides to litellm_kwargs.
+
+        Handles safety settings, thinking parameter, gemma-3 system-role
+        conversion, request payload sanitization, context-window rejection,
+        and provider-specific model name / custom_llm_provider overrides.
+
+        Args:
+            litellm_kwargs: Mutable kwargs dict to modify in place.
+            model: Resolved model string.
+            provider: Provider name.
+            provider_plugin: Provider plugin instance (may be None).
+            log_label: Optional label for safety-settings warning messages
+                       (e.g. "streaming path").
+        """
+        if provider_plugin:
+            try:
+                self._apply_default_safety_settings(litellm_kwargs, provider)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                label = f" {log_label}" if log_label else ""
+                lib_logger.warning(
+                    "Could not apply default safety settings for%s %s: %s; continuing.",
+                    label, provider, type(exc).__name__,
+                )
+
+            if "safety_settings" in litellm_kwargs:
+                converted_settings = (
+                    provider_plugin.convert_safety_settings(
+                        litellm_kwargs["safety_settings"]
+                    )
+                )
+                if converted_settings is not None:
+                    litellm_kwargs["safety_settings"] = converted_settings
+                else:
+                    del litellm_kwargs["safety_settings"]
+
+        if provider == "gemini" and provider_plugin:
+            provider_plugin.handle_thinking_parameter(litellm_kwargs, model)
+        if provider == "nvidia" and provider_plugin:
+            provider_plugin.handle_thinking_parameter(litellm_kwargs, model)
+
+        if "gemma-3" in model and "messages" in litellm_kwargs:
+            litellm_kwargs["messages"] = [
+                (
+                    {"role": "user", "content": m["content"]}
+                    if m.get("role") == "system"
+                    else m
+                )
+                for m in litellm_kwargs["messages"]
+            ]
+
+        sanitized_kwargs, should_reject = sanitize_request_payload(
+            litellm_kwargs, model, registry=self._model_registry
+        )
+        # Update in-place so caller sees the changes
+        if sanitized_kwargs is not litellm_kwargs:
+            litellm_kwargs.clear()
+            litellm_kwargs.update(sanitized_kwargs)
+
+        if should_reject:
+            raise ContextOverflowError(
+                f"Input tokens exceed context window for model {model}. "
+                "Request rejected to prevent API error."
+            )
+
+        if provider == "qwen_code":
+            litellm_kwargs["custom_llm_provider"] = "qwen"
+            litellm_kwargs["model"] = model.split("/", 1)[1]
+
+        if provider == "nvidia":
+            litellm_kwargs["custom_llm_provider"] = "nvidia_nim"
+            litellm_kwargs["model"] = model.split("/", 1)[1]
+
+        if provider == "inception":
+            litellm_kwargs["model"] = model.rsplit("/", 1)[1]
 
     async def _invoke_pre_request_callback(self, pre_request_callback, request, litellm_kwargs, provider: str):
         """Invoke pre_request_callback with abort_on_callback_error handling."""
         try:
             await pre_request_callback(request, litellm_kwargs)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             if self.abort_on_callback_error:
                 async with HalfOpenSlot(self._resilience, provider):
@@ -380,76 +419,18 @@ class RetryMixin:
             key_acquired = False
             _cb_slot_held = False
             try:
-                creds_to_try = [
-                    c for c in credentials_for_provider if c not in tried_creds
-                ]
-                if not creds_to_try:
+                sel = await self._select_next_key(
+                    credentials_for_provider, tried_creds,
+                    model, provider, deadline,
+                    credential_priorities, credential_tier_names,
+                )
+                if sel.loop_action == "break":
                     break
-
-                rate_wait = await self._resilience.acquire_rate(provider)
-                if rate_wait > 0:
-                    wait = min(rate_wait, 5.0)
-                    lib_logger.debug(
-                        "AdaptiveRateLimiter: %s rate-limited, waiting %1.1fs",
-                        provider, wait,
-                    )
-                    if time.monotonic() + wait < deadline:
-                        await asyncio.sleep(wait)
-
-                # Check circuit breaker before acquiring key
-                # Back off briefly if circuit is OPEN, then retry
-                if not await self._resilience.can_attempt(provider):
-                    remaining = await self._resilience.get_cooldown_remaining(provider)
-                    backoff = min(remaining, 5.0)
-                    lib_logger.debug(
-                        "Circuit breaker OPEN for provider '%s', "
-                        "backing off %1.1fs (recovery in %0.0fs)",
-                        provider, backoff, remaining,
-                    )
-                    if time.monotonic() + backoff < deadline:
-                        await asyncio.sleep(backoff)
+                if sel.loop_action == "continue":
                     continue
-
-                _cb_slot_held = True  # can_attempt() acquired a half-open slot
-
-                # Get count of credentials not on cooldown for this model
-                availability_stats = (
-                    await self.usage_manager.get_credential_availability_stats(
-                        creds_to_try, model, credential_priorities
-                    )
-                )
-                available_count = availability_stats["available"]
-                total_count = len(credentials_for_provider)
-                on_cooldown = availability_stats["on_cooldown"]
-                fc_excluded = availability_stats["fair_cycle_excluded"]
-
-                # Build compact exclusion breakdown
-                exclusion_parts = []
-                if on_cooldown > 0:
-                    exclusion_parts.append(f"cd:{on_cooldown}")
-                if fc_excluded > 0:
-                    exclusion_parts.append(f"fc:{fc_excluded}")
-                exclusion_str = (
-                    f",{','.join(exclusion_parts)}" if exclusion_parts else ""
-                )
-
-                lib_logger.info(
-                    "Acquiring key for model %s. Tried keys: %s/%s(%s%s)",
-                    model, len(tried_creds), available_count, total_count, exclusion_str,
-                )
-                max_concurrent = self.max_concurrent_requests_per_key.get(provider, 1)
-
-                current_cred = await self.usage_manager.acquire_key(
-                    available_keys=creds_to_try,
-                    model=model,
-                    deadline=deadline,
-                    max_concurrent=max_concurrent,
-                    credential_priorities=credential_priorities,
-                    credential_tier_names=credential_tier_names,
-                    all_provider_credentials=credentials_for_provider,
-                )
+                current_cred = sel.current_cred
+                _cb_slot_held = sel.cb_slot_held
                 key_acquired = True
-                tried_creds.add(current_cred)
 
                 litellm_kwargs = await self._prepare_request_kwargs(
                     kwargs, provider, current_cred, model
@@ -668,72 +649,9 @@ class RetryMixin:
                         litellm_kwargs["api_key"] = current_cred
 
                     # _prepare_request_kwargs already called _apply_provider_headers above
-
-                    if provider_plugin:
-                        # Ensure default Gemini safety settings are present (without overriding request)
-                        try:
-                            self._apply_default_safety_settings(
-                                litellm_kwargs, provider
-                            )
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as exc:
-                            # If anything goes wrong here, avoid breaking the request flow.
-                            lib_logger.warning(
-                                "Could not apply default safety settings for %s: %s; continuing.",
-                                provider,
-                                type(exc).__name__,
-                            )
-
-                        if "safety_settings" in litellm_kwargs:
-                            converted_settings = (
-                                provider_plugin.convert_safety_settings(
-                                    litellm_kwargs["safety_settings"]
-                                )
-                            )
-                            if converted_settings is not None:
-                                litellm_kwargs["safety_settings"] = converted_settings
-                            else:
-                                del litellm_kwargs["safety_settings"]
-
-                    if provider == "gemini" and provider_plugin:
-                        provider_plugin.handle_thinking_parameter(litellm_kwargs, model)
-                    if provider == "nvidia" and provider_plugin:
-                        provider_plugin.handle_thinking_parameter(litellm_kwargs, model)
-
-                    if "gemma-3" in model and "messages" in litellm_kwargs:
-                        litellm_kwargs["messages"] = [
-                            (
-                                {"role": "user", "content": m["content"]}
-                                if m.get("role") == "system"
-                                else m
-                            )
-                            for m in litellm_kwargs["messages"]
-                        ]
-
-                    litellm_kwargs, should_reject = sanitize_request_payload(
-                        litellm_kwargs, model, registry=self._model_registry
+                    self._apply_common_provider_overrides(
+                        litellm_kwargs, model, provider, provider_plugin,
                     )
-
-                    # Reject request if input exceeds context window
-                    if should_reject:
-                        raise ContextOverflowError(
-                            f"Input tokens exceed context window for model {model}. "
-                            "Request rejected to prevent API error."
-                        )
-
-                    # If the provider is 'nvidia', set the custom provider for LiteLLM
-                    # (litellm knows nvidia as 'nvidia_nim') and strip the prefix from the model name.
-                    if provider == "nvidia":
-                        litellm_kwargs["custom_llm_provider"] = "nvidia_nim"
-                        litellm_kwargs["model"] = model.split("/", 1)[1]
-
-                    # Inception Labs also requires model name without prefix
-                    # This MUST happen before convert_for_litellm and AllProviders routing
-                    # to avoid double prefixing (inception/mercury-2 → mercury-2 → openai/mercury-2)
-                    # Use rsplit to handle both "inception/mercury-2" and "openai/inception/mercury-2"
-                    if provider == "inception":
-                        litellm_kwargs["model"] = model.rsplit("/", 1)[1]
 
                     for attempt in range(self.max_retries):
                         total_api_attempts += 1
@@ -1032,10 +950,7 @@ class RetryMixin:
                             async with HalfOpenSlot(self._resilience, provider):
                                 break
             finally:
-                if key_acquired and current_cred:
-                    await self.usage_manager.release_key(current_cred, model)
-                if _cb_slot_held:
-                    await self._resilience.release_half_open_slot(provider)
+                await self._release_cred(current_cred, model, key_acquired, provider, _cb_slot_held)
 
         # Check if we exhausted all credentials or timed out
         if time.monotonic() >= deadline:
@@ -1093,84 +1008,23 @@ class RetryMixin:
                 key_acquired = False
                 _cb_slot_held = False
                 try:
-                    creds_to_try = [
-                        c for c in credentials_for_provider if c not in tried_creds
-                    ]
-                    if not creds_to_try:
+                    sel = await self._select_next_key(
+                        credentials_for_provider, tried_creds,
+                        model, provider, deadline,
+                        credential_priorities, credential_tier_names,
+                        suppress_cb_logging=True,
+                    )
+                    if sel.loop_action == "break":
                         lib_logger.warning(
                             "All credentials for provider %s have been tried. No more credentials to rotate to.",
                             provider,
                         )
                         break
-
-                    rate_wait = await self._resilience.acquire_rate(provider)
-                    if rate_wait > 0:
-                        wait = min(rate_wait, 5.0)
-                        lib_logger.debug(
-                            "AdaptiveRateLimiter: %s rate-limited, waiting %1.1fs",
-                            provider, wait,
-                        )
-                        if time.monotonic() + wait < deadline:
-                            await asyncio.sleep(wait)
-
-                    # Check circuit breaker before acquiring key
-                    # Back off briefly if circuit is OPEN, then retry
-                    if not await self._resilience.can_attempt(provider):
-                        remaining = await self._resilience.get_cooldown_remaining(
-                            provider
-                        )
-                        backoff = min(remaining, 5.0)
-                        if not _should_suppress_cb_open(provider):
-                            lib_logger.debug(
-                                "Circuit breaker OPEN for provider '%s', "
-                                "backing off %1.1fs (recovery in %0.0fs)",
-                                provider, backoff, remaining,
-                            )
-                        if time.monotonic() + backoff < deadline:
-                            await asyncio.sleep(backoff)
+                    if sel.loop_action == "continue":
                         continue
-
-                    _cb_slot_held = True  # can_attempt() acquired a half-open slot
-
-                    # Get count of credentials not on cooldown for this model
-                    availability_stats = (
-                        await self.usage_manager.get_credential_availability_stats(
-                            creds_to_try, model, credential_priorities
-                        )
-                    )
-                    available_count = availability_stats["available"]
-                    total_count = len(credentials_for_provider)
-                    on_cooldown = availability_stats["on_cooldown"]
-                    fc_excluded = availability_stats["fair_cycle_excluded"]
-
-                    # Build compact exclusion breakdown
-                    exclusion_parts = []
-                    if on_cooldown > 0:
-                        exclusion_parts.append(f"cd:{on_cooldown}")
-                    if fc_excluded > 0:
-                        exclusion_parts.append(f"fc:{fc_excluded}")
-                    exclusion_str = (
-                        f",{','.join(exclusion_parts)}" if exclusion_parts else ""
-                    )
-
-                    lib_logger.info(
-                        "Acquiring credential for model %s. Tried credentials: %s/%s(%s%s)",
-                        model, len(tried_creds), available_count, total_count, exclusion_str,
-                    )
-                    max_concurrent = self.max_concurrent_requests_per_key.get(
-                        provider, 1
-                    )
-                    current_cred = await self.usage_manager.acquire_key(
-                        available_keys=creds_to_try,
-                        model=model,
-                        deadline=deadline,
-                        max_concurrent=max_concurrent,
-                        credential_priorities=credential_priorities,
-                        credential_tier_names=credential_tier_names,
-                        all_provider_credentials=credentials_for_provider,
-                    )
+                    current_cred = sel.current_cred
+                    _cb_slot_held = sel.cb_slot_held
                     key_acquired = True
-                    tried_creds.add(current_cred)
 
                     litellm_kwargs = kwargs.copy()
 
@@ -1542,69 +1396,10 @@ class RetryMixin:
                         litellm_kwargs, provider, current_cred
                     )
 
-                    if provider_plugin:
-                        # Ensure default Gemini safety settings are present (without overriding request)
-                        try:
-                            self._apply_default_safety_settings(
-                                litellm_kwargs, provider
-                            )
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as exc:
-                            lib_logger.warning(
-                                "Could not apply default safety settings for streaming path %s: %s; continuing.",
-                                provider,
-                                type(exc).__name__,
-                            )
-
-                        if "safety_settings" in litellm_kwargs:
-                            converted_settings = (
-                                provider_plugin.convert_safety_settings(
-                                    litellm_kwargs["safety_settings"]
-                                )
-                            )
-                            if converted_settings is not None:
-                                litellm_kwargs["safety_settings"] = converted_settings
-                            else:
-                                del litellm_kwargs["safety_settings"]
-
-                    if provider == "gemini" and provider_plugin:
-                        provider_plugin.handle_thinking_parameter(litellm_kwargs, model)
-                    if provider == "nvidia" and provider_plugin:
-                        provider_plugin.handle_thinking_parameter(litellm_kwargs, model)
-
-                    if "gemma-3" in model and "messages" in litellm_kwargs:
-                        litellm_kwargs["messages"] = [
-                            (
-                                {"role": "user", "content": m["content"]}
-                                if m.get("role") == "system"
-                                else m
-                            )
-                            for m in litellm_kwargs["messages"]
-                        ]
-
-                    litellm_kwargs, should_reject = sanitize_request_payload(
-                        litellm_kwargs, model, registry=self._model_registry
+                    self._apply_common_provider_overrides(
+                        litellm_kwargs, model, provider, provider_plugin,
+                        log_label="streaming path",
                     )
-
-                    # Reject request if input exceeds context window
-                    if should_reject:
-                        raise ContextOverflowError(
-                            f"Input tokens exceed context window for model {model}. "
-                            "Request rejected to prevent API error."
-                        )
-
-                    # If the provider is 'qwen_code', set the custom provider to 'qwen'
-                    # and strip the prefix from the model name for LiteLLM.
-                    if provider == "qwen_code":
-                        litellm_kwargs["custom_llm_provider"] = "qwen"
-                        litellm_kwargs["model"] = model.split("/", 1)[1]
-
-                    # If the provider is 'nvidia', set the custom provider for LiteLLM
-                    # (litellm knows nvidia as 'nvidia_nim') and strip the prefix from the model name.
-                    if provider == "nvidia":
-                        litellm_kwargs["custom_llm_provider"] = "nvidia_nim"
-                        litellm_kwargs["model"] = model.split("/", 1)[1]
 
                     for attempt in range(self.max_retries):
                         total_api_attempts += 1
@@ -2043,10 +1838,7 @@ class RetryMixin:
                                 break
 
                 finally:
-                    if key_acquired and current_cred:
-                        await self.usage_manager.release_key(current_cred, model)
-                    if _cb_slot_held:
-                        await self._resilience.release_half_open_slot(provider)
+                    await self._release_cred(current_cred, model, key_acquired, provider, _cb_slot_held)
 
             # Build detailed error response using error accumulator
             error_accumulator.timeout_occurred = time.monotonic() >= deadline
@@ -2075,6 +1867,8 @@ class RetryMixin:
             yield error_data
             yield STREAM_DONE
 
+        except asyncio.CancelledError:
+            raise
         except NoAvailableKeysError as e:
             lib_logger.error(
                 "A streaming request failed because no keys were available within the time budget: %s",

@@ -24,7 +24,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import httpx
-import json as json_lib
+import json
 
 from ...http_client_pool import get_http_pool
 
@@ -125,7 +125,7 @@ class LightweightQuotaMixin:
 
             try:
                 return response.json()
-            except (json_lib.JSONDecodeError, ValueError) as exc:
+            except (json.JSONDecodeError, ValueError) as exc:
                 lib_logger.warning(
                     f"{provider} quota API returned invalid JSON: {exc}"
                 )

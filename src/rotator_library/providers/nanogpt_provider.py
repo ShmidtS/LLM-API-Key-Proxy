@@ -19,6 +19,7 @@ All models share a daily/monthly usage pool at the credential level.
 """
 
 import asyncio
+import json
 import httpx
 from ..http_client_pool import get_http_pool
 import logging
@@ -222,10 +223,9 @@ class NanoGptProvider(NanoGptQuotaTracker, ProviderInterface):
                 timeout=30,
             )
             response.raise_for_status()
-            import json as json_lib
             try:
                 data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError) as e:
                 lib_logger.warning(f"Invalid JSON from nanogpt models: {e}, body={response.text[:200]}")
                 data = {}
 
@@ -302,10 +302,9 @@ class NanoGptProvider(NanoGptQuotaTracker, ProviderInterface):
                 timeout=30,
             )
             response.raise_for_status()
-            import json as json_lib
             try:
                 data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError) as e:
                 lib_logger.warning(f"Invalid JSON from nanogpt subscription models: {e}, body={response.text[:200]}")
                 data = {}
 

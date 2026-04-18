@@ -15,12 +15,12 @@ from .qwen_auth_base import QwenAuthBase as _QwenAuthBase
 from .iflow_auth_base import IFlowAuthBase as _IFlowAuthBase
 from .antigravity_auth_base import AntigravityAuthBase as _AntigravityAuthBase
 from .colin_provider import ColinProvider as _ColinProvider
-from .dynamic_provider import DynamicOpenAICompatibleProvider
+from .openai_compatible_provider import OpenAICompatibleProvider
 
 __all__ = [
     "PROVIDER_PLUGINS",
     "PROVIDER_AUTH_MAP",
-    "DynamicOpenAICompatibleProvider",
+    "OpenAICompatibleProvider",
     "get_provider",
     "list_providers",
     "get_all_providers",
@@ -165,7 +165,7 @@ def _ensure_dynamic_providers():
 
             # Create a dynamic plugin class
             def create_plugin_class(name):
-                class DynamicPlugin(DynamicOpenAICompatibleProvider):
+                class DynamicPlugin(OpenAICompatibleProvider):
                     def __init__(self):
                         super().__init__(name)
 

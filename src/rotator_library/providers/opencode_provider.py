@@ -1,15 +1,12 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 ShmidtS
 
-import httpx
-import logging
-from typing import List, Dict
-from .provider_interface import ProviderInterface
-
-lib_logger = logging.getLogger("rotator_library")
+import os
+from typing import Dict
+from ._simple_model_base import SimpleModelProvider
 
 
-class OpencodeProvider(ProviderInterface):
+class OpencodeProvider(SimpleModelProvider):
     """
     Provider implementation for the OpenCode API.
 
@@ -21,7 +18,10 @@ class OpencodeProvider(ProviderInterface):
         OPENCODE_API_KEY  - The API key for authentication
     """
 
-    skip_cost_calculation = True  # Skip cost calculation for OpenCode
+    skip_cost_calculation = True
+
+    _models_url = "https://opencode.ai/zen/v1/models"
+    _provider_prefix = "opencode"
 
     _quota_error_patterns = [
         ("json", "error.code", 1113, 3600, "QUOTA_EXHAUSTED"),
@@ -32,6 +32,11 @@ class OpencodeProvider(ProviderInterface):
         ("body", "rate limit", 60, "RATE_LIMIT_EXCEEDED"),
         ("body", "too many requests", 60, "RATE_LIMIT_EXCEEDED"),
     ]
+
+    def _resolve_models_url(self) -> str:
+        """Resolve models URL from environment variable."""
+        api_base = os.getenv("OPENCODE_API_BASE", "https://opencode.ai/zen/v1").rstrip("/")
+        return f"{api_base}/models"
 
     async def get_auth_header(self, credential_identifier: str) -> Dict[str, str]:
         """
@@ -46,41 +51,3 @@ class OpencodeProvider(ProviderInterface):
             "HTTP-Referer": "https://opencode.ai",
             "X-Title": "Roo Code",
         }
-
-    async def get_models(self, api_key: str, client: httpx.AsyncClient) -> List[str]:
-        """
-        Fetches the list of available models from the OpenCode API.
-        """
-        import os
-
-        api_base = os.getenv("OPENCODE_API_BASE", "https://opencode.ai/zen/v1").rstrip(
-            "/"
-        )
-
-        try:
-            response = await client.get(
-                f"{api_base}/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-            response.raise_for_status()
-            import json as json_lib
-            try:
-                data = response.json()
-            except (json_lib.JSONDecodeError, ValueError) as e:
-                lib_logger.warning(f"Invalid JSON from OpenCode models: {e}, body={response.text[:200]}")
-                return []
-            return [
-                f"opencode/{model['id']}" for model in data.get("data", [])
-                if isinstance(model, dict) and "id" in model
-            ]
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code in (401, 403):
-                lib_logger.warning(f"Auth error fetching OpenCode models: {e.response.status_code}")
-            elif e.response.status_code >= 500:
-                lib_logger.warning(f"Server error fetching OpenCode models: {e.response.status_code}")
-            else:
-                lib_logger.error(f"HTTP error fetching OpenCode models: {e}")
-            return []
-        except httpx.RequestError as e:
-            lib_logger.error(f"Failed to fetch OpenCode models: {e}")
-            return []

@@ -110,6 +110,8 @@ async def process_credential(provider: str, path: str, provider_instance):
         email = user_info.get("email")
         return (provider, path, email, None)
 
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.error(
             f"Failed to process OAuth token for {provider} at '{path}': {e}"
@@ -305,6 +307,8 @@ def create_lifespan(config: LifespanConfig):
                             await asyncio.get_running_loop().run_in_executor(
                                 None, update_metadata, path, email, time.time()
                             )
+                        except asyncio.CancelledError:
+                            raise
                         except Exception as e:
                             logger.error(
                                 f"Failed to update metadata for '{path}': {e}"
@@ -447,11 +451,15 @@ def create_lifespan(config: LifespanConfig):
                         try:
                             if hasattr(stream_gen, "aclose"):
                                 await stream_gen.aclose()
+                        except asyncio.CancelledError:
+                            raise
                         except Exception as e:
                             logger.debug(
                                 "Error during stream cleanup: %s", e
                             )
                     active_stream_gens.clear()
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.debug(
                 "Error waiting for active streams during shutdown: %s", e
@@ -468,6 +476,8 @@ def create_lifespan(config: LifespanConfig):
         # "Unclosed client session" warnings on shutdown
         try:
             await litellm.close_litellm_async_clients()
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.debug("Error closing litellm async clients: %s", e)
 
@@ -490,6 +500,8 @@ def create_lifespan(config: LifespanConfig):
                         elif hasattr(_obj, "close"):
                             _obj.close()
                 _custom_httpx.httpx_handler = None
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.debug("Error clearing custom_httpx handler: %s", e)
 
@@ -500,6 +512,8 @@ def create_lifespan(config: LifespanConfig):
             try:
                 await litellm.aclient_session.aclose()
                 litellm.aclient_session = None
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.debug(
                     "Error closing litellm aclient_session: %s", e
@@ -511,6 +525,8 @@ def create_lifespan(config: LifespanConfig):
             try:
                 litellm.client_session.close()
                 litellm.client_session = None
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.debug(
                     "Error closing litellm client_session: %s", e
