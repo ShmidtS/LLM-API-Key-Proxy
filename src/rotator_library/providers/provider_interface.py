@@ -14,8 +14,7 @@ from typing import (
     Tuple,
 )
 import json
-import re
-from ..utils.json_utils import json_loads
+from ..utils.json_utils import json_loads, extract_json_object
 
 import logging
 import os
@@ -142,7 +141,7 @@ class ProviderInterface(ABC):
     @abstractmethod
     async def get_models(self, api_key: str, client: httpx.AsyncClient) -> List[str]:
         """Fetch the list of available model names from the provider's API."""
-        pass
+        ...
 
     def has_custom_logic(self) -> bool:
         """Returns True if the provider implements its own acompletion/aembedding logic."""
@@ -288,12 +287,11 @@ class ProviderInterface(ABC):
 
         data = None
         try:
-            json_match = re.search(r"\{[\s\S]*\}", body)
-            if json_match:
-                data = json_loads(json_match.group(0))
+            json_text = extract_json_object(body)
+            if json_text:
+                data = json_loads(json_text)
         except (json.JSONDecodeError, ValueError):
             lib_logger.debug("JSON parse error in provider_interface", exc_info=True)
-            pass
 
         for spec in patterns:
             kind = spec[0]
@@ -313,7 +311,6 @@ class ProviderInterface(ABC):
                             return {"retry_after": int(val), "reason": reason}
                         except (ValueError, TypeError):
                             lib_logger.debug("Value/Type error in provider_interface", exc_info=True)
-                            pass
 
             elif kind == "body":
                 _, keyword, default_retry, reason = spec

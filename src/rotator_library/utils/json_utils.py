@@ -10,12 +10,30 @@ serialization and deserialization of large payloads in hot paths
 
 import json
 import orjson
+import re
 from typing import Any, Dict, Optional
 
 JSONDecodeError = getattr(orjson, "JSONDecodeError", json.JSONDecodeError)
 
 STREAM_DONE = object()
 """Sentinel marker indicating stream completion in internal pipeline."""
+
+# Pre-compiled pattern to extract the first JSON object from a string
+_JSON_OBJECT_RE = re.compile(r"(\{.*\})", re.DOTALL)
+
+
+def extract_json_object(text: str) -> Optional[str]:
+    """Extract the first JSON object from arbitrary text.
+
+    Returns the matched JSON string (stripped) if found, otherwise None.
+    Uses a pre-compiled regex for performance.
+    """
+    if not text:
+        return None
+    match = _JSON_OBJECT_RE.search(text)
+    if match:
+        return match.group(1)
+    return None
 
 def json_dumps(obj: Any) -> bytes:
     """Fast JSON serialization using orjson. Returns UTF-8 encoded bytes."""

@@ -23,6 +23,7 @@ from rich.markup import escape as rich_escape
 from ..utils.headless_detection import is_headless_environment
 from ..utils.json_utils import json_loads
 from ..error_types import CredentialNeedsReauthError
+from ..error_handler import get_retry_after
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -142,8 +143,8 @@ class QwenAuthBase(GoogleOAuthBase):
                             error_data = e.response.json()
                             error_type = error_data.get("error", "")
                             error_desc = error_data.get("error_description", "")
-                        except Exception as e:
-                            lib_logger.debug("Failed to parse OAuth error response JSON: %s", e)
+                        except Exception as parse_err:
+                            lib_logger.debug("Failed to parse OAuth error response JSON: %s", parse_err)
                             error_type = ""
                             error_desc = error_body
 
@@ -187,7 +188,7 @@ class QwenAuthBase(GoogleOAuthBase):
                         )
 
                     elif status_code == 429:
-                        retry_after = int(e.response.headers.get("Retry-After", 60))
+                        retry_after = get_retry_after(e) or 60
                         lib_logger.warning(
                             f"Rate limited (HTTP 429), retry after {retry_after}s"
                         )

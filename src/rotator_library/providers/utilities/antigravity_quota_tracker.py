@@ -22,15 +22,12 @@ Required from provider:
 """
 
 import logging
-import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ...usage_manager import UsageManager
 
-from ...http_client_pool import get_http_pool
 from .google_quota_tracker_base import GoogleQuotaTrackerBase
 
 
@@ -172,6 +169,79 @@ class AntigravityQuotaTracker(GoogleQuotaTrackerBase):
         return None
 
     # =========================================================================
+    # GOOGLE QUOTA TRACKER BASE HOOK IMPLEMENTATIONS
+    # =========================================================================
+
+    def _get_api_base_url(self) -> str:
+        """Get the base URL for Antigravity API requests."""
+        return self._get_base_url()
+
+    def _get_api_headers(self) -> Dict[str, str]:
+        """Get Antigravity-specific headers for API requests."""
+        return self._get_antigravity_headers()
+
+    def _get_quota_endpoint_suffix(self) -> str:
+        """Get the endpoint suffix for Antigravity quota API."""
+        return "fetchAvailableModels"
+
+    def _get_quota_headers(self, auth_header: Dict[str, str]) -> Dict[str, str]:
+        """Build headers for Antigravity quota API request."""
+        access_token = auth_header["Authorization"].split(" ")[1]
+        return {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            **self._get_antigravity_headers(),
+        }
+
+    def _parse_quota_response(
+        self, data: Dict[str, Any]
+    ) -> List[Tuple[str, Dict[str, Any]]]:
+        """
+        Parse Antigravity fetchAvailableModels response into normalized entries.
+
+        Returns:
+            List of (model_name, quota_info_dict) tuples.
+        """
+        from datetime import datetime
+
+        results = []
+        for model_name, model_info in data.get("models", {}).items():
+            quota_info = model_info.get("quotaInfo", {})
+
+            # CRITICAL: NULL remainingFraction means EXHAUSTED (0.0)
+            remaining = quota_info.get("remainingFraction")
+            if remaining is None:
+                remaining = 0.0
+                is_exhausted = True
+            else:
+                is_exhausted = remaining <= 0
+
+            reset_time_iso = quota_info.get("resetTime")
+            reset_timestamp = None
+            if reset_time_iso:
+                try:
+                    reset_dt = datetime.fromisoformat(
+                        reset_time_iso.replace("Z", "+00:00")
+                    )
+                    reset_timestamp = reset_dt.timestamp()
+                except (ValueError, AttributeError):
+                    pass
+
+            results.append(
+                (
+                    model_name,
+                    {
+                        "remaining_fraction": remaining,
+                        "is_exhausted": is_exhausted,
+                        "reset_time_iso": reset_time_iso,
+                        "reset_timestamp": reset_timestamp,
+                        "display_name": model_info.get("displayName"),
+                    },
+                )
+            )
+        return results
+
+    # =========================================================================
     # BaseQuotaTracker ABSTRACT METHOD IMPLEMENTATIONS
     # =========================================================================
 
@@ -227,145 +297,9 @@ class AntigravityQuotaTracker(GoogleQuotaTrackerBase):
 
         return results
 
-    def _get_api_base_url(self) -> str:
-        """Get the base URL for Antigravity API requests."""
-        return self._get_base_url()
-
-    def _get_api_headers(self) -> Dict[str, str]:
-        """Get Antigravity-specific headers for API requests."""
-        return self._get_antigravity_headers()
-
-    # =========================================================================
-    # ANTIGRAVITY-SPECIFIC QUOTA API
-    # =========================================================================
-
-    async def fetch_quota_from_api(
-        self,
-        credential_path: str,
-    ) -> Dict[str, Any]:
-        """
-        Fetch quota information from the Antigravity fetchAvailableModels API.
-
-        Args:
-            credential_path: Path to credential file or "env://antigravity/N"
-
-        Returns:
-            {
-                "status": "success" | "error",
-                "error": str | None,
-                "identifier": str,
-                "tier": str | None,
-                "project_id": str | None,
-                "models": {
-                    "model_name": {
-                        "remaining_fraction": 0.95,  # None from API = 0.0 (EXHAUSTED)
-                        "is_exhausted": bool,
-                        "reset_time_iso": "2025-12-16T10:31:36Z" | None,
-                        "reset_timestamp": float | None,
-                        "display_name": str | None,
-                    }
-                },
-                "fetched_at": float,
-            }
-        """
-        identifier = (
-            Path(credential_path).name
-            if not credential_path.startswith("env://")
-            else credential_path
-        )
-
-        try:
-            # Get auth header and project_id
-            auth_header = await self.get_auth_header(credential_path)
-            access_token = auth_header["Authorization"].split(" ")[1]
-
-            # Get or discover project_id
-            project_id = self.project_id_cache.get(credential_path)
-            if not project_id:
-                project_id = await self._discover_project_id(
-                    credential_path, access_token, {}
-                )
-
-            tier = self.project_tier_cache.get(credential_path)
-
-            # Make API request
-            url = f"{self._get_base_url()}:fetchAvailableModels"
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json",
-                **self._get_antigravity_headers(),
-            }
-            payload = {"project": project_id} if project_id else {}
-
-            pool = await get_http_pool()
-            client = await pool.get_client_async()
-            response = await client.post(
-                url, headers=headers, json=payload, timeout=30
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            # Parse models
-            models_data = {}
-            for model_name, model_info in data.get("models", {}).items():
-                quota_info = model_info.get("quotaInfo", {})
-
-                # CRITICAL: NULL remainingFraction means EXHAUSTED (0.0)
-                remaining = quota_info.get("remainingFraction")
-                if remaining is None:
-                    remaining = 0.0
-                    is_exhausted = True
-                else:
-                    is_exhausted = remaining <= 0
-
-                reset_time_iso = quota_info.get("resetTime")
-                reset_timestamp = None
-                if reset_time_iso:
-                    try:
-                        reset_dt = datetime.fromisoformat(
-                            reset_time_iso.replace("Z", "+00:00")
-                        )
-                        reset_timestamp = reset_dt.timestamp()
-                    except (ValueError, AttributeError):
-                        pass
-
-                models_data[model_name] = {
-                    "remaining_fraction": remaining,
-                    "is_exhausted": is_exhausted,
-                    "reset_time_iso": reset_time_iso,
-                    "reset_timestamp": reset_timestamp,
-                    "display_name": model_info.get("displayName"),
-                }
-
-            return {
-                "status": "success",
-                "error": None,
-                "identifier": identifier,
-                "tier": tier,
-                "project_id": project_id,
-                "models": models_data,
-                "fetched_at": time.time(),
-            }
-
-        except Exception as e:
-            lib_logger.warning(f"Failed to fetch quota for {identifier}: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "identifier": identifier,
-                "tier": self.project_tier_cache.get(credential_path),
-                "project_id": self.project_id_cache.get(credential_path),
-                "models": {},
-                "fetched_at": time.time(),
-            }
-
     # =========================================================================
     # BASELINE MANAGEMENT (Override for Antigravity-specific cooldown logging)
     # =========================================================================
-
-    # refresh_active_quota_baselines inherited from BaseQuotaTracker --
-    # _fetch_quota_for_credential delegates to fetch_quota_from_api, so the
-    # base's semaphore-limited parallel fetch is equivalent (and faster).
 
     async def _store_baselines_to_usage_manager(
         self,

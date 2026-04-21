@@ -26,14 +26,7 @@ Required from provider:
 """
 
 import logging
-import time
-from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
-import httpx
-
-from ...http_client_pool import get_http_pool
 
 from .google_quota_tracker_base import GoogleQuotaTrackerBase
 from .gemini_shared_utils import CODE_ASSIST_ENDPOINT
@@ -116,6 +109,88 @@ class GeminiCliQuotaTracker(GoogleQuotaTrackerBase):
     default_max_requests_unknown: int = DEFAULT_MAX_REQUESTS_UNKNOWN
 
     # =========================================================================
+    # GOOGLE QUOTA TRACKER BASE HOOK IMPLEMENTATIONS
+    # =========================================================================
+
+    def _get_api_base_url(self) -> str:
+        """Get the base URL for Gemini CLI API requests."""
+        return CODE_ASSIST_ENDPOINT
+
+    def _get_api_headers(self) -> Dict[str, str]:
+        """Get Gemini CLI-specific headers for API requests."""
+        return {}
+
+    def _get_quota_endpoint_suffix(self) -> str:
+        """Get the endpoint suffix for Gemini CLI quota API."""
+        return "retrieveUserQuota"
+
+    def _get_quota_headers(self, auth_header: Dict[str, str]) -> Dict[str, str]:
+        """Build headers for Gemini CLI quota API request."""
+        access_token = auth_header["Authorization"].split(" ")[1]
+        return {
+            "Authorization": f"Bearer {access_token}",
+            **self._get_gemini_cli_headers(),
+        }
+
+    def _parse_quota_response(
+        self, data: Dict[str, Any]
+    ) -> List[Tuple[str, Dict[str, Any]]]:
+        """
+        Parse Gemini CLI retrieveUserQuota response into normalized entries.
+
+        Returns:
+            List of (model_id, quota_info_dict) tuples.
+        """
+        from datetime import datetime
+
+        results = []
+        for bucket in data.get("buckets", []):
+            # Parse remaining fraction (0.0 to 1.0)
+            remaining = bucket.get("remainingFraction")
+            if remaining is None:
+                # NULL means exhausted
+                remaining = 0.0
+                is_exhausted = True
+            else:
+                is_exhausted = remaining <= 0
+
+            # Parse reset time
+            reset_time_iso = bucket.get("resetTime")
+            reset_timestamp = None
+            if reset_time_iso:
+                try:
+                    reset_dt = datetime.fromisoformat(
+                        reset_time_iso.replace("Z", "+00:00")
+                    )
+                    reset_timestamp = reset_dt.timestamp()
+                except (ValueError, AttributeError):
+                    pass
+
+            results.append(
+                (
+                    bucket.get("modelId"),
+                    {
+                        "model_id": bucket.get("modelId"),
+                        "remaining_fraction": remaining,
+                        "remaining_amount": bucket.get("remainingAmount"),
+                        "reset_time_iso": reset_time_iso,
+                        "reset_timestamp": reset_timestamp,
+                        "token_type": bucket.get("tokenType"),
+                        "is_exhausted": is_exhausted,
+                    },
+                )
+            )
+        return results
+
+    def _get_quota_error_response_key(self) -> str:
+        """Return the key used for quota data in error responses."""
+        return "buckets"
+
+    def _get_empty_quota_container(self) -> Any:
+        """Return the empty container for quota data in error responses."""
+        return []
+
+    # =========================================================================
     # GEMINI CLI-SPECIFIC HELPERS
     # =========================================================================
 
@@ -143,7 +218,7 @@ class GeminiCliQuotaTracker(GoogleQuotaTrackerBase):
         This is the primary quota API for Gemini CLI, discovered from the
         official google-gemini/gemini-cli source code.
         """
-        return await self.retrieve_user_quota(credential_path)
+        return await self.fetch_quota_from_api(credential_path)
 
     def _extract_model_quota_from_response(
         self,
@@ -177,165 +252,7 @@ class GeminiCliQuotaTracker(GoogleQuotaTrackerBase):
 
         return results
 
-    def _get_api_base_url(self) -> str:
-        """Get the base URL for Gemini CLI API requests."""
-        return CODE_ASSIST_ENDPOINT
-
-    def _get_api_headers(self) -> Dict[str, str]:
-        """Get Gemini CLI-specific headers for API requests."""
-        return {}
-
-    # =========================================================================
-    # GEMINI CLI-SPECIFIC QUOTA API
-    # =========================================================================
-
-    async def retrieve_user_quota(
-        self,
-        credential_path: str,
-    ) -> Dict[str, Any]:
-        """
-        Fetch quota information from the Gemini CLI retrieveUserQuota API.
-
-        This is the primary quota API for Gemini CLI, discovered from the
-        official google-gemini/gemini-cli source code.
-
-        Args:
-            credential_path: Path to credential file or "env://gemini_cli/N"
-
-        Returns:
-            {
-                "status": "success" | "error",
-                "error": str | None,
-                "identifier": str,
-                "tier": str | None,
-                "project_id": str | None,
-                "buckets": [
-                    {
-                        "model_id": str | None,
-                        "remaining_fraction": float,  # 0.0 to 1.0
-                        "remaining_amount": str | None,
-                        "reset_time_iso": str | None,
-                        "reset_timestamp": float | None,
-                        "token_type": str | None,
-                        "is_exhausted": bool,
-                    }
-                ],
-                "fetched_at": float,
-            }
-        """
-        identifier = (
-            Path(credential_path).name
-            if not credential_path.startswith("env://")
-            else credential_path
-        )
-
-        try:
-            # Get auth header and project_id
-            auth_header = await self.get_auth_header(credential_path)
-            access_token = auth_header["Authorization"].split(" ")[1]
-
-            # Get or discover project_id
-            project_id = self.project_id_cache.get(credential_path)
-            if not project_id:
-                project_id = await self._discover_project_id(
-                    credential_path, access_token, {}
-                )
-
-            tier = self.project_tier_cache.get(credential_path)
-
-            # Make API request to retrieveUserQuota
-            url = f"{CODE_ASSIST_ENDPOINT}:retrieveUserQuota"
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                **self._get_gemini_cli_headers(),
-            }
-            payload = {"project": project_id} if project_id else {}
-
-            pool = await get_http_pool()
-            client = await pool.get_client_async()
-            response = await client.post(
-                url, headers=headers, json=payload, timeout=30
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            # Parse buckets from response
-            buckets_data = []
-            for bucket in data.get("buckets", []):
-                # Parse remaining fraction (0.0 to 1.0)
-                remaining = bucket.get("remainingFraction")
-                if remaining is None:
-                    # NULL means exhausted
-                    remaining = 0.0
-                    is_exhausted = True
-                else:
-                    is_exhausted = remaining <= 0
-
-                # Parse reset time
-                reset_time_iso = bucket.get("resetTime")
-                reset_timestamp = None
-                if reset_time_iso:
-                    try:
-                        reset_dt = datetime.fromisoformat(
-                            reset_time_iso.replace("Z", "+00:00")
-                        )
-                        reset_timestamp = reset_dt.timestamp()
-                    except (ValueError, AttributeError):
-                        # Reset time parsing failed; leave reset_timestamp as None
-                        pass
-
-                buckets_data.append(
-                    {
-                        "model_id": bucket.get("modelId"),
-                        "remaining_fraction": remaining,
-                        "remaining_amount": bucket.get("remainingAmount"),
-                        "reset_time_iso": reset_time_iso,
-                        "reset_timestamp": reset_timestamp,
-                        "token_type": bucket.get("tokenType"),
-                        "is_exhausted": is_exhausted,
-                    }
-                )
-
-            return {
-                "status": "success",
-                "error": None,
-                "identifier": identifier,
-                "tier": tier,
-                "project_id": project_id,
-                "buckets": buckets_data,
-                "fetched_at": time.time(),
-            }
-
-        except httpx.HTTPStatusError as e:
-            error_msg = f"HTTP {e.response.status_code}"
-            try:
-                error_body = e.response.text
-                if error_body:
-                    error_msg = f"{error_msg}: {error_body[:200]}"
-            except Exception as e:
-                lib_logger.debug("Failed to extract Gemini CLI HTTP error body: %s", e)
-                # Best-effort extraction of HTTP error body; fall back to status-only message
-            lib_logger.warning(f"Failed to fetch quota for {identifier}: {error_msg}")
-            return {
-                "status": "error",
-                "error": error_msg,
-                "identifier": identifier,
-                "tier": self.project_tier_cache.get(credential_path),
-                "project_id": self.project_id_cache.get(credential_path),
-                "buckets": [],
-                "fetched_at": time.time(),
-            }
-        except Exception as e:
-            lib_logger.warning(f"Failed to fetch quota for {identifier}: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "identifier": identifier,
-                "tier": self.project_tier_cache.get(credential_path),
-                "project_id": self.project_id_cache.get(credential_path),
-                "buckets": [],
-                "fetched_at": time.time(),
-            }
+    # NOTE: _store_baselines_to_usage_manager is inherited from BaseQuotaTracker.
 
     # NOTE: The following methods are now inherited from BaseQuotaTracker:
     # - _load_learned_costs()
@@ -348,7 +265,6 @@ class GeminiCliQuotaTracker(GoogleQuotaTrackerBase):
     # - discover_all_credentials()
     # - fetch_initial_baselines()
     # - refresh_active_quota_baselines()
-    # - _store_baselines_to_usage_manager()
     # - discover_quota_costs()
     # - _get_quota_group_for_model()
 

@@ -28,6 +28,7 @@ from ..utils.resilient_io import safe_write_json
 from ..utils.model_utils import parse_env_credential_path
 from ..utils.json_utils import json_loads, json_dumps_str
 from ..error_types import CredentialNeedsReauthError
+from ..error_handler import get_retry_after
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -505,7 +506,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
 
                     elif status_code == 429:
                         # Rate limit - honor Retry-After header if present
-                        retry_after = int(e.response.headers.get("Retry-After", 60))
+                        retry_after = get_retry_after(e) or 60
                         lib_logger.warning(
                             f"Rate limited (HTTP 429), retry after {retry_after}s"
                         )

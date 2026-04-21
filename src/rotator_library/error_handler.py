@@ -26,7 +26,7 @@ from .ip_throttle_detector import (
 if TYPE_CHECKING:
     from .circuit_breaker import ProviderCircuitBreaker
     from .cooldown_manager import CooldownManager
-from .utils.json_utils import json_loads, JSONDecodeError
+from .utils.json_utils import json_loads, JSONDecodeError, extract_json_object
 from .utils.duration import parse_duration
 from .utils.http_retry import compute_backoff_with_jitter
 
@@ -235,6 +235,59 @@ _RETRY_AFTER_PATTERNS = [
     re.compile(r'"quotaresetdelay":\s*"([\dhms.]+)"'),
 ]
 
+
+def _classify_rate_limit(
+    e: Exception,
+    error_text: str,
+    status_code: int,
+    retry_after: Optional[int],
+    provider: Optional[str] = None,
+    response_text: Optional[str] = None,
+) -> "ClassifiedError":
+    """
+    Shared logic for classifying 429 / rate-limit errors.
+
+    Distinguishes between:
+    - quota_exceeded (contains "quota" or "resource_exhausted")
+    - ip_rate_limit (detected via _detect_ip_throttle)
+    - rate_limit (fallback)
+
+    If *response_text* is provided, attempts to extract quotaValue / quotaId
+    from Google/Gemini API error JSON.
+    """
+    if "quota" in error_text or "resource_exhausted" in error_text:
+        quota_value = None
+        quota_id = None
+        if response_text:
+            try:
+                quota_value, quota_id = _extract_quota_details(response_text)
+            except (AttributeError, OSError):
+                lib_logger.debug("Could not read error response for quota details", exc_info=True)
+        return ClassifiedError(
+            error_type="quota_exceeded",
+            original_exception=e,
+            status_code=status_code,
+            retry_after=retry_after,
+            quota_value=quota_value,
+            quota_id=quota_id,
+        )
+
+    ip_throttle_cooldown = _detect_ip_throttle(error_text, provider=provider)
+    if ip_throttle_cooldown is not None:
+        return ClassifiedError(
+            error_type="ip_rate_limit",
+            original_exception=e,
+            status_code=status_code,
+            retry_after=retry_after or ip_throttle_cooldown,
+        )
+
+    return ClassifiedError(
+        error_type="rate_limit",
+        original_exception=e,
+        status_code=status_code,
+        retry_after=retry_after,
+    )
+
 def _extract_retry_from_json_body(json_text: str) -> Optional[int]:
     """
     Extract retry delay from a JSON error response body.
@@ -251,11 +304,11 @@ def _extract_retry_from_json_body(json_text: str) -> Optional[int]:
     """
     try:
         # Find JSON object in the text
-        json_match = re.search(r"(\{.*\})", json_text, re.DOTALL)
-        if not json_match:
+        json_str = extract_json_object(json_text)
+        if not json_str:
             return None
 
-        error_json = json_loads(json_match.group(1))
+        error_json = json_loads(json_str)
         details = error_json.get("error", {}).get("details", [])
 
         # Iterate through ALL details items (not just index 0)
@@ -312,11 +365,11 @@ def _extract_quota_details(json_text: str) -> Tuple[Optional[str], Optional[str]
     }
     """
     try:
-        json_match = re.search(r"(\{.*\})", json_text, re.DOTALL)
-        if not json_match:
+        json_str = extract_json_object(json_text)
+        if not json_str:
             return None, None
 
-        error_json = json_loads(json_match.group(1))
+        error_json = json_loads(json_str)
         details = error_json.get("error", {}).get("details", [])
 
         for detail in details:
@@ -709,7 +762,6 @@ async def handle_429_error(
         # Actions are already applied - just check result
         if action.action_type == ThrottleActionType.PROVIDER_COOLDOWN:
             # Provider blocked, stop rotation
-            pass
 
         # Without automatic application (manual):
         action = await handle_429_error(...)
@@ -1096,39 +1148,18 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
             )
         if status_code == 429:
             retry_after = get_retry_after(e)
-            # Check if this is a quota error vs rate limit
-            if "quota" in error_body or "resource_exhausted" in error_body:
-                # Try to extract quotaValue and quotaId from Google/Gemini errors
-                quota_value = None
-                quota_id = None
-                try:
-                    response_text = e.response.text if hasattr(e.response, "text") else ""
-                    if response_text:
-                        quota_value, quota_id = _extract_quota_details(response_text)
-                except (AttributeError, OSError):
-                    lib_logger.debug("Could not read error response for quota details", exc_info=True)
-                return ClassifiedError(
-                    error_type="quota_exceeded",
-                    original_exception=e,
-                    status_code=status_code,
-                    retry_after=retry_after,
-                    quota_value=quota_value,
-                    quota_id=quota_id,
-                )
-            # Check for IP-based rate limiting (affects all credentials)
-            ip_throttle_cooldown = _detect_ip_throttle(error_body, provider=provider)
-            if ip_throttle_cooldown is not None:
-                return ClassifiedError(
-                    error_type="ip_rate_limit",
-                    original_exception=e,
-                    status_code=status_code,
-                    retry_after=retry_after or ip_throttle_cooldown,
-                )
-            return ClassifiedError(
-                error_type="rate_limit",
-                original_exception=e,
+            response_text = None
+            try:
+                response_text = e.response.text if hasattr(e.response, "text") else ""
+            except (AttributeError, OSError):
+                lib_logger.debug("Could not read error response for quota details", exc_info=True)
+            return _classify_rate_limit(
+                e,
+                error_text=error_body,
                 status_code=status_code,
                 retry_after=retry_after,
+                provider=provider,
+                response_text=response_text,
             )
         if status_code == 400:
             # Check for context window / token limit errors with more specific patterns
@@ -1249,29 +1280,13 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
 
     if isinstance(e, RateLimitError):
         retry_after = get_retry_after(e)
-        # Check if this is a quota error vs rate limit
         error_msg = str(e).lower()
-        if "quota" in error_msg or "resource_exhausted" in error_msg:
-            return ClassifiedError(
-                error_type="quota_exceeded",
-                original_exception=e,
-                status_code=status_code or 429,
-                retry_after=retry_after,
-            )
-        # Check for IP-based rate limiting (affects all credentials)
-        ip_throttle_cooldown = _detect_ip_throttle(error_msg, provider=provider)
-        if ip_throttle_cooldown is not None:
-            return ClassifiedError(
-                error_type="ip_rate_limit",
-                original_exception=e,
-                status_code=status_code or 429,
-                retry_after=retry_after or ip_throttle_cooldown,
-            )
-        return ClassifiedError(
-            error_type="rate_limit",
-            original_exception=e,
+        return _classify_rate_limit(
+            e,
+            error_text=error_msg,
             status_code=status_code or 429,
             retry_after=retry_after,
+            provider=provider,
         )
 
     if isinstance(e, (AuthenticationError,)):

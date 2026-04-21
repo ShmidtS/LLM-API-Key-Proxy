@@ -6,24 +6,21 @@
 """
 Consolidated OAuth base classes.
 
-Merges BaseTokenManager, AuthQueueMixin, OAuthMixin, and OAuthFlowMixin
-into a single module to reduce file sprawl while preserving the same
-mixin composition pattern.
+Provides BaseTokenManager, AuthQueueMixin, and OAuthFlowMixin.
+OAuthMixin is retained as a backward-compatible alias of OAuthFlowMixin.
 
-All four classes are imported by google_oauth_base.py and inherited
+All classes are imported by google_oauth_base.py and inherited
 by GoogleOAuthBase -> {GeminiAuthBase, AntigravityAuthBase, QwenAuthBase, IFlowAuthBase}.
 """
 
 import asyncio
 import logging
 import time
-import webbrowser
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 import httpx
 
-from ..utils.headless_detection import is_headless_environment
 from ..utils.reauth_coordinator import get_reauth_coordinator
 from ..utils.ttl_dict import TTLDict
 
@@ -343,8 +340,8 @@ class AuthQueueMixin:
                                 error_desc = error_data.get("error_description", "")
                                 if not error_desc:
                                     error_desc = error_data.get("message", str(e))
-                            except Exception as e:
-                                lib_logger.debug("Failed to parse OAuth error response JSON: %s", e)
+                            except Exception:
+                                lib_logger.debug("Failed to parse OAuth error response JSON")
                                 error_type = ""
                                 error_desc = str(e)
 
@@ -371,6 +368,8 @@ class AuthQueueMixin:
                                 path, force, f"HTTP {status_code}"
                             )
 
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as e:
                         await self._handle_refresh_failure(path, force, str(e))
 
@@ -427,6 +426,8 @@ class AuthQueueMixin:
                     await self.initialize_token(path, force_interactive=True)
                     lib_logger.info(f"Re-auth SUCCESS for '{Path(path).name}'")
 
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     lib_logger.error(f"Re-auth FAILED for '{Path(path).name}': {e}")
                     # No automatic retry for re-auth (requires user action)
@@ -487,53 +488,19 @@ class AuthQueueMixin:
 
 
 # =========================================================================
-# OAuthMixin - common OAuth flow UI and coordination
+# OAuthFlowMixin - shared OAuth token initialization logic + coordination
 # =========================================================================
 
 
-class OAuthMixin:
-    """
-    Mixin providing common OAuth flow UI and coordination.
+class OAuthFlowMixin:
+    """Mixin providing shared OAuth token initialization logic and coordination.
 
     This mixin handles:
-    - Displaying auth instructions to users (headless vs GUI)
-    - Opening browsers with graceful fallback
+    - Determining if interactive OAuth is needed
     - Global reauth coordination to prevent concurrent auth flows
+    - Token initialization with automatic refresh fallback
     - Common credential validation patterns
     """
-
-    # ========================================================================
-    # HEADLESS DETECTION
-    # ========================================================================
-
-    def _is_headless(self) -> bool:
-        """Check if running in a headless environment (no GUI)."""
-        return is_headless_environment()
-
-    # ========================================================================
-    # BROWSER UTILITIES
-    # ========================================================================
-
-    def _open_browser(self, url: str) -> bool:
-        """Attempt to open URL in browser with graceful fallback."""
-        if self._is_headless():
-            lib_logger.debug("Skipping browser open - headless environment")
-            return False
-
-        try:
-            webbrowser.open(url)
-            lib_logger.info("Browser opened successfully for OAuth flow")
-            return True
-        except Exception as e:
-            lib_logger.warning(
-                f"Failed to open browser automatically: {e}. "
-                "Please open the URL manually."
-            )
-            return False
-
-    # ========================================================================
-    # RICH UI DISPLAY
-    # ========================================================================
 
     # ========================================================================
     # REAUTH COORDINATION
@@ -582,25 +549,6 @@ class OAuthMixin:
 
         return False, ""
 
-    async def _try_refresh_before_interactive(
-        self,
-        path: str,
-        creds: Dict[str, Any],
-        reason: str,
-        display_name: str,
-    ) -> Dict[str, Any]:
-        """Attempt automatic token refresh before falling back to interactive OAuth."""
-        if reason == "token is expired" and creds.get("refresh_token"):
-            try:
-                return await self._refresh_token(path, creds)
-            except Exception as e:
-                lib_logger.warning(
-                    f"Automatic token refresh for '{display_name}' failed: {e}. "
-                    "Proceeding to interactive login."
-                )
-                raise
-        return None
-
     # ========================================================================
     # PROVIDER DISPLAY NAME HELPERS
     # ========================================================================
@@ -618,53 +566,9 @@ class OAuthMixin:
             path = creds_or_path
             return Path(path).name if path else "in-memory object"
 
-
-# =========================================================================
-# OAuthFlowMixin - shared OAuth token initialization logic
-# =========================================================================
-
-
-class OAuthFlowMixin:
-    """Mixin providing shared OAuth token initialization logic.
-
-    Used by GoogleOAuthBase, IFlowAuthBase, and QwenAuthBase.
-    Requires the consuming class to provide:
-    - ENV_PREFIX: str class attribute
-    - _load_credentials(path): async method
-    - _is_token_expired(creds): method
-    - _should_force_interactive(creds, force_interactive): method (from OAuthMixin)
-    - _get_display_name(creds_or_path): method (from OAuthMixin)
-    - _refresh_token(path, creds, force=False): async method
-    - _execute_interactive_oauth(path, creds, display_name, provider_name, timeout): async method (from OAuthMixin)
-    """
-
-    @staticmethod
-    def _generate_pkce_pair() -> tuple:
-        """Generate PKCE code_verifier and code_challenge pair.
-
-        PKCE (Proof Key for Code Exchange) prevents authorization code interception
-        attacks per RFC 7636. Uses URL-safe base64 encoding of random bytes + SHA-256.
-
-        Returns:
-            Tuple of (code_verifier, code_challenge)
-        """
-        import secrets
-        import hashlib
-        import base64
-
-        code_verifier = (
-            base64.urlsafe_b64encode(secrets.token_bytes(32))
-            .decode("utf-8")
-            .rstrip("=")
-        )
-        code_challenge = (
-            base64.urlsafe_b64encode(
-                hashlib.sha256(code_verifier.encode("utf-8")).digest()
-            )
-            .decode("utf-8")
-            .rstrip("=")
-        )
-        return code_verifier, code_challenge
+    # ========================================================================
+    # TOKEN INITIALIZATION
+    # ========================================================================
 
     async def initialize_token(
         self,
@@ -714,7 +618,26 @@ class OAuthFlowMixin:
                 f"{self.ENV_PREFIX} OAuth token at '{display_name}' is valid."
             )
             return creds
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             raise ValueError(
                 f"Failed to initialize {self.ENV_PREFIX} OAuth for '{path}': {e}"
             )
+
+
+# =========================================================================
+# OAuthMixin - backward-compatible alias for OAuthFlowMixin
+# =========================================================================
+
+
+class OAuthMixin(OAuthFlowMixin):
+    """Backward-compatible alias for OAuthFlowMixin.
+
+    Previously contained browser/headless helpers and coordination methods.
+    Those helpers were dead code (subclasses call is_headless_environment()
+    and webbrowser.open() directly). The remaining coordination methods now
+    live in OAuthFlowMixin where initialize_token can access them without
+    cross-mixin coupling.
+    """
+    pass
