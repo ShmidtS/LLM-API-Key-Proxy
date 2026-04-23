@@ -3,7 +3,7 @@
 
 """
 Base mixin classes for shared streaming logic across multiple API providers.
-LightweightQuotaMixin (formerly QuotaRefreshMixin) is in utilities/lightweight_quota_mixin.py.
+LightweightQuotaMixin is in utilities/lightweight_quota_mixin.py.
 """
 
 import asyncio
@@ -293,7 +293,3 @@ class StreamingResponseMixin:
         return litellm.ModelResponse(**final_response_data)
 
 
-# Re-export LightweightQuotaMixin for backward compatibility
-from .utilities.lightweight_quota_mixin import LightweightQuotaMixin  # noqa: F401
-# Keep QuotaRefreshMixin alias for backward compatibility
-QuotaRefreshMixin = LightweightQuotaMixin

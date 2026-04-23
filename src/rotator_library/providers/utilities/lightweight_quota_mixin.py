@@ -5,7 +5,7 @@
 LightweightQuotaMixin - unified mixin for lightweight API-based quota trackers.
 
 Merges the former SimpleQuotaTrackerBase (cache/pool/bearer/error helpers)
-with QuotaRefreshMixin (background job boilerplate) into a single mixin.
+with LightweightQuotaMixin (background job boilerplate) into a single mixin.
 
 Subclasses must implement:
     fetch_quota_usage(api_key, client) -> Dict[str, Any]
@@ -161,7 +161,7 @@ class LightweightQuotaMixin:
         return base
 
     # =====================================================================
-    # BACKGROUND JOB (from QuotaRefreshMixin)
+    # BACKGROUND JOB (from LightweightQuotaMixin)
     # =====================================================================
 
     def get_background_job_config(self) -> Optional[Dict[str, Any]]:

@@ -3,6 +3,7 @@
 
 import re
 import os
+import time
 import logging
 from typing import TYPE_CHECKING, Optional, Dict, Tuple
 import httpx
@@ -424,8 +425,6 @@ def get_retry_after(error: Exception) -> Optional[int]:
         )
         if reset_header:
             try:
-                import time
-
                 reset_timestamp = int(reset_header)
                 current_time = int(time.time())
                 wait_seconds = reset_timestamp - current_time

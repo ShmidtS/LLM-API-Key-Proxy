@@ -378,6 +378,7 @@ def create_lifespan(config: LifespanConfig):
         app.state.bearer_proxy_api_key = config.bearer_proxy_api_key
         app.state.override_temp_zero = config.override_temp_zero
         app.state.enable_raw_logging = config.enable_raw_logging
+        app.state.enable_request_logging = config.enable_request_logging
         app.state.use_embedding_batcher = config.use_embedding_batcher
 
         # Warn if no provider credentials are configured

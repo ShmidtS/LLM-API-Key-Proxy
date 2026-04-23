@@ -10,14 +10,6 @@
 
 import os
 
-# Load .env file BEFORE reading any environment variables
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv()
-except ImportError:
-    pass  # python-dotenv not installed
-
 # CRITICAL: Apply DNS fix BEFORE importing litellm/aiohttp
 # This fixes DNS hijacking by VPN/proxy/antivirus that returns wrong IPs
 from ..dns_fix import apply_dns_fix
@@ -52,10 +44,6 @@ if TYPE_CHECKING:
 
 
 lib_logger = logging.getLogger("rotator_library")
-# Ensure the logger is configured to propagate to the root logger
-# which is set up in main.py. This allows the main app to control
-# log levels and handlers centrally.
-lib_logger.propagate = False
 
 try:
     DEFAULT_API_KEY_MAX_CONCURRENT_REQUESTS = int(os.environ.get("API_KEY_MAX_CONCURRENT_REQUESTS", 40))

@@ -576,8 +576,12 @@ class HttpClientPool(metaclass=SingletonMeta):
                 streaming=False
             )
 
+        if self._client_lock.locked():
+            # Another coroutine is modifying state; return client as-is
+            return client
+
         if client.is_closed:
-            lib_logger.warning(
+            lib_logger.debug(
                 "get_client() returned a closed client — recreating lazily"
             )
             client = self._get_lazy_client(streaming=streaming)

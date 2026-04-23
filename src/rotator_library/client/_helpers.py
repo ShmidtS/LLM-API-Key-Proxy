@@ -550,33 +550,9 @@ class HelpersMixin:
         """
         Apply correct provider headers and remove problematic client headers.
         """
-
-        def _remove_problematic_headers(headers_dict: dict, source: str):
-            """Remove headers that interfere with litellm's provider routing."""
-            problematic_keys = [
-                "authorization", "x-api-key", "api-key", "api_key",
-                "anthropic-version", "anthropic-dangerous-direct-browser-access",
-                "anthropic-beta",
-            ]
-            removed = []
-            for key in list(headers_dict.keys()):
-                if isinstance(key, str):
-                    key_lower = key.lower()
-                    if any(
-                        key_lower == pk.lower() or key_lower.startswith("x-anthropic-")
-                        for pk in problematic_keys
-                    ):
-                        removed.append(key)
-                        headers_dict.pop(key)
-            if removed:
-                lib_logger.debug(
-                    "Removed %s headers that may interfere with litellm: %s",
-                    source, removed,
-                )
-
         # Remove problematic headers from existing headers dict
         if "headers" in litellm_kwargs and isinstance(litellm_kwargs["headers"], dict):
-            _remove_problematic_headers(litellm_kwargs["headers"], "headers")
+            self._strip_client_headers(litellm_kwargs["headers"])
 
         # Add provider-specific headers from environment variables if configured
         # These headers should be used instead of any client-provided ones
@@ -593,7 +569,7 @@ class HelpersMixin:
                         litellm_kwargs["headers"] = {}
 
                     # Clean provider headers before merging
-                    _remove_problematic_headers(headers_dict, "provider env")
+                    self._strip_client_headers(headers_dict)
                     litellm_kwargs["headers"].update(headers_dict)
                     lib_logger.debug(
                         "Applied provider-specific headers for %s from env",

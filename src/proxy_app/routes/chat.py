@@ -15,8 +15,6 @@ from proxy_app.routes.error_handler import handle_route_errors
 
 router = APIRouter(tags=["chat"])
 
-ENABLE_REQUEST_LOGGING: bool = False
-
 
 @router.post("/v1/chat/completions")
 @handle_route_errors(error_format="openai", log_context="Request failed after all retries")
@@ -112,7 +110,7 @@ async def chat_completions(
             return response
     except Exception as e:
         # Raw I/O logger: log the failed response if request logging is enabled
-        if ENABLE_REQUEST_LOGGING and raw_logger:
+        if getattr(request.app.state, "enable_request_logging", False) and raw_logger:
             raw_logger.log_final_response(
                 status_code=500, headers=None, body={"error": str(e)}
             )

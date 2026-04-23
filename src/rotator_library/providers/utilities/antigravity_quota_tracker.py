@@ -54,7 +54,8 @@ DEFAULT_MAX_REQUESTS: Dict[str, Dict[str, int]] = {
         "claude-opus-4-5-thinking": 150,
         "claude-sonnet-4.5": 150,
         "claude-opus-4.5": 150,
-        "gpt-oss-120b-medium": 150,
+        # # Removed 2026-04-23: model not in active providers
+        # "gpt-oss-120b-medium": 150,
         # Gemini 3 Pro group (verified: 0.3125% per request = 320 requests)
         "gemini-3-pro-high": 320,
         "gemini-3-pro-low": 320,
@@ -66,8 +67,8 @@ DEFAULT_MAX_REQUESTS: Dict[str, Dict[str, int]] = {
         "gemini-2.5-flash-thinking": 3000,
         # Gemini 2.5 Flash Lite - SEPARATE pool (verified: 0.02% per request = 5000 requests)
         "gemini-2.5-flash-lite": 5000,
-        # Gemini 2.5 Pro - UNVERIFIED/UNUSED (assumed 0.1% = 1000 requests)
-        "gemini-2.5-pro": 1,
+        # # Removed 2026-04-23: model not in active providers (was UNVERIFIED/UNUSED)
+        # "gemini-2.5-pro": 1,
     },
     "free-tier": {
         # Claude/GPT-OSS group (verified: 2.0% per request = 50 requests)
@@ -77,7 +78,8 @@ DEFAULT_MAX_REQUESTS: Dict[str, Dict[str, int]] = {
         "claude-opus-4-5-thinking": 50,
         "claude-sonnet-4.5": 50,
         "claude-opus-4.5": 50,
-        "gpt-oss-120b-medium": 50,
+        # # Removed 2026-04-23: model not in active providers
+        # "gpt-oss-120b-medium": 50,
         # Gemini 3 Pro group (verified: 0.6667% per request = 150 requests)
         "gemini-3-pro-high": 150,
         "gemini-3-pro-low": 150,
@@ -89,8 +91,8 @@ DEFAULT_MAX_REQUESTS: Dict[str, Dict[str, int]] = {
         "gemini-2.5-flash-thinking": 3000,
         # Gemini 2.5 Flash Lite - SEPARATE pool (verified: 0.02% per request = 5000 requests)
         "gemini-2.5-flash-lite": 5000,
-        # Gemini 2.5 Pro - UNVERIFIED/UNUSED (assumed 0.1% = 1000 requests)
-        "gemini-2.5-pro": 1,
+        # # Removed 2026-04-23: model not in active providers (was UNVERIFIED/UNUSED)
+        # "gemini-2.5-pro": 1,
     },
 }
 
