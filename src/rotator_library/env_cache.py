@@ -31,11 +31,14 @@ _env_cache_lock = threading.Lock()
 def _build_env_cache() -> Dict[str, str]:
     """Build the provider env cache by scanning os.environ for matching prefixes."""
     cache: Dict[str, str] = {
-        k: v for k, v in os.environ.items()
+        k: v
+        for k, v in os.environ.items()
         if any(k.startswith(p) or k.endswith(p) for p in _PROVIDER_ENV_PREFIXES)
     }
     if "EXHAUSTION_COOLDOWN_THRESHOLD" in os.environ:
-        cache["EXHAUSTION_COOLDOWN_THRESHOLD"] = os.environ["EXHAUSTION_COOLDOWN_THRESHOLD"]
+        cache["EXHAUSTION_COOLDOWN_THRESHOLD"] = os.environ[
+            "EXHAUSTION_COOLDOWN_THRESHOLD"
+        ]
     return cache
 
 
@@ -46,9 +49,9 @@ def get_provider_env_cache() -> Dict[str, str]:
     invalidated the cache.
     """
     global _provider_env_cache
+    if _provider_env_cache is not None:
+        return _provider_env_cache
     with _env_cache_lock:
         if _provider_env_cache is None:
             _provider_env_cache = _build_env_cache()
         return _provider_env_cache
-
-

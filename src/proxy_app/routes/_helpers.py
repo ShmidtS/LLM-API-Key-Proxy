@@ -25,13 +25,7 @@ class RequestContext:
 
 async def resolve_request_context(request: Request, client: RotatingClient) -> RequestContext:
     """Parse body, log request, and resolve app state in a single pass."""
-    request_data = orjson.loads(await request.body())
-    client_info = (request.client.host, request.client.port) if request.client else ("unknown", 0)
-    log_request_to_console(
-        url=str(request.url),
-        client_info=client_info,
-        request_data=request_data,
-    )
+    request_data = await _parse_and_log(request)
     enable_raw_logging = getattr(request.app.state, "enable_raw_logging", False)
     raw_logger = None
     if enable_raw_logging:

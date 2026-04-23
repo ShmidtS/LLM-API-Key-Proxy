@@ -445,7 +445,7 @@ class HelpersMixin:
         """
         # Filter out verbose pre_api_call and post_api_call logs
         log_event_type = log_data.get("log_event_type")
-        if log_event_type in ["pre_api_call", "post_api_call"]:
+        if log_event_type in {"pre_api_call", "post_api_call"}:
             return  # Skip these verbose logs entirely
 
         # For successful calls or pre-call logs, log minimal fields without deep copy.

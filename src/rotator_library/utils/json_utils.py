@@ -18,22 +18,64 @@ JSONDecodeError = getattr(orjson, "JSONDecodeError", json.JSONDecodeError)
 STREAM_DONE = object()
 """Sentinel marker indicating stream completion in internal pipeline."""
 
-# Pre-compiled pattern to extract the first JSON object from a string
+# Pre-compiled pattern to extract the first JSON object from a string.
+# Greedy — used as a fast path only; falls back to brace-counting parser on failure.
 _JSON_OBJECT_RE = re.compile(r"(\{.*\})", re.DOTALL)
+
+
+def _extract_balanced_json(text: str) -> Optional[str]:
+    """Extract the first balanced JSON object by counting brace depth.
+
+    Scans character-by-character, skipping braces inside string literals
+    (handles escaped quotes within strings). Returns the substring from the
+    first ``{`` to the matching ``}`` where depth returns to 0, or None if
+    no balanced object is found.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    i = start
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            if ch == "\\":
+                i += 1  # skip escaped character
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+        i += 1
+    return None
 
 
 def extract_json_object(text: str) -> Optional[str]:
     """Extract the first JSON object from arbitrary text.
 
     Returns the matched JSON string (stripped) if found, otherwise None.
-    Uses a pre-compiled regex for performance.
+    Tries the pre-compiled regex first (fast path), then falls back to a
+    brace-counting parser for cases the regex cannot handle correctly.
     """
     if not text:
         return None
     match = _JSON_OBJECT_RE.search(text)
     if match:
-        return match.group(1)
-    return None
+        candidate = match.group(1)
+        try:
+            orjson.loads(candidate)
+            return candidate
+        except (JSONDecodeError, ValueError):
+            pass  # fall through to balanced parser
+    return _extract_balanced_json(text)
 
 def json_dumps(obj: Any) -> bytes:
     """Fast JSON serialization using orjson. Returns UTF-8 encoded bytes."""
@@ -64,6 +106,8 @@ def json_deep_copy(obj: Any) -> Any:
     2-3x faster than copy.deepcopy for dicts/lists of JSON primitives.
     Only safe for JSON-serializable objects (no tuples, sets, bytes, custom types).
     Tuples become lists; non-JSON types raise orjson.JSONEncodeError.
+
+    Intentional: callers are in logging/audit paths, not per-chunk streaming.
     """
     return orjson.loads(orjson.dumps(obj))
 

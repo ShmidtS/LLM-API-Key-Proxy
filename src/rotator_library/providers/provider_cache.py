@@ -131,6 +131,7 @@ class ProviderCache:
         self._disk_available = True
 
         # In-memory index of disk entries for O(1) lookup (invalidated on write)
+        self._DISK_ENTRY_CACHE_MAXSIZE: int = 1024
         self._disk_entry_cache: Dict[str, Dict] = {}
         self._disk_cache_valid = False
 
@@ -289,6 +290,7 @@ class ProviderCache:
                 # Cache the merged entries as the in-memory disk snapshot
                 # so next save merges from memory instead of re-reading the file
                 self._disk_entry_cache = merged_entries
+                self._trim_disk_entry_cache()
                 self._disk_cache_valid = True
                 # Log merge info only when we preserved disk-only entries (infrequent)
                 if preserved_from_disk > 0:
@@ -496,6 +498,18 @@ class ProviderCache:
         self._stats["misses"] += 1
         return None
 
+    def _trim_disk_entry_cache(self) -> None:
+        """Evict oldest entries from _disk_entry_cache if it exceeds max size."""
+        if len(self._disk_entry_cache) > self._DISK_ENTRY_CACHE_MAXSIZE:
+            # Remove oldest entries by timestamp (ascending)
+            sorted_keys = sorted(
+                self._disk_entry_cache,
+                key=lambda k: self._disk_entry_cache[k].get("timestamp", 0),
+            )
+            excess = len(self._disk_entry_cache) - self._DISK_ENTRY_CACHE_MAXSIZE
+            for k in sorted_keys[:excess]:
+                del self._disk_entry_cache[k]
+
     async def _load_disk_index(self) -> Dict[str, Dict]:
         """Load and cache all disk entries. Returns dict of key -> entry.
 
@@ -522,6 +536,7 @@ class ProviderCache:
                     k: v for k, v in entries.items()
                     if now - v.get("timestamp", 0) <= self._disk_ttl
                 }
+                self._trim_disk_entry_cache()
                 self._disk_cache_valid = True
         except (JSONDecodeError, IOError, OSError):
             self._disk_entry_cache = {}

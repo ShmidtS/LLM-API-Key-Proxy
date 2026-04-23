@@ -68,7 +68,7 @@ def is_headless_environment() -> bool:
     # Check Windows session type
     if os.name == "nt":  # Windows
         session_name = os.getenv("SESSIONNAME", "").lower()
-        if session_name in ["services", "rdp-tcp"]:
+        if session_name in {"services", "rdp-tcp"}:
             headless_indicators.append(f"Windows headless session ({session_name})")
 
     # Detect Docker/container environment
