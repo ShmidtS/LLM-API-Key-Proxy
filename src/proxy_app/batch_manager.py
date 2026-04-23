@@ -126,7 +126,7 @@ class EmbeddingBatcher:
         try:
             await self.worker_task
         except asyncio.CancelledError:
-            raise
+            pass
         finally:
             # Drain any pending futures so callers don't hang forever
             cancelled_exc = asyncio.CancelledError("EmbeddingBatcher stopped")

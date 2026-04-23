@@ -4,6 +4,11 @@
 import gzip as _gzip
 
 
+_COMPRESSIBLE_TYPES = frozenset(
+    {"text/", "application/json", "application/xml", "application/javascript"}
+)
+
+
 def _hdr_lower(raw):
     return (raw.decode("latin-1") if isinstance(raw, bytes) else raw).lower()
 
@@ -62,6 +67,15 @@ class _NoGzipForSSE:
         self._app = app
         self._minimum_size = minimum_size
 
+    @staticmethod
+    def _get_header(message, name):
+        """Extract header value (decoded) from a response start message."""
+        name_lower = name.lower() if isinstance(name, bytes) else name.encode().lower()
+        for hk, hv in message.get("headers", []):
+            if hk.lower() == name_lower:
+                return hv.decode("latin-1") if isinstance(hv, bytes) else hv
+        return None
+
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             await self._app(scope, receive, send)
@@ -97,6 +111,10 @@ class _NoGzipForSSE:
                     if hk == "content-length" and int(hv) < self._minimum_size:
                         skip = True
                         break
+                if not skip:
+                    ct = self._get_header(initial_message, b"content-type")
+                    if ct and not any(t in ct for t in _COMPRESSIBLE_TYPES):
+                        skip = True
                 return
 
             if message["type"] != "http.response.body":

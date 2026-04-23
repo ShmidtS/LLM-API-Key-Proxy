@@ -94,6 +94,10 @@ async def track_stream(request: Request, stream: AsyncGenerator[Any, None]) -> A
         if hasattr(stream, "aclose"):
             await stream.aclose()
         raise
+    except Exception:
+        if hasattr(stream, "aclose"):
+            await stream.aclose()
+        raise
     finally:
         _unregister_stream_gen(request, stream)
         try:

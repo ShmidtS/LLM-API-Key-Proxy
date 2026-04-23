@@ -52,6 +52,7 @@ async def streaming_response_wrapper(
 
     try:
         _chunk_count = 0
+        _bytes_since_yield = 0
         async for chunk in response_stream:
 
             # STREAM_DONE sentinel: emit SSE [DONE] and stop
@@ -63,10 +64,12 @@ async def streaming_response_wrapper(
             chunk_str = sse_data_event(chunk)
             yield chunk_str
             _chunk_count += 1
+            _bytes_since_yield += len(chunk_str)
 
-            # Yield control every 32 chunks to prevent event loop starvation
-            if _chunk_count % 32 == 0:
+            # Adaptive yield: every 16 chunks or 32KB to prevent event loop starvation
+            if _chunk_count % 16 == 0 or _bytes_since_yield >= 32768:
                 await asyncio.sleep(0)
+                _bytes_since_yield = 0
 
             if not isinstance(chunk, dict):
                 continue

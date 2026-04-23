@@ -36,18 +36,23 @@ class ReadWriteLock:
         shared_resource.write(new_value)
     """
 
+    _MAX_READER_BATCH = 8
+
     def __init__(self):
         self._readers = 0
         self._writer_waiting = 0
         self._writer_active = False
+        self._reader_epoch = 0
         self._condition = asyncio.Condition()
 
     async def acquire_read(self) -> None:
-        """Acquire read lock."""
+        """Acquire read lock. Allows up to _MAX_READER_BATCH readers per epoch even when a writer is waiting, preventing writer-induced starvation."""
         async with self._condition:
-            while self._writer_active or self._writer_waiting > 0:
+            while self._writer_active or (self._writer_waiting > 0 and self._reader_epoch >= self._MAX_READER_BATCH):
                 await self._condition.wait()
             self._readers += 1
+            if self._writer_waiting > 0:
+                self._reader_epoch += 1
 
     async def release_read(self) -> None:
         """Release read lock."""
@@ -57,13 +62,14 @@ class ReadWriteLock:
                 self._condition.notify_all()
 
     async def acquire_write(self) -> None:
-        """Acquire write lock."""
+        """Acquire write lock. Resets reader epoch to allow next batch of readers."""
         async with self._condition:
             self._writer_waiting += 1
             try:
                 while self._readers > 0 or self._writer_active:
                     await self._condition.wait()
                 self._writer_active = True
+                self._reader_epoch = 0
             finally:
                 self._writer_waiting -= 1
 

@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -168,6 +169,9 @@ def create_lifespan(config: LifespanConfig):
                 suppress_connection_reset(loop, _original_handler)
             )
 
+        # Bounded executor for OAuth credential file reads to avoid flooding default pool
+        _oauth_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="oauth-read")
+
         # [MODIFIED] Perform skippable OAuth initialization at startup
         skip_oauth_init = (
             os.getenv("SKIP_OAUTH_INIT_CHECK", "false").lower() == "true"
@@ -198,7 +202,7 @@ def create_lifespan(config: LifespanConfig):
 
                     try:
                         data = await asyncio.get_running_loop().run_in_executor(
-                            None, _read_json, path
+                            _oauth_executor, _read_json, path
                         )
                         metadata = data.get("_proxy_metadata", {})
                         email = metadata.get("email")
@@ -421,129 +425,132 @@ def create_lifespan(config: LifespanConfig):
 
         yield
 
-        # Restore original exception handler on shutdown
-        if sys.platform == "win32" and _original_handler is not None:
+        try:
+            # Restore original exception handler on shutdown
+            if sys.platform == "win32" and _original_handler is not None:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.set_exception_handler(_original_handler)
+                except RuntimeError:
+                    logger.debug("Suppressed RuntimeError during shutdown handler cleanup")
+
+            # Grace period: allow in-flight streaming responses to complete
+            app.state._shutting_down = True
             try:
-                loop = asyncio.get_running_loop()
-                loop.set_exception_handler(_original_handler)
-            except RuntimeError:
-                logger.debug("Suppressed RuntimeError during shutdown handler cleanup")
-
-        # Grace period: allow in-flight streaming responses to complete
-        app.state._shutting_down = True
-        try:
-            logger.info(
-                "Shutdown requested, waiting up to 5s for active streams..."
-            )
-            for _ in range(50):
-                if not getattr(app.state, "active_streams", 0):
-                    break
-                await asyncio.sleep(0.1)
-            remaining = getattr(app.state, "active_streams", 0)
-            if remaining:
-                logger.warning(
-                    "Cancelling %d remaining active streams", remaining
+                logger.info(
+                    "Shutdown requested, waiting up to 5s for active streams..."
                 )
-                # Cancel remaining in-flight stream generators
-                active_stream_gens = getattr(
-                    app.state, "active_stream_gens", None
-                )
-                if active_stream_gens:
-                    for stream_gen in list(active_stream_gens):
-                        try:
-                            if hasattr(stream_gen, "aclose"):
-                                await stream_gen.aclose()
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as e:
-                            logger.debug(
-                                "Error during stream cleanup: %s", e
-                            )
-                    active_stream_gens.clear()
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.debug(
-                "Error waiting for active streams during shutdown: %s", e
-            )
-
-        await client.background_refresher.stop()  # Stop the background task on shutdown
-        close_doh_client()  # Close persistent DoH httpx.Client
-        close_dns_executor()  # Shutdown DNS thread pool
-        if app.state.embedding_batcher:
-            await app.state.embedding_batcher.stop()
-        await client.close()  # Also calls close_http_pool()
-
-        # Close litellm's internal aiohttp/httpx sessions to prevent
-        # "Unclosed client session" warnings on shutdown
-        try:
-            await litellm.close_litellm_async_clients()
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.debug("Error closing litellm async clients: %s", e)
-
-        # Clear litellm's internal httpx handler cache (creates unclosed sessions)
-        try:
-            from litellm.llms import custom_httpx as _custom_httpx
-
-            _handler = getattr(_custom_httpx, "httpx_handler", None)
-            if _handler is not None:
-                for _attr in (
-                    "_async_client",
-                    "_client",
-                    "client",
-                    "async_client",
-                ):
-                    _obj = getattr(_handler, _attr, None)
-                    if _obj is not None:
-                        if hasattr(_obj, "aclose"):
-                            await _obj.aclose()
-                        elif hasattr(_obj, "close"):
-                            _obj.close()
-                _custom_httpx.httpx_handler = None
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.debug("Error clearing custom_httpx handler: %s", e)
-
-        if (
-            hasattr(litellm, "aclient_session")
-            and litellm.aclient_session is not None
-        ):
-            try:
-                await litellm.aclient_session.aclose()
-                litellm.aclient_session = None
+                for _ in range(50):
+                    if not getattr(app.state, "active_streams", 0):
+                        break
+                    await asyncio.sleep(0.1)
+                remaining = getattr(app.state, "active_streams", 0)
+                if remaining:
+                    logger.warning(
+                        "Cancelling %d remaining active streams", remaining
+                    )
+                    # Cancel remaining in-flight stream generators
+                    active_stream_gens = getattr(
+                        app.state, "active_stream_gens", None
+                    )
+                    if active_stream_gens:
+                        for stream_gen in list(active_stream_gens):
+                            try:
+                                if hasattr(stream_gen, "aclose"):
+                                    await stream_gen.aclose()
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as e:
+                                logger.debug(
+                                    "Error during stream cleanup: %s", e
+                                )
+                        active_stream_gens.clear()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.debug(
-                    "Error closing litellm aclient_session: %s", e
+                    "Error waiting for active streams during shutdown: %s", e
                 )
-        if (
-            hasattr(litellm, "client_session")
-            and litellm.client_session is not None
-        ):
+
+            await client.background_refresher.stop()  # Stop the background task on shutdown
+            close_doh_client()  # Close persistent DoH httpx.Client
+            close_dns_executor()  # Shutdown DNS thread pool
+            if app.state.embedding_batcher:
+                await app.state.embedding_batcher.stop()
+            await client.close()  # Also calls close_http_pool()
+
+            # Close litellm's internal aiohttp/httpx sessions to prevent
+            # "Unclosed client session" warnings on shutdown
             try:
-                litellm.client_session.close()
-                litellm.client_session = None
+                await litellm.close_litellm_async_clients()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.debug(
-                    "Error closing litellm client_session: %s", e
-                )
+                logger.debug("Error closing litellm async clients: %s", e)
 
-        # Stop model info service
-        if (
-            hasattr(app.state, "model_info_service")
-            and app.state.model_info_service
-        ):
-            await app.state.model_info_service.stop()
+            # Clear litellm's internal httpx handler cache (creates unclosed sessions)
+            try:
+                from litellm.llms import custom_httpx as _custom_httpx
 
-        if app.state.embedding_batcher:
-            logger.info("RotatingClient and EmbeddingBatcher closed.")
-        else:
-            logger.info("RotatingClient closed.")
+                _handler = getattr(_custom_httpx, "httpx_handler", None)
+                if _handler is not None:
+                    for _attr in (
+                        "_async_client",
+                        "_client",
+                        "client",
+                        "async_client",
+                    ):
+                        _obj = getattr(_handler, _attr, None)
+                        if _obj is not None:
+                            if hasattr(_obj, "aclose"):
+                                await _obj.aclose()
+                            elif hasattr(_obj, "close"):
+                                _obj.close()
+                    _custom_httpx.httpx_handler = None
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.debug("Error clearing custom_httpx handler: %s", e)
+
+            if (
+                hasattr(litellm, "aclient_session")
+                and litellm.aclient_session is not None
+            ):
+                try:
+                    await litellm.aclient_session.aclose()
+                    litellm.aclient_session = None
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.debug(
+                        "Error closing litellm aclient_session: %s", e
+                    )
+            if (
+                hasattr(litellm, "client_session")
+                and litellm.client_session is not None
+            ):
+                try:
+                    litellm.client_session.close()
+                    litellm.client_session = None
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.debug(
+                        "Error closing litellm client_session: %s", e
+                    )
+
+            # Stop model info service
+            if (
+                hasattr(app.state, "model_info_service")
+                and app.state.model_info_service
+            ):
+                await app.state.model_info_service.stop()
+
+            if app.state.embedding_batcher:
+                logger.info("RotatingClient and EmbeddingBatcher closed.")
+            else:
+                logger.info("RotatingClient closed.")
+        finally:
+            _oauth_executor.shutdown(wait=False)
 
     return lifespan
