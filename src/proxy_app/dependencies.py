@@ -18,22 +18,26 @@ api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 anthropic_api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
 
-async def _inc_streams(request):
+def _inc_streams(request):
     request.app.state.active_streams += 1
 
 
-async def _dec_streams(request):
-    request.app.state.active_streams -= 1
+def _dec_streams(request):
+    cur = getattr(request.app.state, "active_streams", 0)
+    request.app.state.active_streams = max(0, cur - 1)
 
 
-async def _register_stream_gen(request, gen):
+def _register_stream_gen(request, gen):
     """Register a stream generator for graceful shutdown cancellation."""
-    if not hasattr(request.app.state, "active_stream_gens"):
-        request.app.state.active_stream_gens = set()
-    request.app.state.active_stream_gens.add(gen)
+    if getattr(request.app.state, "_shutting_down", False):
+        return
+    try:
+        request.app.state.active_stream_gens.add(gen)
+    except AttributeError:
+        request.app.state.active_stream_gens = {gen}
 
 
-async def _unregister_stream_gen(request, gen):
+def _unregister_stream_gen(request, gen):
     """Unregister a stream generator after completion."""
     gens = getattr(request.app.state, "active_stream_gens", None)
     if gens:
@@ -76,10 +80,13 @@ async def track_stream(request: Request, stream: AsyncGenerator[Any, None]) -> A
     """Wrap an async generator to track active streaming connections for graceful shutdown."""
     request._stream_tracked = True
     try:
-        await _inc_streams(request)
+        _inc_streams(request)
     except AttributeError:
         logger.error("track_stream: request lacks stream counter attribute")
-    await _register_stream_gen(request, stream)
+    try:
+        _register_stream_gen(request, stream)
+    except AttributeError:
+        logger.error("track_stream: request lacks stream generator registry")
     try:
         async for chunk in stream:
             yield chunk
@@ -88,9 +95,9 @@ async def track_stream(request: Request, stream: AsyncGenerator[Any, None]) -> A
             await stream.aclose()
         raise
     finally:
-        await _unregister_stream_gen(request, stream)
+        _unregister_stream_gen(request, stream)
         try:
-            await _dec_streams(request)
+            _dec_streams(request)
         except AttributeError:
             logger.error("track_stream: request lacks stream counter attribute on decrement")
 

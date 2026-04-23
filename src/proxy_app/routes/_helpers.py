@@ -1,14 +1,50 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from dataclasses import dataclass
 from datetime import datetime
 import logging
+from typing import Optional
 
 import orjson
 from fastapi import Request
 
 from rotator_library import RotatingClient
 from proxy_app.provider_urls import get_provider_endpoint
+
+
+@dataclass
+class RequestContext:
+    """Pre-resolved request state to avoid repeated getattr/orjson on hot paths."""
+    client: RotatingClient
+    request_data: dict
+    enable_raw_logging: bool
+    raw_logger: Optional[object]  # RawIOLogger or None
+    override_temp_zero: str
+
+
+async def resolve_request_context(request: Request, client: RotatingClient) -> RequestContext:
+    """Parse body, log request, and resolve app state in a single pass."""
+    request_data = orjson.loads(await request.body())
+    client_info = (request.client.host, request.client.port) if request.client else ("unknown", 0)
+    log_request_to_console(
+        url=str(request.url),
+        client_info=client_info,
+        request_data=request_data,
+    )
+    enable_raw_logging = getattr(request.app.state, "enable_raw_logging", False)
+    raw_logger = None
+    if enable_raw_logging:
+        from proxy_app.detailed_logger import RawIOLogger
+        raw_logger = RawIOLogger()
+    override_temp_zero = getattr(request.app.state, "override_temp_zero", "false")
+    return RequestContext(
+        client=client,
+        request_data=request_data,
+        enable_raw_logging=enable_raw_logging,
+        raw_logger=raw_logger,
+        override_temp_zero=override_temp_zero,
+    )
 
 
 def log_request_to_console(url: str, client_info: tuple, request_data: dict):

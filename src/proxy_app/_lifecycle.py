@@ -430,6 +430,7 @@ def create_lifespan(config: LifespanConfig):
                 logger.debug("Suppressed RuntimeError during shutdown handler cleanup")
 
         # Grace period: allow in-flight streaming responses to complete
+        app.state._shutting_down = True
         try:
             logger.info(
                 "Shutdown requested, waiting up to 5s for active streams..."

@@ -44,28 +44,37 @@ class CooldownManager:
 
     async def _cleanup_expired(self) -> None:
         now = time.monotonic()
-        # Delete expired entries one-by-one instead of full dict rebuild
-        # to avoid replacing the dict object that concurrent callers may reference
         expired = [k for k, v in self._cooldowns.items() if now >= v]
-        for k in expired:
-            del self._cooldowns[k]
-        # Trim to max size by removing entries closest to expiry
+        if expired:
+            provider = self._extract_provider(expired[0])
+            lock = await self._provider_lock_manager.get_lock(provider)
+            async with lock:
+                for k in expired:
+                    if k in self._cooldowns and now >= self._cooldowns[k]:
+                        del self._cooldowns[k]
         if len(self._cooldowns) > self._MAX_COOLDOWNS:
             sorted_keys = sorted(self._cooldowns, key=self._cooldowns.get)
-            for k in sorted_keys[:len(self._cooldowns) - self._MAX_COOLDOWNS]:
-                del self._cooldowns[k]
+            oversize = sorted_keys[:len(self._cooldowns) - self._MAX_COOLDOWNS]
+            if oversize:
+                provider = self._extract_provider(oversize[0])
+                lock = await self._provider_lock_manager.get_lock(provider)
+                async with lock:
+                    for k in oversize:
+                        if k in self._cooldowns:
+                            del self._cooldowns[k]
+        self._last_cleanup = now
+
+    async def periodic_cleanup(self) -> None:
+        now = time.monotonic()
+        if now - self._last_cleanup >= 30.0:
+            await self._cleanup_expired()
 
     async def is_cooling_down(self, credential: str) -> bool:
         """Checks if a credential is currently in a cooldown period."""
-        provider = self._extract_provider(credential)
-        lock = await self._provider_lock_manager.get_lock(provider)
-        async with lock:
-            now = time.monotonic()
-            if now - self._last_cleanup >= 30.0:
-                await self._cleanup_expired()
-                self._last_cleanup = now
-            expiry = self._cooldowns.get(credential)
-            return expiry is not None and time.monotonic() < expiry
+        expiry = self._cooldowns.get(credential)
+        if expiry is None:
+            return False
+        return time.monotonic() < expiry
 
     async def start_cooldown(self, credential: str, duration: int):
         """
@@ -76,11 +85,7 @@ class CooldownManager:
         provider = self._extract_provider(credential)
         lock = await self._provider_lock_manager.get_lock(provider)
         async with lock:
-            now = time.monotonic()
-            if now - self._last_cleanup >= 30.0:
-                await self._cleanup_expired()
-                self._last_cleanup = now
-            new_expiry = now + duration
+            new_expiry = time.monotonic() + duration
             existing = self._cooldowns.get(credential, 0)
             self._cooldowns[credential] = max(existing, new_expiry)
 

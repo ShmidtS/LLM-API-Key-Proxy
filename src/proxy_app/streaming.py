@@ -46,7 +46,7 @@ async def streaming_response_wrapper(
     _owns_counter = not getattr(request, '_stream_tracked', False)
     if _owns_counter:
         try:
-            await _inc_streams(request)
+            _inc_streams(request)
         except AttributeError:
             logging.debug("stream_response: request lacks stream counter attribute on increment")
 
@@ -119,7 +119,7 @@ async def streaming_response_wrapper(
     finally:
         if _owns_counter:
             try:
-                await _dec_streams(request)
+                _dec_streams(request)
             except AttributeError:
                 logging.debug("stream_response: request lacks stream counter attribute on decrement")
         if logger and aggregator is not None:

@@ -1312,6 +1312,28 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                 status_code=status_code or 503,
             )
 
+        # Account/billing errors (e.g. Aliyun "Arrearage", "Access denied...account in good standing")
+        # These are per-key/account issues — rotating to another credential may succeed.
+        if any(
+            pattern in error_msg
+            for pattern in [
+                "arrearage",
+                "overdue payment",
+                "account in good standing",
+                "insufficient balance",
+                "please recharge",
+                "out of credit",
+                "payment required",
+            ]
+        ):
+            return ClassifiedError(
+                error_type="quota_exceeded",
+                original_exception=e,
+                status_code=status_code or 402,
+                retry_after=300,
+                reason="account_billing_issue",
+            )
+
         # Some providers (e.g. ZAI) return quota errors as 400 Bad Request
         # with messages like "Insufficient balance" or "Please recharge".
         # Re-check parse_quota_error for BadRequestError cases that the

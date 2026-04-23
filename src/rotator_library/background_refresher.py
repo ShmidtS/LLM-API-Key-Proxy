@@ -46,6 +46,7 @@ class BackgroundRefresher:
         self._task: Optional[asyncio.Task] = None
         self._provider_job_tasks: Dict[str, asyncio.Task] = {}  # provider -> task
         self._usage_reset_task: Optional[asyncio.Task] = None
+        self._cooldown_cleanup_task: Optional[asyncio.Task] = None
         self._initialized = False
         try:
             interval_str = os.getenv(
@@ -89,6 +90,15 @@ class BackgroundRefresher:
             except asyncio.CancelledError:
                 lib_logger.debug("Usage reset task cancelled during stop")
         self._usage_reset_task = None
+
+        # Cancel cooldown cleanup task
+        if self._cooldown_cleanup_task and not self._cooldown_cleanup_task.done():
+            self._cooldown_cleanup_task.cancel()
+            try:
+                await self._cooldown_cleanup_task
+            except asyncio.CancelledError:
+                lib_logger.debug("Cooldown cleanup task cancelled during stop")
+        self._cooldown_cleanup_task = None
 
         # Cancel main task
         if self._task:
@@ -295,6 +305,23 @@ class BackgroundRefresher:
             except Exception as e:
                 lib_logger.error(f"Error in usage reset background task: {e}")
 
+    async def _run_cooldown_cleanup(self) -> None:
+        """Periodically clean expired cooldown entries.
+
+        Moved out of is_cooling_down hot path to avoid per-request overhead.
+        Runs every 30 seconds.
+        """
+        while True:
+            try:
+                await asyncio.sleep(30)
+                cooldown_manager = self._client.cooldown_manager
+                if cooldown_manager:
+                    await cooldown_manager.periodic_cleanup()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                lib_logger.error(f"Error in cooldown cleanup background task: {e}")
+
     async def _run(self):
         """The main loop for OAuth token refresh."""
         # Initialize credentials (load persisted tiers) before starting
@@ -305,6 +332,9 @@ class BackgroundRefresher:
 
         # Start periodic usage stats reset (moved out of acquire_key hot path)
         self._usage_reset_task = asyncio.create_task(self._run_usage_reset())
+
+        # Start periodic cooldown cleanup (moved out of is_cooling_down hot path)
+        self._cooldown_cleanup_task = asyncio.create_task(self._run_cooldown_cleanup())
 
         # Main OAuth refresh loop
         while True:

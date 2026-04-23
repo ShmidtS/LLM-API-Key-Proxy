@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+import asyncio
 import time
 
 from fastapi import APIRouter, Request, Depends
+from fastapi.responses import JSONResponse
 
 from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key
@@ -13,6 +15,12 @@ router = APIRouter()
 
 # Module-level cache shared across requests
 _models_cache: dict = {"data": None, "expires": 0.0}
+_models_cache_lock = asyncio.Lock()
+
+
+def invalidate_models_cache():
+    _models_cache["data"] = None
+    _models_cache["expires"] = 0.0
 
 
 @router.get("/v1/models")
@@ -31,7 +39,7 @@ async def list_models(
     """
     now = time.monotonic()
     if _models_cache["data"] is not None and _models_cache["expires"] > now:
-        return _models_cache["data"]
+        return JSONResponse(content=_models_cache["data"], headers={"Cache-Control": "max-age=60"})
 
     model_ids = await client.get_all_available_models(grouped=False)
 
@@ -40,9 +48,10 @@ async def list_models(
         if model_info_service.is_ready:
             enriched_data = model_info_service.enrich_model_list(model_ids)
             response_data = {"object": "list", "data": enriched_data}
-            _models_cache["data"] = response_data
-            _models_cache["expires"] = now + 60
-            return response_data
+            async with _models_cache_lock:
+                _models_cache["data"] = response_data
+                _models_cache["expires"] = now + 60
+            return JSONResponse(content=response_data, headers={"Cache-Control": "max-age=60"})
 
     # Fallback to basic model cards
     model_cards = [
@@ -55,9 +64,10 @@ async def list_models(
         for model_id in model_ids
     ]
     response_data = {"object": "list", "data": model_cards}
-    _models_cache["data"] = response_data
-    _models_cache["expires"] = now + 60
-    return response_data
+    async with _models_cache_lock:
+        _models_cache["data"] = response_data
+        _models_cache["expires"] = now + 60
+    return JSONResponse(content=response_data, headers={"Cache-Control": "max-age=60"})
 
 
 @router.get("/v1/models/{model_id:path}")
