@@ -25,6 +25,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ..async_locks import ReadWriteLock
 from ..config import env_bool as _env_bool, env_int as _env_int
 from ..utils.json_utils import json_loads
 from ..utils.resilient_io import safe_write_json
@@ -91,7 +92,7 @@ class ProviderCache:
         self._cache: OrderedDict[str, Dict[str, float | str]] = OrderedDict()
         self._memory_ttl = memory_ttl_seconds
         self._disk_ttl = disk_ttl_seconds
-        self._async_lock = asyncio.Lock()   # All cache mutations and async reads
+        self._rw_lock = ReadWriteLock()   # Read-write lock for cache access (read-heavy optimization)
         self._disk_lock = asyncio.Lock()
         self._max_entries = max_entries
         self._evicted_count = 0
@@ -192,7 +193,7 @@ class ProviderCache:
                             "value", entry.get("signature", "")
                         )  # Support both formats
                         if value:
-                            async with self._async_lock:
+                            async with self._rw_lock.write():
                                 self._cache[cache_key] = {
                                     "value": value,
                                     "timestamp": entry["timestamp"],
@@ -256,7 +257,7 @@ class ProviderCache:
 
             # Step 3: Merge - memory entries take precedence (fresher timestamps)
             merged_entries = valid_disk_entries.copy()
-            async with self._async_lock:
+            async with self._rw_lock.read():
                 cache_snapshot = list(self._cache.items())
             for key, entry in cache_snapshot:
                 merged_entries[key] = {"value": entry["value"], "timestamp": entry["timestamp"]}
@@ -323,17 +324,17 @@ class ProviderCache:
         try:
             while self._running:
                 await asyncio.sleep(self._write_interval)
-                async with self._async_lock:
+                async with self._rw_lock.write():
                     if not self._dirty:
                         continue
                     self._dirty = False
                 try:
                     success = await self._save_to_disk()
                     if not success:
-                        async with self._async_lock:
+                        async with self._rw_lock.write():
                             self._dirty = True
                 except Exception as e:
-                    async with self._async_lock:
+                    async with self._rw_lock.write():
                         self._dirty = True
                     lib_logger.error(
                         f"ProviderCache[{self._cache_name}]: Writer error: {e}"
@@ -358,7 +359,7 @@ class ProviderCache:
         Only cleans memory - disk entries are preserved and cleaned during
         _save_to_disk() based on their own disk_ttl.
         """
-        async with self._async_lock:
+        async with self._rw_lock.write():
             now = time.time()
             while len(self._cache) >= self._max_entries:
                 # popitem(last=False) removes the least-recently-used entry
@@ -407,7 +408,7 @@ class ProviderCache:
     async def _async_store(self, key: str, value: str) -> None:
         """Async implementation of store."""
         now = time.time()
-        async with self._async_lock:
+        async with self._rw_lock.write():
             self._cache[key] = {"value": value, "timestamp": now, "accessed": now}
             self._cache.move_to_end(key)
             self._dirty = True
@@ -422,13 +423,13 @@ class ProviderCache:
 
     async def _touch_key(self, key: str) -> None:
         """Move key to end of LRU (called from sync retrieve via create_task)."""
-        async with self._async_lock:
+        async with self._rw_lock.write():
             if key in self._cache:
                 self._cache.move_to_end(key)
 
     async def _remove_expired_key(self, key: str) -> None:
         """Remove an expired key from memory cache (called from sync retrieve via create_task)."""
-        async with self._async_lock:
+        async with self._rw_lock.write():
             self._cache.pop(key, None)
 
     def retrieve(self, key: str) -> Optional[str]:
@@ -478,18 +479,32 @@ class ProviderCache:
 
         Use this when you can await and need guaranteed disk fallback.
         """
-        # Check memory first
-        async with self._async_lock:
+        # Check memory first under read-lock
+        async with self._rw_lock.read():
             if key in self._cache:
                 entry = self._cache[key]
                 if time.time() - entry["timestamp"] <= self._memory_ttl:
                     self._stats["memory_hits"] += 1
                     entry["accessed"] = time.time()
                     return entry["value"]
-                else:
-                    # Entry expired from memory - remove from memory only
-                    # Don't set dirty flag: disk copy should persist until disk_ttl
-                    del self._cache[key]
+                # Entry expired — need write-lock to remove; fall through below
+            else:
+                # Key not in cache at all — skip write-lock, go to disk
+                pass
+
+        # If we reach here, key was in cache but expired — remove under write-lock
+        async with self._rw_lock.write():
+            # Re-check: another task may have updated or removed the key
+            if key in self._cache:
+                entry = self._cache[key]
+                if time.time() - entry["timestamp"] <= self._memory_ttl:
+                    # Another task refreshed it while we waited
+                    self._stats["memory_hits"] += 1
+                    entry["accessed"] = time.time()
+                    return entry["value"]
+                # Still expired — remove from memory only
+                # Don't set dirty flag: disk copy should persist until disk_ttl
+                del self._cache[key]
 
         # Check disk
         if self._enable_disk:
@@ -575,7 +590,7 @@ class ProviderCache:
                     self._stats["misses"] += 1
                 return None
 
-            async with self._async_lock:
+            async with self._rw_lock.write():
                 now = time.time()
                 self._cache[key] = {"value": value, "timestamp": ts, "accessed": now}
                 self._cache.move_to_end(key)
@@ -617,7 +632,7 @@ class ProviderCache:
 
     async def clear(self) -> None:
         """Clear all cached data."""
-        async with self._async_lock:
+        async with self._rw_lock.write():
             self._cache.clear()
             self._dirty = True
         if self._enable_disk:

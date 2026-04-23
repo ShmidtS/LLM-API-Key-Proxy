@@ -16,6 +16,7 @@ Usage:
     "key" in cache               # False if expired
 """
 
+import asyncio
 import threading
 import time
 from collections import OrderedDict
@@ -26,24 +27,42 @@ class TTLDict:
     """
     OrderedDict with per-entry TTL and max-size LRU eviction.
 
+    Dual-lock design for safe use from both sync and async contexts:
+
+    - **Sync callers** use ``set``, ``get``, ``pop``, ``keys``, etc.
+      These acquire ``threading.Lock`` and never block the event loop
+      when called from non-async code.
+    - **Async callers** use ``aset``, ``aget``, ``apop``, ``akeys``, etc.
+      These acquire ``asyncio.Lock`` and yield to the event loop
+      while waiting, preventing event-loop stalls.
+
+    The two lock domains are independent: sync methods do NOT try to
+    detect or acquire the async lock, and vice versa.  Callers must
+    pick the correct domain for their context.  Mixing sync and async
+    access to the same instance from concurrent threads/tasks is safe
+    for individual operations but does NOT guarantee cross-domain
+    atomicity (e.g. an async cleanup and a sync set may interleave).
+
     - O(1) get/set/delete via OrderedDict
     - Automatic expiry on access (lazy eviction)
     - Max-size LRU eviction on set
-    - Thread-safe with optional locking
+    - Thread-safe (sync) and async-safe (async) locking
     - Supports ``in``, ``get``, ``pop``, ``keys``, ``values``, ``items``
+      and their async counterparts with ``a`` prefix
 
     Args:
         maxsize: Maximum entries before LRU eviction (0 = unlimited)
         default_ttl: Default time-to-live in seconds for entries
     """
 
-    __slots__ = ("_data", "_maxsize", "_default_ttl", "_lock")
+    __slots__ = ("_data", "_maxsize", "_default_ttl", "_lock", "_async_lock")
 
     def __init__(self, maxsize: int = 0, default_ttl: float = 3600.0):
         self._data: OrderedDict[str, tuple[float, Any]] = OrderedDict()
         self._maxsize = maxsize
         self._default_ttl = default_ttl
-        self._lock = threading.Lock()  # NOTE: threading.Lock blocks the event loop if called from async code; callers in oauth_base invoke TTLDict from async methods, but operations are fast in-memory dict lookups so blocking is negligible
+        self._lock = threading.Lock()
+        self._async_lock = asyncio.Lock()
 
     def _is_alive(self, entry: tuple[float, Any]) -> bool:
         return time.time() <= entry[0]
@@ -139,6 +158,71 @@ class TTLDict:
     def cleanup(self) -> int:
         """Remove all expired entries. Returns count removed."""
         with self._lock:
+            expired = [k for k, v in self._data.items() if not self._is_alive(v)]
+            for k in expired:
+                del self._data[k]
+            return len(expired)
+
+    # ---- Async counterparts (use asyncio.Lock) ----
+
+    async def aset(self, key: str, value: Any, ttl: Optional[float] = None) -> None:
+        """Async store value with given TTL (uses default_ttl if None)."""
+        deadline = time.time() + (ttl if ttl is not None else self._default_ttl)
+        async with self._async_lock:
+            self._data[key] = (deadline, value)
+            self._data.move_to_end(key)
+            self._enforce_maxsize()
+
+    async def aget(self, key: str, default: Any = None) -> Any:
+        """Async get value if not expired, else return default."""
+        async with self._async_lock:
+            self._evict_expired_key(key)
+            entry = self._data.get(key)
+            if entry is not None and self._is_alive(entry):
+                self._data.move_to_end(key)
+                return entry[1]
+            return default
+
+    async def acontains(self, key: str) -> bool:
+        """Async check if key exists and is not expired."""
+        async with self._async_lock:
+            self._evict_expired_key(key)
+            return key in self._data and self._is_alive(self._data[key])
+
+    async def apop(self, key: str, *default: Any) -> Any:
+        """Async remove and return value, or default if missing/expired."""
+        async with self._async_lock:
+            self._evict_expired_key(key)
+            if key in self._data:
+                _, value = self._data.pop(key)
+                return value
+            if default:
+                return default[0]
+            raise KeyError(key)
+
+    async def akeys(self) -> list[str]:
+        """Async list of non-expired keys."""
+        async with self._async_lock:
+            return [k for k, v in self._data.items() if self._is_alive(v)]
+
+    async def avalues(self) -> list[Any]:
+        """Async list of non-expired values."""
+        async with self._async_lock:
+            return [v[1] for v in self._data.values() if self._is_alive(v)]
+
+    async def aitems(self) -> list[tuple[str, Any]]:
+        """Async list of non-expired (key, value) pairs."""
+        async with self._async_lock:
+            return [(k, v[1]) for k, v in self._data.items() if self._is_alive(v)]
+
+    async def aclear(self) -> None:
+        """Async remove all entries."""
+        async with self._async_lock:
+            self._data.clear()
+
+    async def acleanup(self) -> int:
+        """Async remove all expired entries. Returns count removed."""
+        async with self._async_lock:
             expired = [k for k, v in self._data.items() if not self._is_alive(v)]
             for k in expired:
                 del self._data[k]

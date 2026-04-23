@@ -96,8 +96,10 @@ def sse_data_event(data: Any) -> bytes:
     """Format a dict as an SSE data event bytes.
 
     Produces ``b"data: {...}\\n\\n"`` suitable for yielding in SSE streaming responses.
+    Uses bytes.join for single-allocation assembly (avoids intermediate objects
+    from ``+`` concatenation on every chunk in the streaming hot path).
     """
-    return b"data: " + orjson.dumps(data) + b"\n\n"
+    return b"".join((b"data: ", orjson.dumps(data), b"\n\n"))
 
 
 def json_deep_copy(obj: Any) -> Any:

@@ -66,8 +66,8 @@ async def streaming_response_wrapper(
             _chunk_count += 1
             _bytes_since_yield += len(chunk_str)
 
-            # Adaptive yield: every 16 chunks or 32KB to prevent event loop starvation
-            if _chunk_count % 16 == 0 or _bytes_since_yield >= 32768:
+            # Adaptive yield: every 32 chunks or 64KB to prevent event loop starvation
+            if _chunk_count % 32 == 0 or _bytes_since_yield >= 65536:
                 await asyncio.sleep(0)
                 _bytes_since_yield = 0
 
