@@ -3,13 +3,14 @@
 
 """Message transform mixin for AntigravityProvider."""
 
+import copy
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import json
 from ...config import env_bool
-from ...utils.json_utils import json_deep_copy, json_loads, json_dumps_str
+from ...utils.json_utils import json_loads, json_dumps_str
 from .constants import (
     DEFAULT_MAX_OUTPUT_TOKENS,
     PREPEND_INSTRUCTION,
@@ -54,9 +55,10 @@ class MessageTransformMixin:
         - Claude thinking injection from cache
         - Gemini 3 thoughtSignature preservation
         """
-        # Deep copy required: _inject_interleaved_thinking_reminder mutates
-        # messages[i]["parts"].append(...) which would corrupt caller data
-        messages = json_deep_copy(messages)
+        # Shallow copy required: messages.pop(0) below mutates the list.
+        # Individual message dicts are only read, never mutated in-place,
+        # so a full deep copy (orjson round-trip) is unnecessary.
+        messages = list(messages)
         system_instruction = None
         gemini_contents = []
 
@@ -294,7 +296,7 @@ class MessageTransformMixin:
         if not tools:
             return tools
 
-        modified = json_deep_copy(tools) if copy_tools else tools
+        modified = copy.deepcopy(tools) if copy_tools else tools
         for tool in modified:
             for func_decl in tool.get("functionDeclarations", []):
                 name = func_decl.get("name", "")
@@ -325,7 +327,7 @@ class MessageTransformMixin:
         if not tools:
             return tools
 
-        modified = json_deep_copy(tools) if copy_tools else tools
+        modified = copy.deepcopy(tools) if copy_tools else tools
         for tool in modified:
             for func_decl in tool.get("functionDeclarations", []):
                 # Support both parametersJsonSchema and parameters keys
@@ -361,7 +363,7 @@ class MessageTransformMixin:
         # Use provided prompt or default to Gemini 3 prompt
         prompt_template = description_prompt or self._gemini3_description_prompt
 
-        modified = json_deep_copy(tools) if copy_tools else tools
+        modified = copy.deepcopy(tools) if copy_tools else tools
         for tool in modified:
             for func_decl in tool.get("functionDeclarations", []):
                 # Delegate to mixin's singular _inject_signature_into_description method
@@ -509,7 +511,7 @@ class MessageTransformMixin:
             "requestType": "agent",  # Required for agent-style requests
             "requestId": _generate_request_id(),
             "model": internal_model,
-            "request": json_deep_copy(gemini_payload),
+            "request": copy.deepcopy(gemini_payload),
         }
 
         # Add stable session ID based on first user message

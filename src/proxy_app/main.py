@@ -16,7 +16,10 @@ from pathlib import Path
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 import argparse
+import atexit
 import logging
+import logging.handlers
+import queue
 import re
 
 logger = logging.getLogger(__name__)
@@ -38,7 +41,7 @@ if sys.platform == "win32":
         sys.stdout.reconfigure(line_buffering=True)
         sys.stderr.reconfigure(line_buffering=True)
     except (AttributeError, io.UnsupportedOperation):
-        pass
+        logger.debug("stdout/stderr reconfigure failed, ignoring", exc_info=True)
 
 # --- Argument Parsing (BEFORE heavy imports) ---
 parser = argparse.ArgumentParser(description="API Key Proxy Server")
@@ -208,20 +211,29 @@ from rotator_library.utils.terminal_utils import clear_screen
 LOG_DIR = get_logs_dir(_root_dir)
 
 # Configure a file handler for INFO-level logs and higher
-info_file_handler = logging.FileHandler(LOG_DIR / "proxy.log", encoding="utf-8")
-info_file_handler.setLevel(logging.INFO)
-info_file_handler.setFormatter(
+_info_file_handler = logging.FileHandler(LOG_DIR / "proxy.log", encoding="utf-8")
+_info_file_handler.setLevel(logging.INFO)
+_info_file_handler.setFormatter(
     logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 )
+_info_queue = queue.Queue(-1)
+info_file_handler = logging.handlers.QueueHandler(_info_queue)
+_info_queue_listener = logging.handlers.QueueListener(_info_queue, _info_file_handler, respect_handler_level=True)
+_info_queue_listener.start()
+atexit.register(_info_queue_listener.stop)
 
 # Configure a dedicated file handler for all DEBUG-level logs
-debug_file_handler = logging.FileHandler(LOG_DIR / "proxy_debug.log", encoding="utf-8")
-debug_file_handler.setLevel(logging.DEBUG)
-debug_file_handler.setFormatter(
+_debug_file_handler = logging.FileHandler(LOG_DIR / "proxy_debug.log", encoding="utf-8")
+_debug_file_handler.setLevel(logging.DEBUG)
+_debug_file_handler.setFormatter(
     logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 )
-
-debug_file_handler.addFilter(RotatorDebugFilter())
+_debug_file_handler.addFilter(RotatorDebugFilter())
+_debug_queue = queue.Queue(-1)
+debug_file_handler = logging.handlers.QueueHandler(_debug_queue)
+_debug_queue_listener = logging.handlers.QueueListener(_debug_queue, _debug_file_handler, respect_handler_level=True)
+_debug_queue_listener.start()
+atexit.register(_debug_queue_listener.stop)
 
 # Configure a console handler with color
 console_handler = colorlog.StreamHandler(sys.stdout)

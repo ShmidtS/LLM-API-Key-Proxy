@@ -11,7 +11,9 @@ import logging
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Union
 
 import json
-from ..utils.json_utils import json_deep_copy, json_loads
+import copy
+
+from ..utils.json_utils import json_loads
 import litellm
 
 lib_logger = logging.getLogger("rotator_library")
@@ -94,7 +96,7 @@ class StreamingResponseMixin:
             cleaned_tool = dict(tool)
 
             if "function" in cleaned_tool:
-                func = json_deep_copy(cleaned_tool["function"])
+                func = copy.deepcopy(cleaned_tool["function"])
                 cleaned_tool["function"] = func
 
                 # Remove strict mode (not supported by most providers)

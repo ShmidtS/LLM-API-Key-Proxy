@@ -8,6 +8,8 @@ from ..utils.json_utils import json_loads, json_dumps_str
 from ..utils.duration import parse_duration as _parse_duration_shared
 import httpx
 import logging
+
+logger = logging.getLogger(__name__)
 import time
 from typing import List, Dict, Any, AsyncGenerator, Union, Optional, Tuple
 from .provider_interface import ProviderInterface, QuotaGroupMap, UsageResetConfigDef
@@ -235,7 +237,7 @@ class GeminiCliProvider(
                                 result["retry_after"] = parsed
 
         except (json.JSONDecodeError, AttributeError, TypeError):
-            pass
+            logger.debug("Failed to parse retry-after from response headers/body", exc_info=True)
 
         if not result["retry_after"]:
             return None

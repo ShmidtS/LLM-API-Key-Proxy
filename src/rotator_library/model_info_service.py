@@ -957,7 +957,7 @@ class ModelRegistry(metaclass=SingletonMeta):
             try:
                 await self._worker
             except asyncio.CancelledError:
-                pass
+                logger.debug("Model registry worker cancelled during stop", exc_info=True)
             self._worker = None
             logger.info("ModelRegistry stopped")
 

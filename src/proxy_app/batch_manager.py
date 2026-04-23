@@ -6,8 +6,11 @@
 import asyncio
 from collections import defaultdict
 from typing import List, Dict, Any, Tuple
+import logging
 import time
 from rotator_library import RotatingClient
+
+logger = logging.getLogger(__name__)
 
 class EmbeddingBatcher:
     """Aggregates individual embedding requests into batched calls. Collects requests via a queue, groups them by model, and sends batched API requests to reduce overhead."""
@@ -31,7 +34,6 @@ class EmbeddingBatcher:
         while True:
             batch, futures = await self._gather_batch()
             if not batch:
-                await asyncio.sleep(0)
                 continue
 
             grouped_batches = defaultdict(lambda: {"batch": [], "futures": []})
@@ -114,7 +116,7 @@ class EmbeddingBatcher:
                 batch.append(request)
                 futures.append(future)
         except asyncio.TimeoutError:
-            pass
+            logger.debug("Batch collection timed out, returning partial batch", exc_info=True)
 
         return batch, futures
 

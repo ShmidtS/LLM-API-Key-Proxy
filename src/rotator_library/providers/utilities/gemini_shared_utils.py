@@ -11,7 +11,7 @@ AntigravityProvider, extracted to reduce code duplication.
 
 import json
 
-from ...utils.json_utils import json_deep_copy, json_loads
+from ...utils.json_utils import json_loads
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -196,7 +196,7 @@ def inline_schema_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
                 if isinstance(ref, str) and ref.startswith(prefix):
                     name = ref[len(prefix) :]
                     if name in defs:
-                        return resolve(json_deep_copy(defs[name]), seen + (ref,))
+                        return resolve(defs[name], seen + (ref,))
             return {k: resolve(v, seen) for k, v in node.items() if k != "$ref"}
         return {k: resolve(v, seen) for k, v in node.items()}
 
@@ -359,7 +359,7 @@ def recursively_parse_json_strings(
                 return unescaped
             except (json.JSONDecodeError, ValueError):
                 # If unescaping fails, continue with original processing
-                pass
+                lib_logger.debug("Control char unescaping failed in gemini_shared_utils", exc_info=True)
 
         # Only parse JSON strings if explicitly enabled
         if not parse_json_objects:

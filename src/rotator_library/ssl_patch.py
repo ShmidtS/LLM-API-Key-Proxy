@@ -73,7 +73,7 @@ def _patch_aiohttp_connector():
         # fine-grained per-host verify=False via HTTP_SSL_VERIFY_HOSTS.
 
     except ImportError:
-        pass
+        logging.debug("[SSL-FIX] aiohttp not installed, skipping connector SSL patch", exc_info=True)
     except Exception as e:
         logging.error(f"[SSL-FIX] Failed to patch aiohttp connector: {e}")
 
@@ -106,6 +106,6 @@ def _patch_litellm_ssl():
         logging.info("[SSL-FIX] Set SSL_VERIFY=False environment variable")
 
     except ImportError:
-        pass
+        logging.debug("[SSL-FIX] litellm not installed, skipping litellm SSL patch", exc_info=True)
     except Exception as e:
         logging.error(f"[SSL-FIX] Failed to patch litellm SSL: {e}")

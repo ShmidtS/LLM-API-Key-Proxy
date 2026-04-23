@@ -149,7 +149,7 @@ class ToolRecoveryMixin:
             result["fixed_json"] = json_dumps_str(parsed)
         except json.JSONDecodeError:
             # First fix didn't work - try more aggressive cleanup
-            pass
+            lib_logger.debug("Initial JSON fix failed in tool_recovery, trying aggressive fix", exc_info=True)
 
         # Option 4: If first attempt failed, try more aggressive fixes
         if result["fixed_json"] is None:

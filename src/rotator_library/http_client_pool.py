@@ -576,20 +576,15 @@ class HttpClientPool(metaclass=SingletonMeta):
                 streaming=False
             )
 
-        if self._client_lock.locked():
-            # Another coroutine is modifying state; return client as-is
-            return client
-
+        # NOTE: We deliberately do not attempt to recreate closed clients here.
+        # Sync lock-checking (self._client_lock.locked()) is a TOCTOU race, and
+        # creating clients without the lock can produce duplicates.  Callers that
+        # need automatic recovery should use get_client_async() instead.
         if client.is_closed:
             lib_logger.debug(
-                "get_client() returned a closed client — recreating lazily"
+                "get_client() returned a closed client — "
+                "use get_client_async() for automatic recovery"
             )
-            client = self._get_lazy_client(streaming=streaming)
-            if streaming:
-                self._streaming_client = client
-            else:
-                self._non_streaming_client = client
-            self._stats["reconnects"] += 1
 
         return client
 
@@ -691,7 +686,7 @@ class HttpClientPool(metaclass=SingletonMeta):
             try:
                 await self._warmup_task
             except asyncio.CancelledError:
-                pass
+                lib_logger.debug("Warmup task cancelled during close", exc_info=True)
             self._warmup_task = None
 
         async with self._client_lock:

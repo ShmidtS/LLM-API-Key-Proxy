@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 ShmidtS
 
+import atexit
 import logging
+import logging.handlers
 import orjson
+import queue
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from datetime import datetime, timezone
@@ -91,7 +94,12 @@ def _setup_failure_logger(logs_dir: Path) -> logging.Logger:
             backupCount=FAILURE_LOG_BACKUP_COUNT,
         )
         handler.setFormatter(JsonFormatter())
-        logger.addHandler(handler)
+        _fl_queue = queue.Queue(-1)
+        _fl_queue_handler = logging.handlers.QueueHandler(_fl_queue)
+        _fl_queue_listener = logging.handlers.QueueListener(_fl_queue, handler, respect_handler_level=True)
+        _fl_queue_listener.start()
+        atexit.register(_fl_queue_listener.stop)
+        logger.addHandler(_fl_queue_handler)
     except (OSError, PermissionError, IOError) as e:
         logging.warning(f"Cannot create failure log file handler: {e}")
         # Add NullHandler to prevent "no handlers" warning
