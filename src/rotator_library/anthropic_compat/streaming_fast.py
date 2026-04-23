@@ -365,18 +365,20 @@ async def anthropic_streaming_wrapper_fast(
             if "usage" in chunk and chunk["usage"]:
                 usage = chunk["usage"]
                 # Provider returned usage - use it (overrides precomputed)
-                if usage.get("prompt_tokens"):
-                    input_tokens = usage.get("prompt_tokens", input_tokens)
-                output_tokens = usage.get("completion_tokens", output_tokens)
+                if usage.get("prompt_tokens") is not None:
+                    input_tokens = usage["prompt_tokens"]
+                raw_completion = usage.get("completion_tokens")
+                if raw_completion is not None:
+                    output_tokens = raw_completion
                 # Extract cached tokens from prompt_tokens_details
                 if usage.get("prompt_tokens_details"):
                     prompt_details = usage["prompt_tokens_details"]
-                    cached_tokens = prompt_details.get(
-                        "cached_tokens", cached_tokens
-                    )
-                    cache_creation_tokens = prompt_details.get(
-                        "cache_creation_tokens", cache_creation_tokens
-                    )
+                    raw_cached = prompt_details.get("cached_tokens")
+                    if raw_cached is not None:
+                        cached_tokens = raw_cached
+                    raw_creation = prompt_details.get("cache_creation_tokens")
+                    if raw_creation is not None:
+                        cache_creation_tokens = raw_creation
 
             # Send message_start on first chunk
             if not message_started:
@@ -494,12 +496,11 @@ async def anthropic_streaming_wrapper_fast(
         logger.error(f"Error in Anthropic streaming wrapper: {e}")
 
         # Send error as visible text
+        error_message = f"Error: {str(e)}"
         if not message_started:
             event_str = _make_message_start_event(request_id, original_model, input_tokens, cached_tokens, cache_creation_tokens)
             if event := batcher.add(event_str):
                 yield event
-
-            error_message = f"Error: {str(e)}"
         event_str = _make_content_block_start_event(current_block_index, "text")
         if event := batcher.add(event_str):
             yield event
