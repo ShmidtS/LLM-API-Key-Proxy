@@ -182,11 +182,8 @@ class RetryMixin(RetryBaseMixin):
         self, provider, current_cred, model, e, classified_error,
     ):
         """Handle rate_limit and quota_exceeded classification logic.
-        Returns "force_rotate" if quota failure limit reached, "rotate" otherwise.
+        Returns "fail" for non-retryable requests, "force_rotate" if quota failure limit reached, "rotate" otherwise.
         """
-        # Fail-fast: invalid_request is non-retryable and must NOT touch quota
-        # counters or trigger cooldown. Rotating/retrying would burn credits
-        # while the upstream 400 keeps returning.
         if classified_error.error_type == "invalid_request":
             lib_logger.warning(
                 "Non-retryable invalid_request; failing fast without "
@@ -194,7 +191,7 @@ class RetryMixin(RetryBaseMixin):
                 mask_credential(current_cred), model,
                 classified_error.status_code,
             )
-            return "rotate"
+            return "fail"
         if classified_error.error_type == "rate_limit":
             await self._process_rate_limit(
                 provider, current_cred, e,
@@ -1087,7 +1084,7 @@ class RetryMixin(RetryBaseMixin):
         request: Optional[Any],
         pre_request_callback: Optional[callable] = None,
         **kwargs,
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[Any, None]:
         """A dedicated generator for retrying streaming completions with full request preparation and per-key retries."""
         from ._streaming import _StreamedException
 
@@ -1438,13 +1435,14 @@ class RetryMixin(RetryBaseMixin):
                                 # Non-rotatable errors (invalid_request, context_window_exceeded,
                                 # pre_request_callback_error, ip_rate_limit) — fail immediately.
                                 # Rotating keys won't fix a malformed request.
-                                await self._process_rate_limit(
-                                    provider,
-                                    current_cred,
-                                    original_exc,
-                                    str(original_exc) if original_exc else None,
-                                    classified_error,
-                                )
+                                if classified_error.error_type in {"rate_limit", "ip_rate_limit"}:
+                                    await self._process_rate_limit(
+                                        provider,
+                                        current_cred,
+                                        original_exc,
+                                        str(original_exc) if original_exc else None,
+                                        classified_error,
+                                    )
                                 lib_logger.error(
                                     "Fatal %s error for %s (HTTP %s). Failing immediately.",
                                     classified_error.error_type,

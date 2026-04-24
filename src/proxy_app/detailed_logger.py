@@ -41,6 +41,28 @@ from rotator_library.utils.paths import get_logs_dir
 from rotator_library.utils.json_utils import extract_reasoning
 
 
+_SENSITIVE_HEADER_KEYS = frozenset({
+    "authorization", "proxy_authorization",
+})
+_SENSITIVE_HEADER_MARKERS = frozenset({
+    "api_key", "token", "secret", "password", "cookie",
+})
+
+
+def _sanitize_headers(headers: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if headers is None:
+        return None
+    sanitized = {}
+    for key, value in headers.items():
+        normalized = key.lower().replace("-", "_") if isinstance(key, str) else str(key).lower().replace("-", "_")
+        is_sensitive = (
+            normalized in _SENSITIVE_HEADER_KEYS
+            or any(marker in normalized for marker in _SENSITIVE_HEADER_MARKERS)
+        )
+        sanitized[key] = "***REDACTED***" if is_sensitive else value
+    return sanitized
+
+
 def _get_raw_io_logs_dir() -> Path:
     """Get the raw I/O logs directory, creating it if needed."""
     logs_dir = get_logs_dir()
@@ -95,7 +117,7 @@ class RawIOLogger:
         request_data = {
             "request_id": self.request_id,
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            "headers": dict(headers),
+            "headers": _sanitize_headers(dict(headers)),
             "body": body,
         }
         self._write_json("request.json", request_data)
@@ -121,7 +143,7 @@ class RawIOLogger:
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "status_code": status_code,
             "duration_ms": round(duration_ms),
-            "headers": dict(headers) if headers else None,
+            "headers": _sanitize_headers(dict(headers)) if headers else None,
             "body": body,
         }
         self._write_json("final_response.json", response_data)
