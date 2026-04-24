@@ -159,6 +159,7 @@ LITELLM_ERROR_MAP = [
         "invalid_request_error",
     ),
     ((litellm.AuthenticationError,), 401, "Authentication Error", "authentication_error"),
+    ((litellm.NotFoundError,), 404, "Not Found", "invalid_request_error"),
     ((litellm.RateLimitError,), 429, "Rate Limit Exceeded", "rate_limit_error"),
     (
         (litellm.ServiceUnavailableError, litellm.APIConnectionError),

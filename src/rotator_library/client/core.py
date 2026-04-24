@@ -33,6 +33,7 @@ _patch_aiohttp_connector()
 import asyncio
 import fnmatch
 import logging
+from collections.abc import Mapping
 import httpx
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
@@ -406,6 +407,8 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                 **self.litellm_provider_params[provider],
                 **litellm_kwargs.get("litellm_params", {}),
             }
+
+        litellm_kwargs["num_retries"] = 0
 
         provider_plugin = self._get_provider_instance(provider)
         if provider_plugin and hasattr(provider_plugin, "get_model_options"):
@@ -819,12 +822,23 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
             )
 
         try:
-            return await self._rate_limited_execute(
+            response = await self._rate_limited_execute(
                 litellm.aimage_generation,
                 request=request,
                 pre_request_callback=pre_request_callback,
                 **kwargs,
             )
+            if self._is_image_endpoint_mismatch_response(response):
+                lib_logger.info(
+                    "Provider doesn't support /images/generations, falling back to /chat/completions for model=%s",
+                    kwargs.get("model", ""),
+                )
+                return await self._image_via_chat_completion(
+                    request=request,
+                    pre_request_callback=pre_request_callback,
+                    **kwargs,
+                )
+            return response
         except (
             litellm.BadRequestError,
             litellm.NotFoundError,
@@ -832,25 +846,9 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
             OpenAIError,
         ) as e:
             err_lower = str(e).lower()
-            is_endpoint_mismatch = any(
-                pattern in err_lower
-                for pattern in [
-                    "only accepts the path",
-                    "invalid_path",
-                    "not found for api version",
-                    "does not support",
-                    "endpoint",
-                ]
-            )
-            # Any 404 from /images/generations means the endpoint doesn't exist
-            is_not_found = isinstance(e, litellm.NotFoundError) or (
-                isinstance(e, OpenAIError) and (
-                    "not found" in err_lower or "404" in err_lower
-                )
-            )
-            # 404 with HTML body means the endpoint doesn't exist on this server
-            is_html_404 = is_not_found and "<!doctype" in err_lower
-            if not is_endpoint_mismatch and not is_html_404 and not is_not_found:
+            is_endpoint_mismatch = self._is_image_endpoint_mismatch_text(err_lower)
+            is_html_404 = "<!doctype" in err_lower and ("not found" in err_lower or "404" in err_lower)
+            if not is_endpoint_mismatch and not is_html_404:
                 raise
             lib_logger.info(
                 "Provider doesn't support /images/generations, falling back to /chat/completions for model=%s",
@@ -877,6 +875,32 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                 raise NoAvailableKeysError(
                     f"Model {kwargs.get('model', 'unknown')} is not supported by this provider for image generation"
                 ) from chat_e
+
+    def _is_image_endpoint_mismatch_response(self, response: Any) -> bool:
+        if not isinstance(response, Mapping):
+            return False
+        error = response.get("error")
+        if not isinstance(error, Mapping):
+            return False
+        error_type = str(error.get("type", "")).lower()
+        message = str(error.get("message", "")).lower()
+        return error_type == "invalid_request" and self._is_image_endpoint_mismatch_text(message)
+
+    def _is_image_endpoint_mismatch_text(self, text: str) -> bool:
+        return any(
+            pattern in text
+            for pattern in (
+                "only accepts the path",
+                "invalid_path",
+                "path not found",
+                "not found: /v1/images/generations",
+                "/v1/images/generations",
+                "images/generations endpoint",
+                "image generation endpoint",
+                "endpoint does not support",
+                "endpoint not found",
+            )
+        )
 
     async def _image_via_chat_completion(
         self,
@@ -926,6 +950,9 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
             pre_request_callback=pre_request_callback,
             **chat_kwargs,
         )
+
+        if isinstance(chat_resp, Mapping) and "error" in chat_resp:
+            return chat_resp
 
         images = []
         for choice in chat_resp.get("choices") or []:

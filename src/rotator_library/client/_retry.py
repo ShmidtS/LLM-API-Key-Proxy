@@ -1136,6 +1136,7 @@ class RetryMixin(RetryBaseMixin):
                     key_acquired = True
 
                     litellm_kwargs = kwargs.copy()
+                    litellm_kwargs["num_retries"] = 0
 
                     # [FIX] Remove client-provided headers/api_key that could override provider credentials
                     self._strip_client_headers(litellm_kwargs)
