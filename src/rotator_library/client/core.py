@@ -463,9 +463,21 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                 return instance
             except ValueError:
                 return None
-        else:
-            # Check if already registered (e.g. by usage_manager)
-            return self._provider_instances.get(provider_name)
+
+        # Fallback: known providers with api_base but no plugin get OpenAICompatibleProvider
+        # This fixes providers like openrouter, xai, openai, moonshot that have keys
+        # and api_base but no dedicated provider plugin class
+        api_base = self.provider_config.api_bases.get(provider_name)
+        if api_base:
+            try:
+                instance = OpenAICompatibleProvider(provider_name)
+                self._provider_instances.register(provider_name, instance)
+                return instance
+            except ValueError:
+                return None
+
+        # Check if already registered (e.g. by usage_manager)
+        return self._provider_instances.get(provider_name)
 
     async def _resolve_model_id(self, model: str, provider: str) -> str:
         """
@@ -655,19 +667,115 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
             **kwargs,
         )
 
-    def aimage_generation(
+    async def aimage_generation(
         self,
         request: Optional[Any] = None,
         pre_request_callback: Optional[callable] = None,
         **kwargs,
     ) -> Any:
-        """Generate an image via the image generation endpoint."""
-        return self._media_request(
-            litellm.aimage_generation,
+        """Generate an image via the image generation endpoint.
+
+        Tries /v1/images/generations first. If the provider doesn't support
+        that endpoint (400 Invalid path, 404 Not Found, etc.), falls back to
+        /chat/completions with prompt conversion. The runtime error decides
+        which path to take — no hardcoded provider lists.
+        """
+        try:
+            return await self._rate_limited_execute(
+                litellm.aimage_generation,
+                request=request,
+                pre_request_callback=pre_request_callback,
+                **kwargs,
+            )
+        except (litellm.BadRequestError, litellm.NotFoundError, litellm.APIError) as e:
+            err_lower = str(e).lower()
+            is_endpoint_mismatch = any(
+                pattern in err_lower
+                for pattern in [
+                    "only accepts the path",
+                    "invalid_path",
+                    "not found for api version",
+                    "does not support",
+                    "endpoint",
+                ]
+            )
+            # 404 with HTML body means the endpoint doesn't exist on this server
+            is_html_404 = isinstance(e, litellm.NotFoundError) and "<!doctype" in err_lower
+            if not is_endpoint_mismatch and not is_html_404:
+                raise
+            lib_logger.info(
+                "Provider doesn't support /images/generations, falling back to /chat/completions for model=%s",
+                kwargs.get("model", ""),
+            )
+            return await self._image_via_chat_completion(
+                request=request,
+                pre_request_callback=pre_request_callback,
+                **kwargs,
+            )
+
+    async def _image_via_chat_completion(
+        self,
+        request: Optional[Any] = None,
+        pre_request_callback: Optional[callable] = None,
+        **kwargs,
+    ) -> Any:
+        """Route image generation through /chat/completions as fallback.
+
+        Called when /v1/images/generations is rejected by the provider.
+        Sends the prompt as a user message and converts the chat response
+        into OpenAI image generation format.
+        """
+        import re
+        import time as _time
+
+        model = kwargs.get("model", "")
+        prompt = kwargs.get("prompt", "")
+        n = kwargs.get("n", 1)
+        size = kwargs.get("size", "1024x1024")
+
+        size_hint = f" (size: {size})" if size else ""
+        user_content = f"Generate an image: {prompt}{size_hint}"
+
+        chat_kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": user_content}],
+            "stream": False,
+        }
+        for key in ("temperature", "max_tokens", "top_p", "seed"):
+            if key in kwargs:
+                chat_kwargs[key] = kwargs[key]
+
+        chat_resp = await self._rate_limited_execute(
+            litellm.acompletion,
             request=request,
             pre_request_callback=pre_request_callback,
-            **kwargs,
+            **chat_kwargs,
         )
+
+        images = []
+        for choice in (chat_resp.get("choices") or []):
+            msg = choice.get("message", {})
+            content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
+
+            url_matches = re.findall(r'https?://\S+\.(?:png|jpg|jpeg|webp|gif)\S*', content)
+            b64_matches = re.findall(r'data:image/[^;]+;base64,[A-Za-z0-9+/=]+', content)
+
+            for url in url_matches:
+                images.append({"url": url})
+            for b64 in b64_matches:
+                images.append({"b64_json": b64.split(",", 1)[1] if "," in b64 else b64})
+
+            if not url_matches and not b64_matches and content.strip():
+                images.append({"url": content.strip()})
+
+        while len(images) < n and images:
+            images.append(images[-1])
+
+        return {
+            "created": int(_time.time()),
+            "data": images[:n] if n else images,
+            "object": "list",
+        }
 
     def aimage_edit(
         self,
