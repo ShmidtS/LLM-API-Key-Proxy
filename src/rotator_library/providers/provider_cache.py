@@ -485,7 +485,6 @@ class ProviderCache:
                 entry = self._cache[key]
                 if time.time() - entry["timestamp"] <= self._memory_ttl:
                     self._stats["memory_hits"] += 1
-                    entry["accessed"] = time.time()
                     return entry["value"]
                 # Entry expired — need write-lock to remove; fall through below
             else:

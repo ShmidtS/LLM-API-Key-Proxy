@@ -28,6 +28,12 @@ from ..providers.utilities import DEFAULT_GENERIC_SAFETY_SETTINGS, DEFAULT_SAFET
 lib_logger = logging.getLogger("rotator_library")
 
 
+_SENSITIVE_HEADER_KEYS = frozenset({
+    "authorization", "x-api-key", "api-key", "api_key", "cookie",
+    "proxy-authorization", "x-auth-token",
+})
+
+
 class HelpersMixin:
     """Mixin with helper methods for RotatingClient."""
 
@@ -35,11 +41,24 @@ class HelpersMixin:
     _pool_init_lock: asyncio.Lock | None = None
 
     def _build_request_headers(self, request: Optional[Any]) -> Dict[str, Any]:
-        """Build a stable request headers dict for failure logging."""
+        """Build a sanitized request headers dict for failure logging.
+
+        Sensitive headers (Authorization, API keys, cookies) are redacted
+        to prevent credential leaks in failure logs.
+        """
         if request is None:
             return {}
         headers = getattr(request, "headers", None)
-        return dict(headers) if headers else {}
+        if not headers:
+            return {}
+        sanitized = {}
+        for k, v in headers.items() if hasattr(headers, "items") else headers:
+            key_lower = k.lower() if isinstance(k, str) else k.decode("latin-1").lower()
+            if key_lower.replace("-", "_") in _SENSITIVE_HEADER_KEYS:
+                sanitized[k] = "***REDACTED***"
+            else:
+                sanitized[k] = v
+        return sanitized
 
     async def _sleep_within_budget(
         self, attempt: int, deadline: float, classified_error: "ClassifiedError"

@@ -37,11 +37,11 @@ class TTLDict:
       while waiting, preventing event-loop stalls.
 
     The two lock domains are independent: sync methods do NOT try to
-    detect or acquire the async lock, and vice versa.  Callers must
-    pick the correct domain for their context.  Mixing sync and async
-    access to the same instance from concurrent threads/tasks is safe
-    for individual operations but does NOT guarantee cross-domain
-    atomicity (e.g. an async cleanup and a sync set may interleave).
+    detect or acquire the async lock, and vice versa.  Do NOT access
+    the same instance from both sync threads and async tasks concurrently
+    -- the two locks do not mutually exclude each other, so concurrent
+    cross-domain access can produce stale reads or imprecise LRU ordering.
+    Pick one lock domain per instance.
 
     - O(1) get/set/delete via OrderedDict
     - Automatic expiry on access (lazy eviction)

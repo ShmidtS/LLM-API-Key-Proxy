@@ -69,6 +69,21 @@ class _RetryContext:
 
 
 @dataclass
+class _ErrorDecision:
+    """Decision from an error handler: what the retry loop should do next.
+
+    action values:
+        "rotate"         -- break inner loop, rotate to next credential
+        "retry_same_key" -- sleep wait_time, then continue inner loop
+        "fail"           -- non-recoverable, raise last_exception
+    """
+    action: str = "rotate"
+    wait_time: float = 0.0
+    classified_error: Any = None
+    error_message: str = ""
+
+
+@dataclass
 class _KeySelectionResult:
     """Result of _select_next_key() -- selected credential and control flow hint.
 
