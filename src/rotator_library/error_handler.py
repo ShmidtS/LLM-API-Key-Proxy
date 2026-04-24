@@ -10,12 +10,14 @@ import httpx
 
 from litellm.exceptions import (
     APIConnectionError,
+    APIError as LiteLLMAPIError,
     RateLimitError,
     ServiceUnavailableError,
     AuthenticationError,
     InvalidRequestError,
     BadRequestError,
     InternalServerError,
+    NotFoundError,
     Timeout,
     ContextWindowExceededError,
 )
@@ -1138,8 +1140,17 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                 status_code=status_code,
             )
         if status_code == 403:
+            # Check for Cloudflare Edge IP Restricted (non-retryable provider issue)
+            body_lower = error_body.lower()
+            if "edge_ip_restricted" in body_lower or "error 1034" in body_lower or (
+                "cloudflare" in body_lower and "owner_action_required" in body_lower
+            ):
+                return ClassifiedError(
+                    error_type="ip_rate_limit",
+                    original_exception=e,
+                    status_code=status_code,
+                )
             # 403 Forbidden - credential doesn't have access, should rotate
-            # Could be: IP restriction, account disabled, permission denied, etc.
             return ClassifiedError(
                 error_type="forbidden",
                 original_exception=e,
@@ -1324,6 +1335,9 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                 "please recharge",
                 "out of credit",
                 "payment required",
+                "add credits to continue",
+                "credits required",
+                "usage_limit_exceeded",
             ]
         ):
             return ClassifiedError(
@@ -1405,6 +1419,56 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
             error_type="server_error",
             original_exception=e,
             status_code=status_code or 503,
+        )
+
+    # litellm NotFoundError — model/endpoint not found at provider (404)
+    # Not a key issue; don't penalize credentials with escalating cooldown
+    if isinstance(e, NotFoundError):
+        error_msg = str(e).lower()
+        if "invalid path" in error_msg or "only accepts" in error_msg:
+            return ClassifiedError(
+                error_type="invalid_request",
+                original_exception=e,
+                status_code=status_code or 404,
+                reason="endpoint_not_found",
+            )
+        return ClassifiedError(
+            error_type="invalid_request",
+            original_exception=e,
+            status_code=status_code or 404,
+            reason="model_not_found",
+        )
+
+    # litellm.APIError wraps upstream errors (402 credits, etc.) without exposing httpx status
+    if isinstance(e, LiteLLMAPIError):
+        error_msg = str(e).lower()
+        if any(p in error_msg for p in [
+            "add credits to continue",
+            "credits required",
+            "usage_limit_exceeded",
+            "insufficient balance",
+            "out of credit",
+            "payment required",
+            "quota",
+        ]):
+            return ClassifiedError(
+                error_type="quota_exceeded",
+                original_exception=e,
+                status_code=status_code or 402,
+                retry_after=300,
+                reason="litellm_api_credits",
+            )
+        if "invalid api key" in error_msg or "invalid_api_key" in error_msg:
+            return ClassifiedError(
+                error_type="authentication",
+                original_exception=e,
+                status_code=status_code or 401,
+            )
+        return ClassifiedError(
+            error_type="unknown",
+            original_exception=e,
+            status_code=status_code,
+            reason="litellm_api_error_unclassified",
         )
 
     # Fallback for any other unclassified errors

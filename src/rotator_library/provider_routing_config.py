@@ -137,6 +137,7 @@ KNOWN_PROVIDERS: Set[str] = _build_known_providers_set()
 KNOWN_PROVIDERS.add("trybons")
 KNOWN_PROVIDERS.add("colin")  # COLIN uses OpenAI Responses API format
 KNOWN_PROVIDERS.add("zai")  # ZAI has custom quota tracking provider
+KNOWN_PROVIDERS.add("fireworks")  # fireworks_ai alias — users specify "fireworks/" prefix
 
 
 class ProviderConfig:
@@ -260,6 +261,20 @@ class ProviderConfig:
             lib_logger.debug(
                 f"Routing trybons model through anthropic: "
                 f"model={kwargs['model']}, api_base={trybons_base}"
+            )
+            return kwargs
+
+        # Fireworks: litellm registers as "fireworks_ai" but users use "fireworks/" prefix
+        if provider == "fireworks":
+            fireworks_base = api_base or self._api_bases.get("fireworks_ai")
+            model_name = model.split("/", 1)[1] if "/" in model else model
+            kwargs = kwargs.copy()
+            kwargs["model"] = f"fireworks_ai/{model_name}"
+            if fireworks_base:
+                kwargs["api_base"] = fireworks_base
+            lib_logger.debug(
+                f"Routing fireworks model through fireworks_ai: "
+                f"model={kwargs['model']}, api_base={fireworks_base}"
             )
             return kwargs
 

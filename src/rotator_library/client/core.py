@@ -680,6 +680,17 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         /chat/completions with prompt conversion. The runtime error decides
         which path to take — no hardcoded provider lists.
         """
+        # Auto-resolve unsupported image sizes — let the model pick the best fit
+        size = kwargs.get("size")
+        if size and size.lower() not in {"1024x1024", "1024x1536", "1536x1024",
+                                          "1792x1024", "1024x1792", "auto"}:
+            kwargs = kwargs.copy()
+            kwargs["size"] = "auto"
+            lib_logger.info(
+                "Remapping unsupported image size %s to auto for model %s",
+                size, kwargs.get("model", ""),
+            )
+
         try:
             return await self._rate_limited_execute(
                 litellm.aimage_generation,
@@ -699,9 +710,11 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                     "endpoint",
                 ]
             )
+            # Any 404 from /images/generations means the endpoint doesn't exist
+            is_not_found = isinstance(e, litellm.NotFoundError)
             # 404 with HTML body means the endpoint doesn't exist on this server
-            is_html_404 = isinstance(e, litellm.NotFoundError) and "<!doctype" in err_lower
-            if not is_endpoint_mismatch and not is_html_404:
+            is_html_404 = is_not_found and "<!doctype" in err_lower
+            if not is_endpoint_mismatch and not is_html_404 and not is_not_found:
                 raise
             lib_logger.info(
                 "Provider doesn't support /images/generations, falling back to /chat/completions for model=%s",
@@ -741,7 +754,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
             "messages": [{"role": "user", "content": user_content}],
             "stream": False,
         }
-        for key in ("temperature", "max_tokens", "top_p", "seed"):
+        for key in ("temperature", "top_p", "seed"):
             if key in kwargs:
                 chat_kwargs[key] = kwargs[key]
 

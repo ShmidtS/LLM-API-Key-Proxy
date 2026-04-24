@@ -380,13 +380,12 @@ def adjust_max_tokens_in_payload(
                 f"for model {model} (reason: {reason})"
             )
 
-        # Set both max_tokens and max_completion_tokens for compatibility
-        # Some providers use max_tokens, others use max_completion_tokens
-        payload["max_tokens"] = calculated_max
-
-        # Only set max_completion_tokens if it was originally present or for OpenAI models
+        # OpenAI models use max_completion_tokens exclusively — setting both causes 400
         if "max_completion_tokens" in payload or model.startswith(("openai/", "gpt")):
+            payload.pop("max_tokens", None)
             payload["max_completion_tokens"] = calculated_max
+        else:
+            payload["max_tokens"] = calculated_max
 
     return payload, False
 

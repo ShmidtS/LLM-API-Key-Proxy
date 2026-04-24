@@ -388,7 +388,7 @@ class UsageManagerRecordingMixin:
                 )
 
             # Provider-level errors (transient issues) should not count against the key
-            provider_level_errors = {"server_error", "api_connection"}
+            provider_level_errors = {"server_error", "api_connection", "ip_rate_limit"}
 
             # Determine if we should increment the failure counter
             should_increment = (

@@ -433,7 +433,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         warmup_tasks = []
         for host in self._warmup_hosts[:5]:  # Limit to 5 hosts for warmup
             for _ in range(self._warmup_count):
-                warmup_tasks.append(client.head(host, follow_redirects=True))
+                warmup_tasks.append(client.get(host, follow_redirects=True))
 
         # Execute all warmup requests in parallel with graceful error handling
         results = await asyncio.gather(*warmup_tasks, return_exceptions=True)

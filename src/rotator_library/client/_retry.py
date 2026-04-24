@@ -142,6 +142,10 @@ class RetryMixin(RetryBaseMixin):
         if provider == "inception":
             litellm_kwargs["model"] = model.rsplit("/", 1)[1]
 
+        if provider == "fireworks":
+            litellm_kwargs["custom_llm_provider"] = "fireworks_ai"
+            litellm_kwargs["model"] = f"fireworks_ai/{model.split('/', 1)[1]}"
+
     async def _invoke_pre_request_callback(self, pre_request_callback, request, litellm_kwargs, provider: str):
         """Invoke pre_request_callback with abort_on_callback_error handling."""
         try:
