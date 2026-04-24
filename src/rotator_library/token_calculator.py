@@ -20,6 +20,29 @@ from litellm.litellm_core_utils.token_counter import token_counter
 
 logger = logging.getLogger("rotator_library")
 
+# Models that require `max_completion_tokens` exclusively — sending both
+# `max_tokens` and `max_completion_tokens` produces an upstream 400.
+_MAX_COMPLETION_TOKENS_MODEL_PREFIXES: tuple = (
+    "openai/", "gpt-5", "gpt-image", "o1-", "o3-", "o4-",
+)
+
+
+def _normalize_max_tokens_keys(payload: dict, model: str) -> None:
+    """Drop `max_tokens` when both keys exist for models that require
+    `max_completion_tokens` exclusively. Mutates payload in place."""
+    if not model:
+        return
+    model_lower = model.lower()
+    if not model_lower.startswith(_MAX_COMPLETION_TOKENS_MODEL_PREFIXES):
+        return
+    if "max_tokens" in payload and "max_completion_tokens" in payload:
+        dropped = payload.pop("max_tokens", None)
+        logger.debug(
+            "Normalized max_tokens keys for model %s: dropped max_tokens=%s, "
+            "kept max_completion_tokens=%s",
+            model, dropped, payload.get("max_completion_tokens"),
+        )
+
 # Default context window sizes for common models (fallback when registry unavailable)
 DEFAULT_CONTEXT_WINDOWS: Dict[str, int] = {
     # OpenAI
@@ -386,6 +409,11 @@ def adjust_max_tokens_in_payload(
             payload["max_completion_tokens"] = calculated_max
         else:
             payload["max_tokens"] = calculated_max
+
+    # Unconditional safety net: if a caller supplied `max_tokens` AND another
+    # code path injected `max_completion_tokens`, strip `max_tokens` for models
+    # that reject the dual-key payload (upstream 400).
+    _normalize_max_tokens_keys(payload, model)
 
     return payload, False
 

@@ -1100,10 +1100,19 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
     Returns:
         ClassifiedError with error_type, status_code, retry_after, etc.
     """
+    # Determine HTTP status early so we can avoid misclassifying a genuine 400
+    # (body may contain quota-sounding keywords) as quota_exceeded. The provider
+    # quota parser is only meaningful for 429 or when status is unknown.
+    if isinstance(e, httpx.HTTPStatusError):
+        early_status_code = e.response.status_code
+    else:
+        early_status_code = getattr(e, "status_code", None)
+
     # Try provider-specific parsing first for 429/rate limit errors
-    result = _try_parse_provider_quota_error(e, provider, status_code=429)
-    if result is not None:
-        return result
+    if early_status_code in (None, 429):
+        result = _try_parse_provider_quota_error(e, provider, status_code=429)
+        if result is not None:
+            return result
 
     # Check for provider abort from streaming (finish_reason='error' or native_finish_reason='abort')
     # This handles StreamedAPIError.data which is a dict

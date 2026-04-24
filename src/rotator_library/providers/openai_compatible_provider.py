@@ -65,11 +65,13 @@ class OpenAICompatibleProvider(ProviderInterface):
         # Then, try dynamic discovery to get additional models
         try:
             models_url = f"{self.api_base.rstrip('/')}/models"
-            response = await client.get(
-                models_url, headers={"Authorization": f"Bearer {api_key}"}
-            )
+            # Prefer the class-provided auth header so subclasses/custom schemes work
+            auth_headers = await self.get_auth_header(api_key)
+            response = await client.get(models_url, headers=auth_headers)
 
-            # Handle HTTP errors with appropriate severity
+            # Handle HTTP errors with appropriate severity. 4xx auth/not-found
+            # errors are soft-failed (static models still usable) instead of
+            # raising — one bad credential must not break the whole list.
             if response.status_code >= 500:
                 lib_logger.warning(
                     "Model discovery server error %d for %s, returning static models only",
@@ -78,11 +80,18 @@ class OpenAICompatibleProvider(ProviderInterface):
                 return models
             if response.status_code in (401, 403):
                 lib_logger.warning(
-                    "Model discovery auth error %d for %s",
+                    "Model discovery auth error %d for %s, returning static models only",
                     response.status_code, self.provider_name,
                 )
                 return models
-            response.raise_for_status()
+            if response.status_code == 404:
+                lib_logger.warning(
+                    "Model discovery endpoint not found (404) for %s at %s, "
+                    "returning static models only",
+                    self.provider_name, models_url,
+                )
+                return models
+            response.raise_for_status()  # keep for 4xx != 401/403/404
 
             try:
                 response_data = response.json()

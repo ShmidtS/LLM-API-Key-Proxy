@@ -184,6 +184,17 @@ class RetryMixin(RetryBaseMixin):
         """Handle rate_limit and quota_exceeded classification logic.
         Returns "force_rotate" if quota failure limit reached, "rotate" otherwise.
         """
+        # Fail-fast: invalid_request is non-retryable and must NOT touch quota
+        # counters or trigger cooldown. Rotating/retrying would burn credits
+        # while the upstream 400 keeps returning.
+        if classified_error.error_type == "invalid_request":
+            lib_logger.warning(
+                "Non-retryable invalid_request; failing fast without "
+                "rotating/credit-burn. Cred=%s model=%s status=%s",
+                mask_credential(current_cred), model,
+                classified_error.status_code,
+            )
+            return "rotate"
         if classified_error.error_type == "rate_limit":
             await self._process_rate_limit(
                 provider, current_cred, e,

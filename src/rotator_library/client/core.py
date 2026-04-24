@@ -40,15 +40,77 @@ from pathlib import Path
 from typing import List, Dict, Any, AsyncGenerator, Optional, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..anthropic_compat.models import AnthropicMessagesRequest, AnthropicCountTokensRequest
+    from ..anthropic_compat.models import (
+        AnthropicMessagesRequest,
+        AnthropicCountTokensRequest,
+    )
 
 
 lib_logger = logging.getLogger("rotator_library")
 
+
+# Image-only model detection — these models are rejected by /chat/completions upstream
+# and must be redirected to /v1/images/generations. Covers flux, z-image, dall-e, sd3, etc.
+_IMAGE_ONLY_SUBSTRINGS = (
+    "z-image",
+    "flux-",
+    "gpt-image",
+    "dall-e",
+    "sd3",
+    "stable-diffusion",
+    "imagen",
+    "firefly",
+)
+_IMAGE_ONLY_SUFFIXES = (
+    "-image",
+    "-image-pro",
+    "-image-turbo",
+    "-image-gen",
+)
+_IMAGE_ONLY_PATH_FRAGMENTS = ("/flux-", "/image-")
+
+# Allow-list of params accepted by image-generation endpoints.
+# Chat-specific params (messages, tools, stream, max_tokens, etc.)
+# are deliberately excluded.
+_IMAGE_PASSTHROUGH_PARAMS = {
+    "n",
+    "size",
+    "quality",
+    "style",
+    "response_format",
+    "user",
+    "extra_headers",
+    "extra_body",
+    "timeout",
+}
+
+
+def _is_image_only_model(model: str) -> bool:
+    """Return True if model name matches known image-only patterns.
+
+    Used to redirect chat-completion calls for image models (flux, z-image,
+    dall-e, etc.) to the image generation endpoint.
+    """
+    if not model:
+        return False
+    m = model.lower()
+    if any(s in m for s in _IMAGE_ONLY_SUBSTRINGS):
+        return True
+    if any(m.endswith(sfx) for sfx in _IMAGE_ONLY_SUFFIXES):
+        return True
+    if any(frag in m for frag in _IMAGE_ONLY_PATH_FRAGMENTS):
+        return True
+    return False
+
+
 try:
-    DEFAULT_API_KEY_MAX_CONCURRENT_REQUESTS = int(os.environ.get("API_KEY_MAX_CONCURRENT_REQUESTS", 40))
+    DEFAULT_API_KEY_MAX_CONCURRENT_REQUESTS = int(
+        os.environ.get("API_KEY_MAX_CONCURRENT_REQUESTS", 40)
+    )
 except ValueError:
-    lib_logger.warning("Invalid integer value for API_KEY_MAX_CONCURRENT_REQUESTS env var, using default")
+    lib_logger.warning(
+        "Invalid integer value for API_KEY_MAX_CONCURRENT_REQUESTS env var, using default"
+    )
     DEFAULT_API_KEY_MAX_CONCURRENT_REQUESTS = 40
 
 # Providers that require stream=true when max_tokens exceeds a threshold.
@@ -310,7 +372,9 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         try:
             _max_concurrent = int(os.getenv("MAX_CONCURRENT_REQUESTS", "1000"))
         except ValueError:
-            lib_logger.warning("Invalid integer value for MAX_CONCURRENT_REQUESTS env var, using default")
+            lib_logger.warning(
+                "Invalid integer value for MAX_CONCURRENT_REQUESTS env var, using default"
+            )
             _max_concurrent = 1000
         self._global_semaphore = asyncio.Semaphore(_max_concurrent)
 
@@ -353,7 +417,11 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         return litellm_kwargs
 
     def _match_model_pattern(
-        self, provider: str, model_id: str, pattern_dict: dict, wildcard_return: bool = False
+        self,
+        provider: str,
+        model_id: str,
+        pattern_dict: dict,
+        wildcard_return: bool = False,
     ) -> bool:
         """
         Checks if a model matches any pattern in the given dict.
@@ -392,14 +460,52 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
 
     def _is_model_ignored(self, provider: str, model_id: str) -> bool:
         """Checks if a model should be ignored based on the ignore list."""
-        return self._match_model_pattern(provider, model_id, self.ignore_models, wildcard_return=True)
+        return self._match_model_pattern(
+            provider, model_id, self.ignore_models, wildcard_return=True
+        )
 
     def _is_model_whitelisted(self, provider: str, model_id: str) -> bool:
         """Checks if a model is explicitly whitelisted."""
-        return self._match_model_pattern(provider, model_id, self.whitelist_models, wildcard_return=False)
+        return self._match_model_pattern(
+            provider, model_id, self.whitelist_models, wildcard_return=False
+        )
 
     def get_oauth_credentials(self) -> Dict[str, List[str]]:
         return self.oauth_credentials
+
+    def _is_image_only_model(self, model: str) -> bool:
+        """Instance wrapper around module-level _is_image_only_model helper."""
+        return _is_image_only_model(model)
+
+    def _extract_prompt_from_chat_messages(self, messages: list) -> Optional[str]:
+        """Extract the last user-message text content to use as image prompt.
+
+        Supports both string content and list-of-parts content (OpenAI vision
+        format). Returns None when no user text is found.
+        """
+        if not messages:
+            return None
+        for msg in reversed(messages):
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                text = content.strip()
+                return text or None
+            if isinstance(content, list):
+                parts = []
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "text":
+                        text_val = part.get("text")
+                        if isinstance(text_val, str) and text_val:
+                            parts.append(text_val)
+                if parts:
+                    return "\n".join(parts)
+        return None
 
     def _is_custom_openai_compatible_provider(self, provider_name: str) -> bool:
         """
@@ -682,13 +788,20 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         """
         # Auto-resolve unsupported image sizes — let the model pick the best fit
         size = kwargs.get("size")
-        if size and size.lower() not in {"1024x1024", "1024x1536", "1536x1024",
-                                          "1792x1024", "1024x1792", "auto"}:
+        if size and size.lower() not in {
+            "1024x1024",
+            "1024x1536",
+            "1536x1024",
+            "1792x1024",
+            "1024x1792",
+            "auto",
+        }:
             kwargs = kwargs.copy()
             kwargs["size"] = "auto"
             lib_logger.info(
                 "Remapping unsupported image size %s to auto for model %s",
-                size, kwargs.get("model", ""),
+                size,
+                kwargs.get("model", ""),
             )
 
         try:
@@ -766,12 +879,16 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         )
 
         images = []
-        for choice in (chat_resp.get("choices") or []):
+        for choice in chat_resp.get("choices") or []:
             msg = choice.get("message", {})
             content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
 
-            url_matches = re.findall(r'https?://\S+\.(?:png|jpg|jpeg|webp|gif)\S*', content)
-            b64_matches = re.findall(r'data:image/[^;]+;base64,[A-Za-z0-9+/=]+', content)
+            url_matches = re.findall(
+                r"https?://\S+\.(?:png|jpg|jpeg|webp|gif)\S*", content
+            )
+            b64_matches = re.findall(
+                r"data:image/[^;]+;base64,[A-Za-z0-9+/=]+", content
+            )
 
             for url in url_matches:
                 images.append({"url": url})
@@ -884,7 +1001,9 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                     base_count += preprompt_tokens
             except ImportError:
                 # Provider not available, skip preprompt token counting
-                lib_logger.debug("Provider not available, skip preprompt token counting")
+                lib_logger.debug(
+                    "Provider not available, skip preprompt token counting"
+                )
 
         return base_count
 
@@ -958,7 +1077,8 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                     classified_error = classify_error(e, provider=provider)
                     cred_display = mask_credential(credential)
                     is_auth_error = classified_error.error_type in (
-                        "authentication", "forbidden",
+                        "authentication",
+                        "forbidden",
                     )
                     if is_auth_error:
                         consecutive_auth_errors += 1
@@ -976,8 +1096,18 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                         )
                     continue  # Try the next credential
 
-        lib_logger.error(
-            f"Failed to get models for provider {provider} after trying all credentials."
+        # Discovery failure is a degradation (static models still usable),
+        # not a hard failure — downgrade to warning and include static count.
+        static_fallback = []
+        try:
+            static_fallback = self.model_definitions.get_all_provider_models(provider)
+        except Exception:
+            static_fallback = []
+        lib_logger.warning(
+            "Failed to get models for provider %s after trying all credentials; "
+            "provider unreachable, using %d static models",
+            provider,
+            len(static_fallback),
         )
         return []
 
