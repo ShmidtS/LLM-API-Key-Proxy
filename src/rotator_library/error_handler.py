@@ -21,6 +21,7 @@ from litellm.exceptions import (
     Timeout,
     ContextWindowExceededError,
 )
+from litellm.llms.openai.common_utils import OpenAIError
 
 from .ip_throttle_detector import (
     ThrottleScope,
@@ -1428,6 +1429,26 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
             error_type="server_error",
             original_exception=e,
             status_code=status_code or 503,
+        )
+
+    # litellm.llms.openai.common_utils.OpenAIError — upstream wrapper
+    # Catches "Not Found", 404, etc. from OpenAI-compatible endpoints.
+    # Treat 404 as invalid_request (fail-fast, no rotation); otherwise fall through.
+    if isinstance(e, OpenAIError):
+        error_msg = str(e).lower()
+        if "not found" in error_msg or "404" in error_msg:
+            return ClassifiedError(
+                error_type="invalid_request",
+                original_exception=e,
+                status_code=status_code or 404,
+                reason="not_found_openai_error",
+            )
+        # Non-404 OpenAIError — treat as server_error with rotation
+        return ClassifiedError(
+            error_type="server_error",
+            original_exception=e,
+            status_code=status_code or 500,
+            reason="openai_error_unclassified",
         )
 
     # litellm NotFoundError — model/endpoint not found at provider (404)

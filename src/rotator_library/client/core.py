@@ -122,8 +122,11 @@ _STREAM_REQUIRED_PROVIDERS = {
 
 from ..usage_manager import UsageManager
 from ..failure_logger import configure_failure_logger
+from litellm.llms.openai.common_utils import OpenAIError
+
 from ..error_types import (
     mask_credential,
+    NoAvailableKeysError,
 )
 from ..error_handler import (
     classify_error,
@@ -804,6 +807,17 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                 kwargs.get("model", ""),
             )
 
+        # Truncate long prompts — some models reject content > 1000 chars
+        # at /images/generations (e.g. Qwen/DashScope returns 400).
+        prompt = kwargs.get("prompt")
+        if prompt and isinstance(prompt, str) and len(prompt) > 1000:
+            kwargs = kwargs.copy()
+            kwargs["prompt"] = prompt[:997] + "..."
+            lib_logger.info(
+                "Truncated image prompt from %d to 1000 chars for model %s",
+                len(prompt), kwargs.get("model", ""),
+            )
+
         try:
             return await self._rate_limited_execute(
                 litellm.aimage_generation,
@@ -811,7 +825,12 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                 pre_request_callback=pre_request_callback,
                 **kwargs,
             )
-        except (litellm.BadRequestError, litellm.NotFoundError, litellm.APIError) as e:
+        except (
+            litellm.BadRequestError,
+            litellm.NotFoundError,
+            litellm.APIError,
+            OpenAIError,
+        ) as e:
             err_lower = str(e).lower()
             is_endpoint_mismatch = any(
                 pattern in err_lower
@@ -824,7 +843,11 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                 ]
             )
             # Any 404 from /images/generations means the endpoint doesn't exist
-            is_not_found = isinstance(e, litellm.NotFoundError)
+            is_not_found = isinstance(e, litellm.NotFoundError) or (
+                isinstance(e, OpenAIError) and (
+                    "not found" in err_lower or "404" in err_lower
+                )
+            )
             # 404 with HTML body means the endpoint doesn't exist on this server
             is_html_404 = is_not_found and "<!doctype" in err_lower
             if not is_endpoint_mismatch and not is_html_404 and not is_not_found:
@@ -833,11 +856,27 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                 "Provider doesn't support /images/generations, falling back to /chat/completions for model=%s",
                 kwargs.get("model", ""),
             )
-            return await self._image_via_chat_completion(
-                request=request,
-                pre_request_callback=pre_request_callback,
-                **kwargs,
-            )
+            try:
+                return await self._image_via_chat_completion(
+                    request=request,
+                    pre_request_callback=pre_request_callback,
+                    **kwargs,
+                )
+            except (litellm.NotFoundError, OpenAIError) as chat_e:
+                chat_err_lower = str(chat_e).lower()
+                if (
+                    isinstance(chat_e, OpenAIError)
+                    and "not found" not in chat_err_lower
+                    and "404" not in chat_err_lower
+                ):
+                    raise
+                lib_logger.error(
+                    "Provider doesn't support /images/generations or /chat/completions for image model=%s. Failing fast.",
+                    kwargs.get("model", ""),
+                )
+                raise NoAvailableKeysError(
+                    f"Model {kwargs.get('model', 'unknown')} is not supported by this provider for image generation"
+                ) from chat_e
 
     async def _image_via_chat_completion(
         self,
@@ -859,6 +898,15 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         n = kwargs.get("n", 1)
         size = kwargs.get("size", "1024x1024")
 
+        # Truncate prompt to avoid exceeding chat API content limits (e.g. Qwen)
+        max_prompt_len = 2000
+        if prompt and len(prompt) > max_prompt_len:
+            prompt = prompt[:max_prompt_len - 3] + "..."
+            lib_logger.info(
+                "Truncated image prompt from %d to %d chars for chat fallback",
+                len(kwargs.get("prompt", "")), max_prompt_len,
+            )
+
         size_hint = f" (size: {size})" if size else ""
         user_content = f"Generate an image: {prompt}{size_hint}"
 
@@ -867,6 +915,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
             "messages": [{"role": "user", "content": user_content}],
             "stream": False,
         }
+        # Drop response_format — chat APIs reject 'image' (only accept json_object/text)
         for key in ("temperature", "top_p", "seed"):
             if key in kwargs:
                 chat_kwargs[key] = kwargs[key]
