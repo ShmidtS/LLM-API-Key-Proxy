@@ -1435,6 +1435,9 @@ class RetryMixin(RetryBaseMixin):
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
+                                # Non-rotatable errors (invalid_request, context_window_exceeded,
+                                # pre_request_callback_error, ip_rate_limit) — fail immediately.
+                                # Rotating keys won't fix a malformed request.
                                 await self._process_rate_limit(
                                     provider,
                                     current_cred,
@@ -1442,36 +1445,22 @@ class RetryMixin(RetryBaseMixin):
                                     str(original_exc) if original_exc else None,
                                     classified_error,
                                 )
-
-                                # Add exponential backoff delay before retry
-                                wait_time = compute_backoff_with_jitter(attempt, max_wait=30.0, retry_after=classified_error.retry_after)
-                                remaining_budget = deadline - time.monotonic()
-                                if wait_time <= remaining_budget:
-                                    lib_logger.warning(
-                                        "Rate limit (%s) during litellm stream. "
-                                        "Waiting %2.2fs before retry.",
-                                        classified_error.error_type, wait_time,
-                                    )
-                                    await asyncio.sleep(wait_time)
-                                else:
-                                    lib_logger.warning(
-                                        "Retry wait (%2.2fs) exceeds budget (%2.2fs). Rotating.",
-                                        wait_time, remaining_budget,
-                                    )
-
-                                # Record failure and rotate to next credential
-                                await self.usage_manager.record_failure(
-                                    current_cred, model, classified_error
-                                )
-                                lib_logger.warning(
-                                    "Cred %s %s "
-                                    "(HTTP %s). Rotating.",
-                                    mask_credential(current_cred),
+                                lib_logger.error(
+                                    "Fatal %s error for %s (HTTP %s). Failing immediately.",
                                     classified_error.error_type,
+                                    mask_credential(current_cred),
                                     classified_error.status_code,
                                 )
+                                _cb_slot_held = False
                                 async with HalfOpenSlot(self._resilience, provider):
-                                    break  # Rotate to next credential
+                                    yield {
+                                        "error": {
+                                            "message": str(last_exception),
+                                            "type": classified_error.error_type,
+                                        }
+                                    }
+                                    yield STREAM_DONE
+                                    return
 
                             # Parse error payload from streaming exception
                             error_payload, cleaned_str = self._parse_streaming_error_payload(original_exc)

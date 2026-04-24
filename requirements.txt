@@ -9,9 +9,7 @@ python-dotenv
 -e src/rotator_library
 
 # A library for calling LLM APIs with a consistent format
-# SECURITY: pinned to <=1.82.6 — 1.82.7/1.82.8 contain malicious litellm_init.pth
-# See: https://github.com/BerriAI/litellm/issues/24512
-litellm<=1.82.6
+litellm
 
 cachetools
 httpx
