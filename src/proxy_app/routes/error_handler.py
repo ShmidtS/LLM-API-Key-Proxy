@@ -70,7 +70,26 @@ def handle_route_errors(
             except Exception as e:
                 if error_format in ("openai", "anthropic"):
                     if isinstance(e, LITELLM_ERROR_TYPES):
+                        logger.error(
+                            "Route litellm error: context=%s type=%s detail=%s",
+                            log_context,
+                            type(e).__name__,
+                            str(e),
+                        )
                         raise handle_litellm_error(e, error_format=error_format)
+
+                    detail = getattr(e, "args", [None])[0]
+                    if isinstance(detail, dict) and "error" in detail:
+                        status_code = 500
+                        if error_format == "openai":
+                            details_obj = detail.get("error", {}).get("details")
+                            if isinstance(details_obj, dict) and details_obj.get("timeout"):
+                                status_code = 504
+                            elif detail.get("error", {}).get("type") == "invalid_request_error":
+                                status_code = 400
+                            raise HTTPException(status_code=status_code, detail=detail)
+
+                        raise HTTPException(status_code=status_code, detail=detail)
 
                 prefix = f"{log_context}: " if log_context else ""
                 logging.error(f"{prefix}{e}", exc_info=True)

@@ -1450,6 +1450,10 @@ class RetryMixin(RetryBaseMixin):
                                     mask_credential(current_cred),
                                     classified_error.status_code,
                                 )
+                                lib_logger.error(
+                                    "Fatal error payload detail: %s",
+                                    str(last_exception),
+                                )
                                 _cb_slot_held = False
                                 async with HalfOpenSlot(self._resilience, provider):
                                     yield {
