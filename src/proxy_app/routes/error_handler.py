@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from proxy_app.dependencies import make_error_response
 from proxy_app.streaming import handle_litellm_error, LITELLM_ERROR_MAP
+from rotator_library.error_types import NoAvailableKeysError
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,24 @@ def handle_route_errors(
                 raise HTTPException(
                     status_code=400,
                     detail=make_error_response(str(e), "invalid_request_error"),
+                )
+            except NoAvailableKeysError as e:
+                logger.warning(
+                    "Route availability error: context=%s detail=%s",
+                    log_context,
+                    str(e),
+                )
+                if error_format == "anthropic":
+                    raise HTTPException(
+                        status_code=503,
+                        detail={
+                            "type": "error",
+                            "error": {"type": "api_error", "message": str(e)},
+                        },
+                    )
+                raise HTTPException(
+                    status_code=503,
+                    detail=make_error_response(str(e), "api_error"),
                 )
             except Exception as e:
                 if error_format in ("openai", "anthropic"):

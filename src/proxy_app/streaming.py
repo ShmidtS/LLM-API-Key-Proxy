@@ -153,7 +153,12 @@ def make_sse_response(generator) -> StreamingResponse:
 
 LITELLM_ERROR_MAP = [
     (
-        (litellm.InvalidRequestError, ValueError, litellm.ContextWindowExceededError),
+        (
+            litellm.InvalidRequestError,
+            litellm.BadRequestError,
+            ValueError,
+            litellm.ContextWindowExceededError,
+        ),
         400,
         "Invalid Request",
         "invalid_request_error",

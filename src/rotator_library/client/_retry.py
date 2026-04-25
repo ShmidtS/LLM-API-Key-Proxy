@@ -947,10 +947,12 @@ class RetryMixin(RetryBaseMixin):
                             if pre_request_callback:
                                 await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
 
-                            # Convert model parameters for custom providers right before LiteLLM call
-                            final_kwargs = self.provider_config.convert_for_litellm(
-                                **litellm_kwargs
-                            )
+                            if "_native_provider" in litellm_kwargs:
+                                final_kwargs = litellm_kwargs
+                            else:
+                                final_kwargs = self.provider_config.convert_for_litellm(
+                                    **litellm_kwargs
+                                )
 
                             async with self._global_semaphore:
                                 response = await api_call(
@@ -1360,10 +1362,12 @@ class RetryMixin(RetryBaseMixin):
                             if pre_request_callback:
                                 await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
 
-                            # Convert model parameters for custom providers right before LiteLLM call
-                            final_kwargs = self.provider_config.convert_for_litellm(
-                                **litellm_kwargs
-                            )
+                            if "_native_provider" in litellm_kwargs:
+                                final_kwargs = litellm_kwargs
+                            else:
+                                final_kwargs = self.provider_config.convert_for_litellm(
+                                    **litellm_kwargs
+                                )
 
                             async with self._global_semaphore:
                                 response = await litellm.acompletion(
