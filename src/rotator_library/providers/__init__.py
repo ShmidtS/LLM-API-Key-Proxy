@@ -68,6 +68,7 @@ def _try_load_from_module(module_path: str, provider_name: str):
             isinstance(attribute, type)
             and issubclass(attribute, _ProviderInterface)
             and attribute is not _ProviderInterface
+            and attribute.__module__ == module.__name__
         ):
             PROVIDER_PLUGINS[provider_name] = attribute
             lib_logger.debug(

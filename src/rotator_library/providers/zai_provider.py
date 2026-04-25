@@ -13,6 +13,27 @@ from .utilities.zai_quota_tracker import ZaiQuotaTracker
 from ..config.defaults import env_int
 
 ZAI_DEFAULT_API_BASE = "https://api.z.ai/api/coding/paas/v4"
+ZAI_DOCUMENTED_MODELS = (
+    "glm-5.1",
+    "glm-5",
+    "glm-5-turbo",
+    "glm-4.7",
+    "glm-4.6",
+    "glm-4.5",
+    "glm-4-32b-0414-128k",
+    "glm-5v-turbo",
+    "glm-4.6v",
+    "glm-ocr",
+    "autoglm-phone-multilingual",
+    "glm-4.5v",
+    "glm-image",
+    "cogView-4-250304",
+    "cogvideox-3",
+    "viduq1-text",
+    "viduq1-image",
+    "vidu2-image",
+    "glm-asr-2512",
+)
 
 import logging
 
@@ -182,12 +203,10 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             except (json.JSONDecodeError, ValueError) as e:
                 lib_logger.warning(f"Invalid JSON from ZAI models: {e}, body={response.text[:200]}")
                 return []
-            models = [
-                model["id"] for model in data.get("data", [])
-                if isinstance(model, dict) and "id" in model
-            ]
-            # Cache bare model IDs so get_models_in_quota_group can
-            # propagate cooldowns/baselines to every real model.
+            models = list(ZAI_DOCUMENTED_MODELS)
+            for model in data.get("data", []):
+                if isinstance(model, dict) and "id" in model and model["id"] not in models:
+                    models.append(model["id"])
             if models and not self._known_models:
                 self._known_models = models
             return [f"zai/{m}" for m in models]
@@ -263,6 +282,28 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             f"video/{video_id}/status",
             method="get",
         )
+
+    async def native_image_generation(
+        self, client: httpx.AsyncClient, api_key: str, **kwargs
+    ) -> Dict[str, Any]:
+        model = str(kwargs.get("model", ""))
+        model_name = model.split("/", 1)[1] if "/" in model else model
+        if model_name.lower() == "cogview-4":
+            model_name = "cogView-4-250304"
+        payload = {"model": model_name, "prompt": kwargs.get("prompt", "")}
+        for key in ("quality", "size"):
+            if kwargs.get(key):
+                payload[key] = kwargs[key]
+        if kwargs.get("user"):
+            payload["user_id"] = kwargs["user"]
+        response = await client.post(
+            "https://api.z.ai/api/paas/v4/images/generations",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+            timeout=kwargs.get("timeout", 120),
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def async_image_generate(
         self, credential: str, client: httpx.AsyncClient, **kwargs

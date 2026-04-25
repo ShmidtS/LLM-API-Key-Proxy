@@ -31,7 +31,6 @@ from ..anthropic_adapter import AnthropicAdapter
 _patch_aiohttp_connector()
 
 import asyncio
-import base64
 import fnmatch
 import logging
 from collections.abc import Mapping
@@ -62,6 +61,7 @@ _IMAGE_ONLY_SUBSTRINGS = (
     "stable-diffusion",
     "imagen",
     "firefly",
+    "cogview-4",
 )
 _IMAGE_ONLY_SUFFIXES = (
     "-image",
@@ -86,17 +86,7 @@ _IMAGE_PASSTHROUGH_PARAMS = {
     "timeout",
 }
 
-_FIREWORKS_IMAGE_PROVIDERS = {"fireworks", "fireworks_ai"}
-_QWEN_IMAGE_PROVIDERS = {"qwen", "dashscope"}
-_ZAI_IMAGE_PROVIDERS = {"zai", "z.ai"}
-_IMAGE_NATIVE_PROVIDERS = _FIREWORKS_IMAGE_PROVIDERS | _QWEN_IMAGE_PROVIDERS | _ZAI_IMAGE_PROVIDERS
-_IMAGE_SIZE_TO_ASPECT_RATIO = {
-    "1024x1024": "1:1",
-    "1024x1536": "2:3",
-    "1536x1024": "3:2",
-    "1792x1024": "16:9",
-    "1024x1792": "9:16",
-}
+_IMAGE_NATIVE_PROVIDERS = {"fireworks", "fireworks_ai", "qwen", "dashscope", "zai", "z.ai"}
 
 
 def _is_image_only_model(model: str) -> bool:
@@ -854,6 +844,10 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         model = normalize_model_string(str(kwargs.get("model", "")))
         native_provider = kwargs.pop("_native_provider", None)
         provider = native_provider or extract_provider_from_model(model)
+        model_name = model.split("/", 1)[1] if "/" in model else model
+        api_base = str(kwargs.get("api_base", "")).lower()
+        if provider == "openai" and ("dashscope" in api_base or model_name.startswith("z-image")):
+            provider = "qwen"
         if provider in _IMAGE_NATIVE_PROVIDERS:
             kwargs = kwargs.copy()
             kwargs["model"] = model
@@ -943,136 +937,19 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
     async def _native_image_generation(self, **kwargs) -> Any:
         model = normalize_model_string(str(kwargs.get("model", "")))
         provider = kwargs.pop("_native_provider", None) or extract_provider_from_model(model)
+        model_name = model.split("/", 1)[1] if "/" in model else model
+        if provider == "openai" and model_name.startswith("z-image"):
+            provider = "qwen"
+        provider = {"dashscope": "qwen", "fireworks_ai": "fireworks", "z.ai": "zai"}.get(provider, provider)
         api_key = kwargs.pop("api_key")
+        provider_plugin = self._get_provider_instance(provider)
+        if not provider_plugin or not hasattr(provider_plugin, "native_image_generation"):
+            raise ValueError(f"Unsupported native image provider: {provider}")
         http_client = await self._get_http_client_async(streaming=False)
-        if provider in _FIREWORKS_IMAGE_PROVIDERS:
-            return await self._fireworks_image_generation(http_client, api_key, **kwargs)
-        if provider in _QWEN_IMAGE_PROVIDERS:
-            return await self._qwen_image_generation(http_client, api_key, **kwargs)
-        if provider in _ZAI_IMAGE_PROVIDERS:
-            return await self._zai_image_generation(http_client, api_key, **kwargs)
-        raise ValueError(f"Unsupported native image provider: {provider}")
-
-    async def _fireworks_image_generation(self, http_client: httpx.AsyncClient, api_key: str, **kwargs) -> dict:
-        model = str(kwargs.get("model", ""))
-        model_name = model.split("/", 1)[1] if "/" in model else model
-        model_path = self._fireworks_image_model_path(model_name)
-        if "flux-kontext" in model_name:
-            url = f"https://api.fireworks.ai/inference/v1/workflows/{model_path}"
-        else:
-            url = f"https://api.fireworks.ai/inference/v1/workflows/{model_path}/text_to_image"
-        payload = {"prompt": kwargs.get("prompt", "")}
-        aspect_ratio = self._image_aspect_ratio(kwargs.get("size"))
-        if aspect_ratio:
-            payload["aspect_ratio"] = aspect_ratio
-        if kwargs.get("quality"):
-            payload["output_format"] = "png"
-        response = await http_client.post(
-            url,
-            headers={"Authorization": f"Bearer {api_key}", "Accept": "image/png"},
-            json=payload,
-            timeout=kwargs.get("timeout", self.global_timeout),
+        data = await provider_plugin.native_image_generation(
+            http_client, api_key, timeout=kwargs.get("timeout", self.global_timeout), **kwargs
         )
-        response.raise_for_status()
-        content_type = response.headers.get("content-type", "").lower()
-        if content_type.startswith("image/"):
-            return self._native_image_response({"b64_json": base64.b64encode(response.content).decode("ascii")})
-        data = response.json()
-        if "request_id" in data:
-            data = await self._fireworks_poll_result(http_client, api_key, model_path, data["request_id"], kwargs.get("timeout", self.global_timeout))
         return self._native_image_response(data)
-
-    def _fireworks_image_model_path(self, model_name: str) -> str:
-        import re
-
-        if model_name.startswith("accounts/"):
-            if not re.fullmatch(r"accounts/[A-Za-z0-9_.-]+/models/[A-Za-z0-9_.-]+", model_name):
-                raise ValueError("Invalid Fireworks image model path")
-            return model_name
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", model_name):
-            raise ValueError("Invalid Fireworks image model name")
-        return f"accounts/fireworks/models/{model_name}"
-
-    async def _fireworks_poll_result(self, http_client: httpx.AsyncClient, api_key: str, model_path: str, request_id: str, timeout: Any) -> dict:
-        url = f"https://api.fireworks.ai/inference/v1/workflows/{model_path}/get_result"
-        deadline = asyncio.get_running_loop().time() + min(float(timeout or self.global_timeout), float(self.global_timeout))
-        while asyncio.get_running_loop().time() < deadline:
-            per_request_timeout = min(10.0, max(1.0, deadline - asyncio.get_running_loop().time()))
-            response = await http_client.post(
-                url,
-                headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
-                json={"id": request_id},
-                timeout=per_request_timeout,
-            )
-            response.raise_for_status()
-            data = response.json()
-            status = str(data.get("status", "")).lower()
-            if status in {"completed", "succeeded", "success", "done"} or data.get("result"):
-                return data
-            if status in {"failed", "error", "cancelled"}:
-                raise httpx.HTTPStatusError(f"Fireworks workflow failed: {data}", request=response.request, response=response)
-            await asyncio.sleep(1)
-        raise TimeoutError("Fireworks image workflow timed out")
-
-    async def _qwen_image_generation(self, http_client: httpx.AsyncClient, api_key: str, **kwargs) -> dict:
-        model = str(kwargs.get("model", ""))
-        model_name = model.split("/", 1)[1] if "/" in model else model
-        payload = {
-            "model": model_name,
-            "input": {"prompt": kwargs.get("prompt", "")},
-            "parameters": {"size": kwargs.get("size", "1024x1024"), "n": kwargs.get("n", 1)},
-        }
-        response = await http_client.post(
-            "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/text2image/image-synthesis",
-            headers={"Authorization": f"Bearer {api_key}", "X-DashScope-Async": "enable"},
-            json=payload,
-            timeout=kwargs.get("timeout", self.global_timeout),
-        )
-        response.raise_for_status()
-        data = response.json()
-        task_id = data.get("output", {}).get("task_id") or data.get("task_id")
-        if task_id:
-            data = await self._qwen_poll_result(http_client, api_key, task_id, kwargs.get("timeout", self.global_timeout))
-        return self._native_image_response(data)
-
-    async def _qwen_poll_result(self, http_client: httpx.AsyncClient, api_key: str, task_id: str, timeout: Any) -> dict:
-        url = f"https://dashscope-intl.aliyuncs.com/api/v1/tasks/{task_id}"
-        deadline = asyncio.get_running_loop().time() + min(float(timeout or self.global_timeout), float(self.global_timeout))
-        while asyncio.get_running_loop().time() < deadline:
-            per_request_timeout = min(10.0, max(1.0, deadline - asyncio.get_running_loop().time()))
-            response = await http_client.get(url, headers={"Authorization": f"Bearer {api_key}"}, timeout=per_request_timeout)
-            response.raise_for_status()
-            data = response.json()
-            status = str(data.get("output", {}).get("task_status", data.get("task_status", ""))).upper()
-            if status in {"SUCCEEDED", "SUCCESS", "COMPLETED"}:
-                return data
-            if status in {"FAILED", "CANCELED", "UNKNOWN"}:
-                raise httpx.HTTPStatusError(f"DashScope image task failed: {data}", request=response.request, response=response)
-            await asyncio.sleep(1)
-        raise TimeoutError("DashScope image task timed out")
-
-    async def _zai_image_generation(self, http_client: httpx.AsyncClient, api_key: str, **kwargs) -> dict:
-        model = str(kwargs.get("model", ""))
-        model_name = model.split("/", 1)[1] if "/" in model else model
-        payload = {"model": model_name, "prompt": kwargs.get("prompt", "")}
-        for key in ("quality", "size"):
-            if kwargs.get(key):
-                payload[key] = kwargs[key]
-        if kwargs.get("user"):
-            payload["user_id"] = kwargs["user"]
-        response = await http_client.post(
-            "https://api.z.ai/api/paas/v4/images/generations",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json=payload,
-            timeout=kwargs.get("timeout", self.global_timeout),
-        )
-        response.raise_for_status()
-        return self._native_image_response(response.json())
-
-    def _image_aspect_ratio(self, size: Any) -> Optional[str]:
-        if not isinstance(size, str):
-            return None
-        return _IMAGE_SIZE_TO_ASPECT_RATIO.get(size.lower())
 
     def _native_image_response(self, data: Any) -> dict:
         import time as _time
@@ -1106,6 +983,10 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                 if isinstance(items, list):
                     for item in items:
                         images.extend(self._extract_native_images(item))
+            choices = output.get("choices")
+            if isinstance(choices, list):
+                for choice in choices:
+                    images.extend(self._extract_native_images(choice))
             for key in ("url", "image_url"):
                 if isinstance(output.get(key), str):
                     images.append({"url": output[key]})

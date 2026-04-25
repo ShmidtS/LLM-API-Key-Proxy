@@ -92,6 +92,7 @@ def _setup_failure_logger(logs_dir: Path) -> logging.Logger:
             logs_dir / "failures.log",
             maxBytes=FAILURE_LOG_MAX_SIZE,
             backupCount=FAILURE_LOG_BACKUP_COUNT,
+            encoding="utf-8",
         )
         handler.setFormatter(JsonFormatter())
         _fl_queue = queue.Queue(-1)
