@@ -151,6 +151,24 @@ def anthropic_to_openai_messages(
     """
     openai_messages = []
 
+    if all(isinstance(msg.get("content", ""), str) for msg in anthropic_messages):
+        if system:
+            if isinstance(system, str):
+                openai_messages.append({"role": "system", "content": system})
+            elif isinstance(system, list):
+                system_text = " ".join(
+                    block.get("text", "")
+                    for block in system
+                    if isinstance(block, dict) and block.get("type") == "text"
+                )
+                if system_text:
+                    openai_messages.append({"role": "system", "content": system_text})
+        for msg in anthropic_messages:
+            openai_messages.append(
+                {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+            )
+        return openai_messages
+
     # Handle system message
     if system:
         if isinstance(system, str):

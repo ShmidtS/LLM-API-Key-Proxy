@@ -413,7 +413,7 @@ app.add_middleware(
 )
 
 # SSE-aware gzip: compresses non-streaming responses >= minimum_size, passes SSE through raw
-app.add_middleware(_NoGzipForSSE, minimum_size=1000)
+app.add_middleware(_NoGzipForSSE)
 
 
 # --- Register route modules ---

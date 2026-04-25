@@ -53,9 +53,12 @@ async def streaming_response_wrapper(
     try:
         _chunk_count = 0
         _bytes_since_yield = 0
+        _bytes_streamed = 0
         _buffer: list[bytes] = []
         _buffer_size = 0
-        _BUFFER_FLUSH_SIZE = 16384  # Flush buffered chunks at 16KB
+        _FIRST_IMMEDIATE_BYTES = 2048
+        _ADAPTIVE_CHUNK_INTERVAL = 16
+        _ADAPTIVE_FLUSH_BYTES = 32768
         async for chunk in response_stream:
 
             # STREAM_DONE sentinel: flush buffer, emit SSE [DONE] and stop
@@ -74,14 +77,17 @@ async def streaming_response_wrapper(
             _chunk_count += 1
             _bytes_since_yield += len(chunk_str)
 
-            # Flush buffer when it exceeds threshold
-            if _buffer_size >= _BUFFER_FLUSH_SIZE:
+            if _chunk_count == 1 or _bytes_streamed < _FIRST_IMMEDIATE_BYTES:
                 yield b"".join(_buffer)
+                _bytes_streamed += _buffer_size
                 _buffer.clear()
                 _buffer_size = 0
-
-            # Adaptive yield: every 64 chunks or 128KB to prevent event loop starvation
-            if _chunk_count % 64 == 0 or _bytes_since_yield >= 131072:
+                _bytes_since_yield = 0
+            elif _chunk_count % _ADAPTIVE_CHUNK_INTERVAL == 0 or _bytes_since_yield >= _ADAPTIVE_FLUSH_BYTES:
+                yield b"".join(_buffer)
+                _bytes_streamed += _buffer_size
+                _buffer.clear()
+                _buffer_size = 0
                 await asyncio.sleep(0)
                 _bytes_since_yield = 0
 

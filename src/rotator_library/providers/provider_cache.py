@@ -20,6 +20,7 @@ Usage examples:
 import asyncio
 from orjson import JSONDecodeError
 import logging
+import os
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -105,6 +106,7 @@ class ProviderCache:
             else _env_bool(f"{env_prefix}_ENABLE", True)
         )
         self._dirty = False
+        self._dirty_generation = 0
         self._write_interval = write_interval or _env_int(
             f"{env_prefix}_WRITE_INTERVAL", 60
         )
@@ -132,7 +134,7 @@ class ProviderCache:
         self._disk_available = True
 
         # In-memory index of disk entries for O(1) lookup (invalidated on write)
-        self._DISK_ENTRY_CACHE_MAXSIZE: int = 1024
+        self._DISK_ENTRY_CACHE_MAXSIZE: int = _env_int(f"{env_prefix}_DISK_ENTRY_CACHE_MAXSIZE", 4096)
         self._disk_entry_cache: Dict[str, Dict] = {}
         self._disk_cache_valid = False
 
@@ -324,14 +326,16 @@ class ProviderCache:
         try:
             while self._running:
                 await asyncio.sleep(self._write_interval)
-                async with self._rw_lock.write():
+                async with self._rw_lock.read():
                     if not self._dirty:
                         continue
-                    self._dirty = False
+                    dirty_generation = self._dirty_generation
                 try:
                     success = await self._save_to_disk()
-                    if not success:
-                        async with self._rw_lock.write():
+                    async with self._rw_lock.write():
+                        if success and self._dirty_generation == dirty_generation:
+                            self._dirty = False
+                        elif not success:
                             self._dirty = True
                 except Exception as e:
                     async with self._rw_lock.write():
@@ -412,6 +416,7 @@ class ProviderCache:
             self._cache[key] = {"value": value, "timestamp": now, "accessed": now}
             self._cache.move_to_end(key)
             self._dirty = True
+            self._dirty_generation += 1
 
     async def store_async(self, key: str, value: str) -> None:
         """
@@ -634,6 +639,7 @@ class ProviderCache:
         async with self._rw_lock.write():
             self._cache.clear()
             self._dirty = True
+            self._dirty_generation += 1
         if self._enable_disk:
                 await self._save_to_disk()
 

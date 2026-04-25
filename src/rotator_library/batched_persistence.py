@@ -32,7 +32,7 @@ _PENDING_STATE_EMPTY = object()
 @dataclass
 class PersistenceConfig:
     """Configuration for batched persistence."""
-    write_interval: float = 5.0  # Seconds between writes
+    write_interval: float = 10.0  # Seconds between writes
     max_dirty_age: float = 30.0  # Max age before forced write
     enable_disk: bool = True
     env_prefix: str = "BATCHED_PERSISTENCE"
@@ -317,8 +317,8 @@ class UsagePersistenceManager:
         self._persistence = BatchedPersistence(
             file_path=file_path,
             config=PersistenceConfig(
-                write_interval=5.0,  # Write every 5 seconds max
-                max_dirty_age=15.0,  # Force write after 15 seconds
+                write_interval=10.0,
+                max_dirty_age=30.0,
                 env_prefix="USAGE_PERSISTENCE",
             )
         )

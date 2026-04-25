@@ -8,9 +8,9 @@ Centralized timeout configuration for HTTP requests.
 All values can be overridden via environment variables:
     TIMEOUT_DNS_QUERY - DNS resolution timeout (default: 10s)
     TIMEOUT_DNS_SOCKET - DNS socket-level timeout (default: 5s)
-    TIMEOUT_CONNECT - Connection establishment timeout (default: 15s)
+    TIMEOUT_CONNECT - Connection establishment timeout (default: 10s)
     TIMEOUT_WRITE - Request body send timeout (default: 30s)
-    TIMEOUT_POOL - Connection pool acquisition timeout (default: 15s)
+    TIMEOUT_POOL - Connection pool acquisition timeout (default: 5s)
     TIMEOUT_READ_STREAMING - Read timeout between chunks for streaming (default: 300s / 5 min)
     TIMEOUT_READ_NON_STREAMING - Read timeout for non-streaming responses (default: 120s / 2 min)
     TIMEOUT_QUOTA_VIEWER_CONNECT - Quota viewer liveness check (default: 3s)
@@ -36,9 +36,9 @@ class TimeoutConfig:
     """
 
     # Default values (in seconds)
-    _CONNECT = 15.0
+    _CONNECT = 10.0
     _WRITE = 30.0
-    _POOL = 15.0  # Reduced from 60s for faster failure detection
+    _POOL = 5.0  # Reduced from 60s for faster failure detection
     _READ_STREAMING = 300.0  # 5 minutes between chunks
     _READ_NON_STREAMING = 120.0  # 2 minutes for full response (was 300s)
 

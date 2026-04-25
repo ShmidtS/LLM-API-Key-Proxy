@@ -2,6 +2,7 @@
 # Copyright (c) 2026 ShmidtS
 
 import gzip as _gzip
+import os
 
 
 _COMPRESSIBLE_TYPES = frozenset(
@@ -64,9 +65,20 @@ class _NoGzipForSSE:
     _ACCEPT_ENCODING = b"accept-encoding"
     _GZIP = b"gzip"
 
-    def __init__(self, app, minimum_size=1000):
+    @staticmethod
+    def _env_int(key: str, default: int) -> int:
+        try:
+            return int(os.getenv(key, str(default)))
+        except (ValueError, TypeError):
+            return default
+
+    def __init__(self, app, minimum_size=None):
         self._app = app
-        self._minimum_size = minimum_size
+        self._minimum_size = (
+            self._env_int("GZIP_MIN_SIZE", 2048)
+            if minimum_size is None
+            else minimum_size
+        )
 
     @staticmethod
     def _get_header(message, name):
@@ -145,7 +157,7 @@ class _NoGzipForSSE:
 
                 if more:
                     # Chunked non-SSE response — initialize compressor for streaming gzip
-                    compressor = _gzip.compressobj(level=6)
+                    compressor = _gzip.compressobj(level=3)
                     filtered_headers = _filter_content_length(initial_message.get("headers", []))
                     filtered_headers.append((b"content-encoding", b"gzip"))
                     filtered_headers.append((b"vary", b"accept-encoding"))
@@ -162,7 +174,7 @@ class _NoGzipForSSE:
                     await send(message)
                     return
 
-                out = _gzip.compress(body, compresslevel=6)
+                out = _gzip.compress(body, compresslevel=3)
                 if len(out) >= len(body):
                     await send(initial_message)
                     await send(message)

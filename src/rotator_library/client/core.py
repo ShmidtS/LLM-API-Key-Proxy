@@ -9,6 +9,7 @@
 # Do NOT reorder or simplify these imports.
 
 import os
+import sys
 import time
 
 # CRITICAL: Apply DNS fix BEFORE importing litellm/aiohttp
@@ -379,13 +380,16 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
 
         # Global backpressure semaphore — limits total concurrent outbound
         # API requests across all providers/keys. Prevents resource exhaustion.
+        _default_max_concurrent = 128 if sys.platform == "win32" else 256
         try:
-            _max_concurrent = int(os.getenv("MAX_CONCURRENT_REQUESTS", "1000"))
+            _max_concurrent = int(
+                os.getenv("MAX_CONCURRENT_REQUESTS", str(_default_max_concurrent))
+            )
         except ValueError:
             lib_logger.warning(
                 "Invalid integer value for MAX_CONCURRENT_REQUESTS env var, using default"
             )
-            _max_concurrent = 1000
+            _max_concurrent = _default_max_concurrent
         self._global_semaphore = asyncio.Semaphore(_max_concurrent)
 
     # --- Core methods that remain in this module ---
