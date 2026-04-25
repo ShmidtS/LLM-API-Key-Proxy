@@ -166,7 +166,7 @@ with _console.status("[dim]Loading LiteLLM library...", spinner="dots"):
     _patch_litellm_ssl()
 
 # Phase 4: Application imports
-from proxy_app.middleware import _NoGzipForSSE, SecurityHeadersMiddleware
+from proxy_app.middleware import _NoGzipForSSE
 from proxy_app.logging_config import RotatorDebugFilter, NoLiteLLMLogFilter
 
 # Anthropic API Models (imported from library)
@@ -414,9 +414,6 @@ app.add_middleware(
 
 # SSE-aware gzip: compresses non-streaming responses >= minimum_size, passes SSE through raw
 app.add_middleware(_NoGzipForSSE, minimum_size=1000)
-
-# Security headers: X-Content-Type-Options, X-Frame-Options, Referrer-Policy
-app.add_middleware(SecurityHeadersMiddleware)
 
 
 # --- Register route modules ---

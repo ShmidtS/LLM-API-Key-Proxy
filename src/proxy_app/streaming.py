@@ -53,21 +53,35 @@ async def streaming_response_wrapper(
     try:
         _chunk_count = 0
         _bytes_since_yield = 0
+        _buffer: list[bytes] = []
+        _buffer_size = 0
+        _BUFFER_FLUSH_SIZE = 16384  # Flush buffered chunks at 16KB
         async for chunk in response_stream:
 
-            # STREAM_DONE sentinel: emit SSE [DONE] and stop
+            # STREAM_DONE sentinel: flush buffer, emit SSE [DONE] and stop
             if chunk is STREAM_DONE:
+                if _buffer:
+                    yield b"".join(_buffer)
+                    _buffer.clear()
+                    _buffer_size = 0
                 yield b"data: [DONE]\n\n"
                 return
 
             # chunk is a dict — serialize to SSE only here (single serialize point)
             chunk_str = sse_data_event(chunk)
-            yield chunk_str
+            _buffer.append(chunk_str)
+            _buffer_size += len(chunk_str)
             _chunk_count += 1
             _bytes_since_yield += len(chunk_str)
 
-            # Adaptive yield: every 32 chunks or 64KB to prevent event loop starvation
-            if _chunk_count % 32 == 0 or _bytes_since_yield >= 65536:
+            # Flush buffer when it exceeds threshold
+            if _buffer_size >= _BUFFER_FLUSH_SIZE:
+                yield b"".join(_buffer)
+                _buffer.clear()
+                _buffer_size = 0
+
+            # Adaptive yield: every 64 chunks or 128KB to prevent event loop starvation
+            if _chunk_count % 64 == 0 or _bytes_since_yield >= 131072:
                 await asyncio.sleep(0)
                 _bytes_since_yield = 0
 
@@ -81,9 +95,14 @@ async def streaming_response_wrapper(
     except (GeneratorExit, asyncio.CancelledError):
         if hasattr(response_stream, "aclose"):
             await response_stream.aclose()
+        _buffer.clear()
         raise
     except Exception as e:
         logging.exception("Error during response stream")
+        # Flush any buffered chunks before sending error
+        if _buffer:
+            yield b"".join(_buffer)
+            _buffer.clear()
         # Propagate classified error type so clients can distinguish 429/503/502
         if isinstance(e, ClassifiedError) and e.status_code:
             final_status_code = e.status_code

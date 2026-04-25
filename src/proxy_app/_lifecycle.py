@@ -423,6 +423,15 @@ def create_lifespan(config: LifespanConfig):
                 "Model info service started (fetching pricing data in background)."
             )
 
+        # Pre-warm model list cache in background
+        async def _prewarm_models():
+            try:
+                await client.get_all_available_models(grouped=True)
+            except Exception:
+                pass  # non-critical, models will be fetched on first request
+
+        asyncio.create_task(_prewarm_models())
+
         yield
 
         try:

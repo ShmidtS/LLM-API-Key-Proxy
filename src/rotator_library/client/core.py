@@ -9,6 +9,7 @@
 # Do NOT reorder or simplify these imports.
 
 import os
+import time
 
 # CRITICAL: Apply DNS fix BEFORE importing litellm/aiohttp
 # This fixes DNS hijacking by VPN/proxy/antivirus that returns wrong IPs
@@ -173,6 +174,8 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
     with support for both streaming and non-streaming responses.
     """
 
+    _MODEL_LIST_CACHE_TTL = 300.0
+
     def __init__(
         self,
         api_keys: Optional[Dict[str, List[str]]] = None,
@@ -320,7 +323,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
             custom_caps=provider_configs["custom_caps"],
             credential_to_provider=self._build_credential_to_provider_map(),
         )
-        self._model_list_cache = {}
+        self._model_list_cache: dict[str, tuple[list[str], float]] = {}
         # Use HttpClientPool singleton for optimized connection management
         self._http_pool: Optional[HttpClientPool] = None
         self._pool_initialized = False
@@ -1212,8 +1215,10 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         lock = await self._lock_manager.get_lock(provider)
         async with lock:
             if provider in self._model_list_cache:
-                lib_logger.debug("Returning cached models for provider: %s", provider)
-                return self._model_list_cache[provider]
+                cached_models, cached_at = self._model_list_cache[provider]
+                if time.monotonic() - cached_at < self._MODEL_LIST_CACHE_TTL:
+                    lib_logger.debug("Returning cached models for provider: %s", provider)
+                    return cached_models
 
             credentials_for_provider = self.all_credentials.get(provider)
             if not credentials_for_provider:
@@ -1270,7 +1275,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                         )
 
                     async with lock:
-                        self._model_list_cache[provider] = final_models
+                        self._model_list_cache[provider] = (final_models, time.monotonic())
                     return final_models
                 except Exception as e:
                     classified_error = classify_error(e, provider=provider)

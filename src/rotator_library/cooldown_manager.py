@@ -69,12 +69,21 @@ class CooldownManager:
         if now - self._last_cleanup >= 30.0:
             await self._cleanup_expired()
 
-    async def is_cooling_down(self, credential: str) -> bool:
-        """Checks if a credential is currently in a cooldown period."""
+    def get_available_credentials(self, credentials: list[str]) -> list[str]:
+        """Return credentials not currently in cooldown. Single-pass O(N)."""
+        now = time.monotonic()
+        return [c for c in credentials if self._cooldowns.get(c, 0.0) <= now]
+
+    def is_cooling_down_sync(self, credential: str) -> bool:
+        """Synchronous check if a credential is cooling down. Safe in asyncio single-thread."""
         expiry = self._cooldowns.get(credential)
         if expiry is None:
             return False
         return time.monotonic() < expiry
+
+    async def is_cooling_down(self, credential: str) -> bool:
+        """Checks if a credential is currently in a cooldown period."""
+        return self.is_cooling_down_sync(credential)
 
     async def start_cooldown(self, credential: str, duration: int):
         """

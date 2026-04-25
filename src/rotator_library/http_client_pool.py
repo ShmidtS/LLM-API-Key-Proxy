@@ -36,11 +36,11 @@ lib_logger = logging.getLogger("rotator_library")
 _IS_WIN = os.name == "nt"
 DEFAULT_MAX_KEEPALIVE_CONNECTIONS = 20 if _IS_WIN else 100
 DEFAULT_MAX_CONNECTIONS = 100 if _IS_WIN else 500
-DEFAULT_KEEPALIVE_EXPIRY = 60.0  # Seconds to keep idle connections alive
-DEFAULT_WARMUP_CONNECTIONS = 3  # Connections to pre-warm per provider
+DEFAULT_KEEPALIVE_EXPIRY = 120.0  # Seconds to keep idle connections alive (LLM connections are long-lived)
+DEFAULT_WARMUP_CONNECTIONS = 5  # Connections to pre-warm per provider
 DEFAULT_STREAMING_MAX_CONNECTIONS = 50 if _IS_WIN else 200
 DEFAULT_STREAMING_MAX_KEEPALIVE = 20 if _IS_WIN else 50
-DEFAULT_STREAMING_KEEPALIVE_EXPIRY = 120.0  # Long-lived streams need long keepalive
+DEFAULT_STREAMING_KEEPALIVE_EXPIRY = 180.0  # Long-lived streams need long keepalive
 DEFAULT_SSL_VERIFY = True  # SSL certificate verification enabled by default
 DEFAULT_HTTP2_ENABLED = (
     not _IS_WIN

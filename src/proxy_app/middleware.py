@@ -28,6 +28,7 @@ SECURITY_HEADERS = {
 }
 
 
+# Deprecated: _NoGzipForSSE injects security headers directly.
 class SecurityHeadersMiddleware:
     """Starlette middleware that adds security headers to every HTTP response."""
 
@@ -87,21 +88,26 @@ class _NoGzipForSSE:
             if k == _NoGzipForSSE._ACCEPT_ENCODING
         )
 
-        if not accept_gzip:
-            await self._app(scope, receive, send)
-            return
-
         initial_message = None
         compressor = None
         skip = False
         started = False
+        passthrough = False
 
         async def _send(message):
-            nonlocal initial_message, compressor, skip, started
+            nonlocal initial_message, compressor, skip, started, passthrough
 
             if message["type"] == "http.response.start":
-                initial_message = message
-                headers = message.get("headers", [])
+                headers = list(message.get("headers", []))
+                existing = {_hdr_lower(h[0]) for h in headers}
+                for name, value in SECURITY_HEADERS.items():
+                    if name.lower() not in existing:
+                        headers.append((name.encode(), value.encode()))
+                initial_message = {**message, "headers": headers}
+                if not accept_gzip:
+                    passthrough = True
+                    await send(initial_message)
+                    return
                 for h in headers:
                     hk = _hdr_lower(h[0])
                     hv = _hdr_str(h[1])
@@ -118,6 +124,10 @@ class _NoGzipForSSE:
                 return
 
             if message["type"] != "http.response.body":
+                await send(message)
+                return
+
+            if passthrough:
                 await send(message)
                 return
 
