@@ -204,19 +204,12 @@ class GeminiCliQuotaTracker(GoogleQuotaTrackerBase):
             "Content-Type": "application/json",
         }
 
-    # =========================================================================
-    # BaseQuotaTracker ABSTRACT METHOD IMPLEMENTATIONS
-    # =========================================================================
-
     async def _fetch_quota_for_credential(
         self,
         credential_path: str,
     ) -> Dict[str, Any]:
         """
         Fetch quota information from the Gemini CLI retrieveUserQuota API.
-
-        This is the primary quota API for Gemini CLI, discovered from the
-        official google-gemini/gemini-cli source code.
         """
         return await self.fetch_quota_from_api(credential_path)
 

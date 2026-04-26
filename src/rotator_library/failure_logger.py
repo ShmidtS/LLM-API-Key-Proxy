@@ -14,6 +14,7 @@ from typing import Optional, Union
 from .error_types import mask_credential
 from .utils.paths import get_logs_dir
 from .utils.json_utils import json_dumps_str
+from .utils.log_sanitizer import sanitize_for_log
 
 # =============================================================================
 # CONFIGURATION DEFAULTS
@@ -233,7 +234,7 @@ def log_failure(
         if len(error_chain) > FAILURE_LOG_ERROR_CHAIN_LIMIT:
             break
 
-    detailed_log_data = {
+    detailed_log_data = sanitize_for_log({
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "api_key_ending": mask_credential(api_key),
         "model": model,
@@ -245,7 +246,7 @@ def log_failure(
         else None,
         "request_headers": request_headers,
         "error_chain": error_chain if len(error_chain) > 1 else None,
-    }
+    })
 
     # 2. Log a concise summary to the main library logger, which will propagate
     summary_message = (

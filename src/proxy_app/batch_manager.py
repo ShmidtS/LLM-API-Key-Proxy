@@ -97,7 +97,7 @@ class EmbeddingBatcher:
                             future.cancel()
                     raise
 
-                except Exception as e:
+                except (asyncio.TimeoutError, ValueError, KeyError, IndexError, Exception) as e:
                     for future in grouped_futures:
                         if not future.done():
                             future.set_exception(e)

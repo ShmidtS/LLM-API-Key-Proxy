@@ -243,10 +243,6 @@ class AntigravityQuotaTracker(GoogleQuotaTrackerBase):
             )
         return results
 
-    # =========================================================================
-    # BaseQuotaTracker ABSTRACT METHOD IMPLEMENTATIONS
-    # =========================================================================
-
     async def _fetch_quota_for_credential(
         self,
         credential_path: str,

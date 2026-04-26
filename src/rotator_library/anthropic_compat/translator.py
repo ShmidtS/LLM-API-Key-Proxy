@@ -65,12 +65,12 @@ def _budget_to_reasoning_effort(budget_tokens: int, model: str) -> str:
         granular_level = "high"
 
     # Check if provider supports granular levels
-    provider = model.split("/")[0].lower() if "/" in model else ""
+    provider: str = model.split("/")[0].lower() if "/" in model else ""
     if provider in GRANULAR_REASONING_PROVIDERS:
         return granular_level
 
     # Simplify to basic levels for non-granular providers
-    simplify_map = {
+    simplify_map: Dict[str, str] = {
         "minimal": "low",
         "low": "low",
         "low_medium": "medium",
@@ -81,7 +81,7 @@ def _budget_to_reasoning_effort(budget_tokens: int, model: str) -> str:
     return simplify_map.get(granular_level, "medium")
 
 
-def _reorder_assistant_content(content: List[dict]) -> List[dict]:
+def _reorder_assistant_content(content: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Reorder assistant message content blocks to ensure correct order:
     1. Thinking blocks come first (required when thinking is enabled)
@@ -93,21 +93,21 @@ def _reorder_assistant_content(content: List[dict]) -> List[dict]:
     if not isinstance(content, list) or len(content) <= 1:
         return content
 
-    thinking_blocks = []
-    text_blocks = []
-    tool_use_blocks = []
-    other_blocks = []
+    thinking_blocks: List[Dict[str, Any]] = []
+    text_blocks: List[Dict[str, Any]] = []
+    tool_use_blocks: List[Dict[str, Any]] = []
+    other_blocks: List[Dict[str, Any]] = []
 
     for block in content:
         if not isinstance(block, dict):
             other_blocks.append(block)
             continue
 
-        block_type = block.get("type", "")
+        block_type: str = block.get("type", "")
 
         if block_type in ("thinking", "redacted_thinking"):
             # Sanitize thinking blocks - remove cache_control and other extra fields
-            sanitized = {
+            sanitized: Dict[str, Any] = {
                 "type": block_type,
                 "thinking": block.get("thinking", ""),
             }
@@ -120,7 +120,7 @@ def _reorder_assistant_content(content: List[dict]) -> List[dict]:
 
         elif block_type == "text":
             # Only keep text blocks with meaningful content
-            text = block.get("text", "")
+            text: Optional[str] = block.get("text")
             if text and text.strip():
                 text_blocks.append(block)
 
@@ -133,8 +133,8 @@ def _reorder_assistant_content(content: List[dict]) -> List[dict]:
 
 
 def anthropic_to_openai_messages(
-    anthropic_messages: List[dict], system: Optional[Union[str, List[dict]]] = None
-) -> List[dict]:
+    anthropic_messages: List[Dict[str, Any]], system: Optional[Union[str, List[Dict[str, Any]]]] = None
+) -> List[Dict[str, Any]]:
     """
     Convert Anthropic message format to OpenAI format.
 
@@ -149,14 +149,14 @@ def anthropic_to_openai_messages(
     Returns:
         List of messages in OpenAI format
     """
-    openai_messages = []
+    openai_messages: List[Dict[str, Any]] = []
 
     if all(isinstance(msg.get("content", ""), str) for msg in anthropic_messages):
         if system:
             if isinstance(system, str):
                 openai_messages.append({"role": "system", "content": system})
             elif isinstance(system, list):
-                system_text = " ".join(
+                system_text: str = " ".join(
                     block.get("text", "")
                     for block in system
                     if isinstance(block, dict) and block.get("type") == "text"
@@ -175,7 +175,7 @@ def anthropic_to_openai_messages(
             openai_messages.append({"role": "system", "content": system})
         elif isinstance(system, list):
             # System can be list of text blocks in Anthropic format
-            system_text = " ".join(
+            system_text: str = " ".join(
                 block.get("text", "")
                 for block in system
                 if isinstance(block, dict) and block.get("type") == "text"
@@ -184,8 +184,8 @@ def anthropic_to_openai_messages(
                 openai_messages.append({"role": "system", "content": system_text})
 
     for msg in anthropic_messages:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
+        role: str = msg.get("role", "user")
+        content: Union[str, List[Dict[str, Any]]] = msg.get("content", "")
 
         if isinstance(content, str):
             openai_messages.append({"role": role, "content": content})
@@ -196,14 +196,14 @@ def anthropic_to_openai_messages(
                 content = _reorder_assistant_content(content)
 
             # Handle content blocks
-            openai_content = []
-            tool_calls = []
-            reasoning_content = ""
-            thinking_signature = ""
+            openai_content: List[Dict[str, Any]] = []
+            tool_calls: List[Dict[str, Any]] = []
+            reasoning_content: str = ""
+            thinking_signature: str = ""
 
             for block in content:
                 if isinstance(block, dict):
-                    block_type = block.get("type", "text")
+                    block_type: str = block.get("type", "text")
 
                     if block_type == "text":
                         openai_content.append(
@@ -211,7 +211,7 @@ def anthropic_to_openai_messages(
                         )
                     elif block_type == "image":
                         # Convert Anthropic image format to OpenAI
-                        source = block.get("source", {})
+                        source: Dict[str, Any] = block.get("source", {})
                         if source.get("type") == "base64":
                             openai_content.append(
                                 {
@@ -231,7 +231,7 @@ def anthropic_to_openai_messages(
                     elif block_type == "document":
                         # Convert Anthropic document format (e.g. PDF) to OpenAI
                         # Documents are treated similarly to images with appropriate mime type
-                        source = block.get("source", {})
+                        source: Dict[str, Any] = block.get("source", {})
                         if source.get("type") == "base64":
                             openai_content.append(
                                 {
@@ -249,17 +249,17 @@ def anthropic_to_openai_messages(
                                 }
                             )
                     elif block_type == "thinking":
-                        signature = block.get("signature", "")
+                        signature: str = block.get("signature", "")
                         if (
                             signature
                             and len(signature) >= MIN_THINKING_SIGNATURE_LENGTH
                         ):
-                            thinking_text = block.get("thinking", "")
+                            thinking_text: str = block.get("thinking", "")
                             if thinking_text:
                                 reasoning_content += thinking_text
                             thinking_signature = signature
                     elif block_type == "redacted_thinking":
-                        signature = block.get("signature", "")
+                        signature: str = block.get("signature", "")
                         if (
                             signature
                             and len(signature) >= MIN_THINKING_SIGNATURE_LENGTH
@@ -280,7 +280,7 @@ def anthropic_to_openai_messages(
                     elif block_type == "tool_result":
                         # Tool results become separate messages in OpenAI format
                         # Content can be string, or list of text/image blocks
-                        tool_content = block.get("content", "")
+                        tool_content: Union[str, List[Dict[str, Any]]] = block.get("content", "")
                         if isinstance(tool_content, str):
                             # Simple string content
                             openai_messages.append(
@@ -292,18 +292,18 @@ def anthropic_to_openai_messages(
                             )
                         elif isinstance(tool_content, list):
                             # List of content blocks - may include text and images
-                            tool_content_parts = []
+                            tool_content_parts: List[Dict[str, Any]] = []
                             for b in tool_content:
                                 if not isinstance(b, dict):
                                     continue
-                                b_type = b.get("type", "")
+                                b_type: str = b.get("type", "")
                                 if b_type == "text":
                                     tool_content_parts.append(
                                         {"type": "text", "text": b.get("text", "")}
                                     )
                                 elif b_type == "image":
                                     # Convert Anthropic image format to OpenAI format
-                                    source = b.get("source", {})
+                                    source: Dict[str, Any] = b.get("source", {})
                                     if source.get("type") == "base64":
                                         tool_content_parts.append(
                                             {
@@ -326,7 +326,7 @@ def anthropic_to_openai_messages(
                             # If we only have text parts, join them as a string for compatibility
                             # Otherwise use the array format for multimodal content
                             if all(p.get("type") == "text" for p in tool_content_parts):
-                                combined_text = " ".join(
+                                combined_text: str = " ".join(
                                     p.get("text", "") for p in tool_content_parts
                                 )
                                 openai_messages.append(
@@ -370,10 +370,10 @@ def anthropic_to_openai_messages(
             # Build the message
             if tool_calls:
                 # Assistant message with tool calls
-                msg_dict = {"role": role}
+                msg_dict: Dict[str, Any] = {"role": role}
                 if openai_content:
                     # If there's text content alongside tool calls
-                    text_parts = [
+                    text_parts: List[str] = [
                         c.get("text", "")
                         for c in openai_content
                         if c.get("type") == "text"
@@ -417,8 +417,8 @@ def anthropic_to_openai_messages(
 
 
 def anthropic_to_openai_tools(
-    anthropic_tools: Optional[List[dict]],
-) -> Optional[List[dict]]:
+    anthropic_tools: Optional[List[Dict[str, Any]]],
+) -> Optional[List[Dict[str, Any]]]:
     """
     Convert Anthropic tool definitions to OpenAI format.
 
@@ -431,7 +431,7 @@ def anthropic_to_openai_tools(
     if not anthropic_tools:
         return None
 
-    openai_tools = []
+    openai_tools: List[Dict[str, Any]] = []
     for tool in anthropic_tools:
         openai_tools.append(
             {
@@ -447,8 +447,8 @@ def anthropic_to_openai_tools(
 
 
 def anthropic_to_openai_tool_choice(
-    anthropic_tool_choice: Optional[dict],
-) -> Optional[Union[str, dict]]:
+    anthropic_tool_choice: Optional[Dict[str, Any]],
+) -> Optional[Union[str, Dict[str, Any]]]:
     """
     Convert Anthropic tool_choice to OpenAI format.
 
@@ -461,7 +461,7 @@ def anthropic_to_openai_tool_choice(
     if not anthropic_tool_choice:
         return None
 
-    choice_type = anthropic_tool_choice.get("type", "auto")
+    choice_type: str = anthropic_tool_choice.get("type", "auto")
 
     if choice_type == "auto":
         return "auto"
@@ -478,7 +478,7 @@ def anthropic_to_openai_tool_choice(
     return "auto"
 
 
-def openai_to_anthropic_response(openai_response: dict, original_model: str) -> dict:
+def openai_to_anthropic_response(openai_response: Dict[str, Any], original_model: str) -> Dict[str, Any]:
     """
     Convert OpenAI chat completion response to Anthropic Messages format.
 
@@ -489,18 +489,18 @@ def openai_to_anthropic_response(openai_response: dict, original_model: str) -> 
     Returns:
         Response in Anthropic Messages format
     """
-    choice = openai_response.get("choices", [{}])[0]
-    message = choice.get("message", {})
-    usage = openai_response.get("usage", {})
+    choice: Dict[str, Any] = openai_response.get("choices", [{}])[0]
+    message: Dict[str, Any] = choice.get("message", {})
+    usage: Dict[str, Any] = openai_response.get("usage", {})
 
     # Build content blocks
-    content_blocks = []
+    content_blocks: List[Dict[str, Any]] = []
 
     # Add thinking content block if reasoning_content is present
-    reasoning_content = message.get("reasoning_content")
+    reasoning_content: Optional[str] = message.get("reasoning_content")
     if reasoning_content:
-        thinking_signature = message.get("thinking_signature", "")
-        signature = (
+        thinking_signature: Optional[str] = message.get("thinking_signature")
+        signature: str = (
             thinking_signature
             if thinking_signature
             and len(thinking_signature) >= MIN_THINKING_SIGNATURE_LENGTH
@@ -515,16 +515,16 @@ def openai_to_anthropic_response(openai_response: dict, original_model: str) -> 
         )
 
     # Add text content if present
-    text_content = message.get("content")
+    text_content: Optional[str] = message.get("content")
     if text_content:
         content_blocks.append({"type": "text", "text": text_content})
 
     # Add tool use blocks if present
-    tool_calls = message.get("tool_calls") or []
+    tool_calls: List[Dict[str, Any]] = message.get("tool_calls") or []
     for tc in tool_calls:
-        func = tc.get("function", {})
+        func: Dict[str, Any] = tc.get("function", {})
         try:
-            input_data = _json_loads(func.get("arguments", "{}"))
+            input_data: Any = _json_loads(func.get("arguments", "{}"))
         except _json_decode_error:
             input_data = {}
 
@@ -538,29 +538,29 @@ def openai_to_anthropic_response(openai_response: dict, original_model: str) -> 
         )
 
     # Map finish_reason to stop_reason
-    finish_reason = choice.get("finish_reason", "end_turn")
-    stop_reason_map = {
+    finish_reason: str = choice.get("finish_reason", "end_turn")
+    stop_reason_map: Dict[str, str] = {
         "stop": "end_turn",
         "length": "max_tokens",
         "tool_calls": "tool_use",
         "content_filter": "end_turn",
         "function_call": "tool_use",
     }
-    stop_reason = stop_reason_map.get(finish_reason, "end_turn")
+    stop_reason: str = stop_reason_map.get(finish_reason, "end_turn")
 
     # Build usage
     # Note: Google's promptTokenCount INCLUDES cached tokens, but Anthropic's
     # input_tokens EXCLUDES cached tokens. We need to subtract cached tokens.
-    prompt_tokens = usage.get("prompt_tokens", 0)
-    cached_tokens = 0
+    prompt_tokens: int = usage.get("prompt_tokens") or 0
+    cached_tokens: int = 0
 
     # Extract cached tokens if present
     if usage.get("prompt_tokens_details"):
-        details = usage["prompt_tokens_details"]
-        cached_tokens = details.get("cached_tokens", 0)
+        details: Dict[str, int] = usage["prompt_tokens_details"]
+        cached_tokens = details.get("cached_tokens") or 0
 
-    anthropic_usage = {
-        "input_tokens": prompt_tokens - cached_tokens,  # Subtract cached tokens
+    anthropic_usage: Dict[str, int] = {
+        "input_tokens": prompt_tokens - cached_tokens,
         "output_tokens": usage.get("completion_tokens", 0),
     }
 
@@ -571,7 +571,7 @@ def openai_to_anthropic_response(openai_response: dict, original_model: str) -> 
 
     # Validate response quality before translating to Anthropic format
     # GarbageResponseError propagates to the retry loop in _retry.py for credential rotation
-    provider = original_model.split("/")[0] if "/" in original_model else ""
+    provider: str = original_model.split("/")[0] if "/" in original_model else ""
     validate_response_quality(openai_response, provider=provider, model=original_model)
 
     return {
@@ -599,29 +599,29 @@ def translate_anthropic_request(request: AnthropicMessagesRequest) -> Dict[str, 
     Returns:
         Dictionary containing the OpenAI-compatible request parameters
     """
-    messages = request.messages
+    messages: List[Dict[str, Any]] = request.messages
     if messages and not isinstance(messages[0], dict):
         messages = [m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else m for m in messages]
 
-    system = request.system
+    system: Optional[Union[str, List[Dict[str, Any]]]] = request.system
     if system is not None and hasattr(system, "model_dump"):
         system = system.model_dump(exclude_none=True)
 
-    openai_messages = anthropic_to_openai_messages(messages, system)
+    openai_messages: List[Dict[str, Any]] = anthropic_to_openai_messages(messages, system)
 
-    tools = request.tools
+    tools: Optional[List[Dict[str, Any]]] = request.tools
     if tools and not isinstance(tools[0], dict):
         tools = [t.model_dump(exclude_none=True) if hasattr(t, "model_dump") else t for t in tools]
 
-    tool_choice = request.tool_choice
+    tool_choice: Optional[Dict[str, Any]] = request.tool_choice
     if tool_choice is not None and hasattr(tool_choice, "model_dump"):
         tool_choice = tool_choice.model_dump(exclude_none=True)
 
-    openai_tools = anthropic_to_openai_tools(tools)
-    openai_tool_choice = anthropic_to_openai_tool_choice(tool_choice)
+    openai_tools: Optional[List[Dict[str, Any]]] = anthropic_to_openai_tools(tools)
+    openai_tool_choice: Optional[Union[str, Dict[str, Any]]] = anthropic_to_openai_tool_choice(tool_choice)
 
     # Build OpenAI-compatible request
-    openai_request = {
+    openai_request: Dict[str, Any] = {
         "model": request.model,
         "messages": openai_messages,
         "max_tokens": request.max_tokens,
@@ -648,14 +648,16 @@ def translate_anthropic_request(request: AnthropicMessagesRequest) -> Dict[str, 
 
     # Handle Anthropic thinking config -> reasoning_effort translation
     # Only set reasoning_effort if thinking is explicitly configured
-    thinking = request.thinking
+    thinking: Any = request.thinking
     if thinking:
+        _thinking_type: Optional[str] = None
+        _budget_tokens: Optional[int] = None
         if isinstance(thinking, dict):
             _thinking_type = thinking.get("type")
             _budget_tokens = thinking.get("budget_tokens")
         else:
-            _thinking_type = thinking.type
-            _budget_tokens = thinking.budget_tokens
+            _thinking_type = getattr(thinking, "type", None)
+            _budget_tokens = getattr(thinking, "budget_tokens", None)
         if _thinking_type == "enabled":
             if _budget_tokens is not None:
                 openai_request["reasoning_effort"] = _budget_to_reasoning_effort(

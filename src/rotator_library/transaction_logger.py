@@ -35,6 +35,7 @@ import aiofiles
 
 from .utils.paths import get_logs_dir
 from .utils.json_utils import extract_reasoning
+from .utils.log_sanitizer import sanitize_for_log
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -146,26 +147,30 @@ class TransactionLogger:
         if not enabled:
             return
 
-        # Create directory based on whether we have a parent directory
+        # Prepare log directory path, but defer creation to first write
         timestamp = datetime.now().strftime("%m%d_%H%M%S")
         safe_provider = _sanitize_name(provider)
 
         if parent_dir:
-            # Nested logging: create subdirectory inside parent
-            # e.g., parent_dir/openai/ for OpenAI translation layer
             subdir_name = "openai" if api_format == "oai" else api_format
             self.log_dir = parent_dir / subdir_name
         else:
-            # Root-level logging: MMDD_HHMMSS_{api_format}_{provider}_{model}_{request_id}
             dir_name = f"{timestamp}_{api_format}_{safe_provider}_{self.model}_{self.request_id}"
             self.log_dir = _get_transactions_dir() / dir_name
 
-        try:
-            self.log_dir.mkdir(parents=True, exist_ok=True)
-            self._dir_available = True
-        except Exception as e:
-            lib_logger.error(f"TransactionLogger: Failed to create directory: {e}")
-            self.enabled = False
+    def _ensure_dir(self) -> bool:
+        """Ensure the log directory exists, creating it if needed."""
+        if self._dir_available:
+            return True
+        if self.log_dir:
+            try:
+                self.log_dir.mkdir(parents=True, exist_ok=True)
+                self._dir_available = True
+                return True
+            except Exception as e:
+                lib_logger.error(f"TransactionLogger: Failed to create directory: {e}")
+                self.enabled = False
+        return False
 
     def get_context(self) -> TransactionContext:
         """
@@ -309,17 +314,17 @@ class TransactionLogger:
 
     async def _write_json(self, filename: str, data: Dict[str, Any]) -> None:
         """Write JSON data to a file in the log directory."""
-        if not self.log_dir:
+        if not self.log_dir or not self._ensure_dir():
             return
         try:
             async with aiofiles.open(self.log_dir / filename, "w", encoding="utf-8") as f:
-                await f.write(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode("utf-8"))
+                await f.write(sanitize_for_log(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode("utf-8")))
         except Exception as e:
             lib_logger.error(f"TransactionLogger: Failed to write {filename}: {e}")
 
     async def _append_text(self, filename: str, text: str) -> None:
         """Append text to a file in the log directory."""
-        if not self.log_dir:
+        if not self.log_dir or not self._ensure_dir():
             return
         try:
             async with aiofiles.open(self.log_dir / filename, "a", encoding="utf-8") as f:
@@ -487,11 +492,17 @@ class ProviderLogger:
         self.enabled = True
         self.log_dir = context.log_dir / "provider"
 
+    def _ensure_dir(self) -> bool:
+        """Ensure the log directory exists, creating it if needed."""
+        if not self.log_dir:
+            return False
         try:
             self.log_dir.mkdir(parents=True, exist_ok=True)
+            return True
         except Exception as e:
             lib_logger.error(f"ProviderLogger: Failed to create directory: {e}")
             self.enabled = False
+            return False
 
     async def log_request(self, payload: Dict[str, Any]) -> None:
         """
@@ -547,7 +558,7 @@ class ProviderLogger:
 
     async def _write_json(self, filename: str, data: Dict[str, Any]) -> None:
         """Write JSON data to a file in the log directory."""
-        if not self.enabled or not self.log_dir:
+        if not self.enabled or not self.log_dir or not self._ensure_dir():
             return
         try:
             async with aiofiles.open(self.log_dir / filename, "w", encoding="utf-8") as f:
@@ -557,7 +568,7 @@ class ProviderLogger:
 
     async def _append_text(self, filename: str, text: str) -> None:
         """Append text to a file in the log directory."""
-        if not self.enabled or not self.log_dir:
+        if not self.enabled or not self.log_dir or not self._ensure_dir():
             return
         try:
             async with aiofiles.open(self.log_dir / filename, "a", encoding="utf-8") as f:

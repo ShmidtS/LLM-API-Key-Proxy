@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 import orjson
 import litellm
+from typing import Any, AsyncGenerator
 from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
@@ -31,7 +32,7 @@ async def anthropic_messages(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_anthropic_api_key),
-):
+) -> JSONResponse:
     """
     Anthropic-compatible Messages API endpoint.
 
@@ -92,7 +93,7 @@ async def anthropic_count_tokens(
     body: AnthropicCountTokensRequest,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_anthropic_api_key),
-):
+) -> JSONResponse:
     """
     Anthropic-compatible count_tokens endpoint.
 

@@ -127,11 +127,12 @@ if _early_proxy_api_key:
     _masked = "***"
     key_display = f"✓ {_masked}"
 else:
-    key_display = "✗ Not Set (INSECURE - anyone can access!)"
+    key_display = "✗ Not Set"
 
 logger.info("━" * 70)
 logger.info("Starting proxy on %s:%s", args.host, args.port)
-logger.info("Proxy API Key: %s", key_display)
+# Do not log the actual API key, only the status
+logger.info("Proxy API Key status: %s", "Set" if _early_proxy_api_key else "Not Set")
 logger.info("GitHub: https://github.com/ShmidtS/LLM-API-Key-Proxy")
 logger.info("━" * 70)
 logger.info("Loading server components...")
@@ -195,7 +196,7 @@ sys.stdout.flush()
 # Reprint header
 logger.info("━" * 70)
 logger.info("Starting proxy on %s:%s", args.host, args.port)
-logger.info("Proxy API Key: %s", key_display)
+logger.info("Proxy API Key status: %s", "Set" if _early_proxy_api_key else "Not Set")
 logger.info("GitHub: https://github.com/ShmidtS/LLM-API-Key-Proxy")
 logger.info("━" * 70)
 logger.info("Server ready in %.2fs (%d providers discovered in %.2fs)", _elapsed, _plugin_count, _provider_time)

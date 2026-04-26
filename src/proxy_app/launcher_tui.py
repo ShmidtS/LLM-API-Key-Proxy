@@ -672,11 +672,12 @@ class LauncherTUI:
             elif choice == "6":
                 # Reset to Default Settings
                 # Define defaults
-                default_host = "127.0.0.1"
-                default_port = 8000
-                default_logging = False
-                default_raw_logging = False
-                default_api_key = os.environ.get("DEFAULT_API_KEY", secrets.token_urlsafe(32))
+                default_host = os.environ.get("PROXY_HOST", "127.0.0.1")
+                default_port = int(os.environ.get("PROXY_PORT", 8000))
+                default_logging = os.environ.get("PROXY_ENABLE_REQUEST_LOGGING", "false").lower() == "true"
+                default_raw_logging = os.environ.get("PROXY_ENABLE_RAW_LOGGING", "false").lower() == "true"
+                # Use secrets.token_urlsafe(32) only if PROXY_API_KEY is not already set in environment
+                default_api_key = os.environ.get("PROXY_API_KEY") or secrets.token_urlsafe(32)
 
                 # Get current values
                 current_host = self.config.config["host"]
