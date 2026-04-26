@@ -17,6 +17,7 @@ import gzip
 import logging
 import os
 import ssl
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Union
@@ -29,6 +30,41 @@ from .timeout_config import TimeoutConfig
 from .config import env_bool as _env_bool, env_float as _env_float, env_int as _env_int
 
 lib_logger = logging.getLogger("rotator_library")
+
+
+# Shared ThreadPoolExecutor for gzip compression across all GzipRequestTransport instances
+_gzip_executor: Optional[ThreadPoolExecutor] = None
+_gzip_executor_lock = threading.Lock()
+
+
+def _get_gzip_executor() -> ThreadPoolExecutor:
+    global _gzip_executor
+    if _gzip_executor is None:
+        with _gzip_executor_lock:
+            if _gzip_executor is None:
+                _gzip_executor = ThreadPoolExecutor(
+                    max_workers=4,
+                    thread_name_prefix='gzip-compress',
+                )
+                lib_logger.debug(
+                    'Created shared gzip executor (max_workers=4, id=%s)',
+                    id(_gzip_executor),
+                )
+    return _gzip_executor
+
+
+def shutdown_gzip_executor() -> None:
+    global _gzip_executor
+    if _gzip_executor is not None:
+        with _gzip_executor_lock:
+            if _gzip_executor is not None:
+                executor = _gzip_executor
+                _gzip_executor = None
+                executor.shutdown(wait=False)
+                lib_logger.debug(
+                    'Shutdown shared gzip executor (id=%s)',
+                    id(executor),
+                )
 
 
 # Platform-aware connection pool limits
@@ -63,16 +99,6 @@ class GzipRequestTransport(httpx.AsyncHTTPTransport):
         super().__init__(*args, **kwargs)
         self._compress_min_size = HTTP_COMPRESS_MIN_SIZE
         self._compress_enabled = HTTP_COMPRESS_REQUESTS
-        self._gzip_executor = ThreadPoolExecutor(max_workers=4)
-
-    def close(self) -> None:
-        self._gzip_executor.shutdown(wait=False)
-
-    def __del__(self) -> None:
-        try:
-            self._gzip_executor.shutdown(wait=False)
-        except Exception as e:
-            lib_logger.debug("Error in GzipMiddleware __del__: %s", e)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         """Compress request body if eligible before sending."""
@@ -85,7 +111,7 @@ class GzipRequestTransport(httpx.AsyncHTTPTransport):
                     if "content-encoding" not in {k.lower() for k in request.headers}:
                         loop = asyncio.get_running_loop()
                         compressed = await loop.run_in_executor(
-                            self._gzip_executor, gzip.compress, request.content
+                            _get_gzip_executor(), gzip.compress, request.content
                         )
 
                         if len(compressed) < content_len * _COMPRESSION_THRESHOLD:
@@ -884,3 +910,4 @@ async def close_http_pool() -> None:
     if pool is not None:
         await pool.close()
         HttpClientPool.reset()
+    shutdown_gzip_executor()

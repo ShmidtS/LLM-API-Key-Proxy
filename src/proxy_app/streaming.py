@@ -5,6 +5,7 @@ import asyncio
 import logging
 from typing import AsyncGenerator, Any, Optional
 
+import litellm
 
 _GENERIC_STREAM_ERROR_MESSAGE = "An unexpected error occurred during the stream"
 
@@ -17,9 +18,38 @@ from rotator_library.utils.chunk_aggregator import ChunkAggregator
 from proxy_app.dependencies import _inc_streams, _dec_streams
 from proxy_app.detailed_logger import RawIOLogger
 
-import litellm
-
 logger = logging.getLogger(__name__)
+
+
+def _get_litellm_error_map():
+    return [
+        (
+            (
+                litellm.InvalidRequestError,
+                litellm.BadRequestError,
+                ValueError,
+                litellm.ContextWindowExceededError,
+            ),
+            400,
+            "Invalid Request",
+            "invalid_request_error",
+        ),
+        ((litellm.AuthenticationError,), 401, "Authentication Error", "authentication_error"),
+        ((litellm.NotFoundError,), 404, "Not Found", "invalid_request_error"),
+        ((litellm.RateLimitError,), 429, "Rate Limit Exceeded", "rate_limit_error"),
+        (
+            (litellm.ServiceUnavailableError, litellm.APIConnectionError),
+            503,
+            "Service Unavailable",
+            "api_error",
+        ),
+        ((litellm.Timeout,), 504, "Gateway Timeout", "api_error"),
+        ((litellm.InternalServerError, litellm.OpenAIError), 502, "Bad Gateway", "api_error"),
+    ]
+
+
+def get_litellm_error_types():
+    return tuple(exc_type for row in _get_litellm_error_map() for exc_type in row[0])
 
 
 async def streaming_response_wrapper(
@@ -92,7 +122,6 @@ async def streaming_response_wrapper(
                 _bytes_streamed += _buffer_size
                 _buffer.clear()
                 _buffer_size = 0
-                await asyncio.sleep(0)
                 _bytes_since_yield = 0
 
             if logger is not None:

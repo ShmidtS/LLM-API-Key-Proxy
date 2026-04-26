@@ -229,7 +229,6 @@ class UsageManagerAcquireMixin:
                             tier2_keys = self._sort_sequential(
                                 tier2_keys, credential_priorities
                             )
-                        # Combine idle keys first, then active, for better distribution.
                         all_available_keys = tier2_keys + tier1_keys
                     elif self.rotation_tolerance > 0:
                         # Balanced mode with weighted randomness across ALL candidates

@@ -64,7 +64,12 @@ class QwenProvider(SimpleModelProvider):
             json=payload,
             timeout=kwargs.get("timeout"),
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                f"DashScope z-image error ({response.status_code}): {response.text[:500]}",
+                request=response.request,
+                response=response,
+            )
         return response.json()
 
     async def _dashscope_image_synthesis(
