@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+import asyncio
 import gzip as _gzip
 import os
 
@@ -27,17 +28,6 @@ SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "strict-origin-when-cross-origin",
 }
-
-
-# Deprecated: _NoGzipForSSE injects security headers directly.
-class SecurityHeadersMiddleware:
-    """Starlette middleware that adds security headers to every HTTP response."""
-
-    def __init__(self, app):
-        self._app = app
-
-    async def __call__(self, scope, receive, send):
-        await self._app(scope, receive, send)
 
 
 class _NoGzipForSSE:
@@ -160,7 +150,9 @@ class _NoGzipForSSE:
                     await send(message)
                     return
 
-                out = _gzip.compress(body, compresslevel=3)
+                out = await asyncio.get_running_loop().run_in_executor(
+                    None, _gzip.compress, body, 3
+                )
                 if len(out) >= len(body):
                     await send(initial_message)
                     await send(message)

@@ -124,7 +124,7 @@ if _env_files_found:
 # Get proxy API key for display
 _early_proxy_api_key = os.getenv("PROXY_API_KEY")
 if _early_proxy_api_key:
-    _masked = _early_proxy_api_key[:4] + "..." + _early_proxy_api_key[-4:] if len(_early_proxy_api_key) > 8 else "***"
+    _masked = "***"
     key_display = f"✓ {_masked}"
 else:
     key_display = "✗ Not Set (INSECURE - anyone can access!)"
@@ -296,11 +296,24 @@ _BEARER_PROXY_API_KEY = f"Bearer {PROXY_API_KEY}" if PROXY_API_KEY else None
 # Cache OVERRIDE_TEMPERATURE_ZERO at module load time (stored on app.state during lifespan)
 OVERRIDE_TEMP_ZERO = os.getenv("OVERRIDE_TEMPERATURE_ZERO", "false").lower()
 
+def _parse_env_prefix_map(prefix: str, parser=None):
+    """Parse env vars matching PREFIX into {suffix_lower: parser(value)} dict."""
+    result = {}
+    for key, value in os.environ.items():
+        if key.startswith(prefix):
+            suffix = key[len(prefix):].lower()
+            result[suffix] = parser(value) if parser else value
+    return result
+
+
+def _parse_comma_list(value: str):
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 # Discover API keys from environment variables
 api_keys = {}
 for key, value in os.environ.items():
     if "_API_KEY" in key and key != "PROXY_API_KEY":
-        # Parse provider name from key like KILOCODE_API_KEY or KILOCODE_API_KEY_1
         match = re.match(r"^([A-Z0-9]+)_API_KEY(?:_\d+)?$", key)
         if match:
             provider = match.group(1).lower()
@@ -318,52 +331,20 @@ for _old, _new in _PROVIDER_CREDENTIAL_ALIASES.items():
     elif _old in api_keys and _new in api_keys:
         api_keys[_new].extend(api_keys.pop(_old))
 
-# Load model ignore lists from environment variables
-ignore_models = {}
-for key, value in os.environ.items():
-    if key.startswith("IGNORE_MODELS_"):
-        provider = key.replace("IGNORE_MODELS_", "").lower()
-        models_to_ignore = [
-            model.strip() for model in value.split(",") if model.strip()
-        ]
-        ignore_models[provider] = models_to_ignore
-        logger.debug(
-            f"Loaded ignore list for provider '{provider}': {models_to_ignore}"
-        )
+# Load model ignore/whitelist lists and max concurrent from environment variables
+ignore_models = _parse_env_prefix_map("IGNORE_MODELS_", _parse_comma_list)
+whitelist_models = _parse_env_prefix_map("WHITELIST_MODELS_", _parse_comma_list)
 
-# Load model whitelist from environment variables
-whitelist_models = {}
-for key, value in os.environ.items():
-    if key.startswith("WHITELIST_MODELS_"):
-        provider = key.replace("WHITELIST_MODELS_", "").lower()
-        models_to_whitelist = [
-            model.strip() for model in value.split(",") if model.strip()
-        ]
-        whitelist_models[provider] = models_to_whitelist
-        logger.debug(
-            f"Loaded whitelist for provider '{provider}': {models_to_whitelist}"
-        )
 
-# Load max concurrent requests per key from environment variables
-max_concurrent_requests_per_key = {}
-for key, value in os.environ.items():
-    if key.startswith("MAX_CONCURRENT_REQUESTS_PER_KEY_"):
-        provider = key.replace("MAX_CONCURRENT_REQUESTS_PER_KEY_", "").lower()
-        try:
-            max_concurrent = int(value)
-            if max_concurrent < 1:
-                logger.warning(
-                    f"Invalid max_concurrent value for provider '{provider}': {value}. Must be >= 1. Using default (1)."
-                )
-                max_concurrent = 1
-            max_concurrent_requests_per_key[provider] = max_concurrent
-            logger.debug(
-                f"Loaded max concurrent requests for provider '{provider}': {max_concurrent}"
-            )
-        except ValueError:
-            logger.warning(
-                f"Invalid max_concurrent value for provider '{provider}': {value}. Using default (1)."
-            )
+def _parse_max_concurrent(value: str):
+    try:
+        v = int(value)
+        return v if v >= 1 else 1
+    except ValueError:
+        return 1
+
+
+max_concurrent_requests_per_key = _parse_env_prefix_map("MAX_CONCURRENT_REQUESTS_PER_KEY_", _parse_max_concurrent)
 
 
 # --- Lifespan Management (delegated to _lifecycle module) ---

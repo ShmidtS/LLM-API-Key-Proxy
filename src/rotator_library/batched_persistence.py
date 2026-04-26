@@ -223,10 +223,14 @@ class BatchedPersistence:
         try:
             loop = asyncio.get_running_loop()
             self._pending_state = state
-            if self._pending_update_task is None or self._pending_update_task.done():
-                self._pending_update_task = loop.create_task(self._flush_pending_update())
+            loop.call_soon_threadsafe(self._schedule_flush, loop)
         except RuntimeError:
             self._apply_update(state)
+
+    def _schedule_flush(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Schedule a flush task if none is pending. Called on the event loop."""
+        if self._pending_update_task is None or self._pending_update_task.done():
+            self._pending_update_task = loop.create_task(self._flush_pending_update())
 
     async def update_async(self, state: Any) -> None:
         """

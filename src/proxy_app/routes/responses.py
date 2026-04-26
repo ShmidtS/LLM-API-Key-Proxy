@@ -380,22 +380,33 @@ async def _chat_sse_to_responses_sse(
 ) -> AsyncGenerator[bytes, None]:
     state = _new_responses_stream_state(model)
 
-    async for event in chat_sse_stream:
-        payload = _parse_sse_payload(event)
-        if payload is None:
-            continue
-        if payload == "[DONE]":
-            for response_event in _complete_response_stream_events(state):
+    try:
+        async for event in chat_sse_stream:
+            payload = _parse_sse_payload(event)
+            if payload is None:
+                continue
+            if payload == "[DONE]":
+                for response_event in _complete_response_stream_events(state):
+                    yield _responses_sse_event(response_event)
+                yield b"data: [DONE]\n\n"
+                return
+
+            for response_event in _chat_chunk_to_response_stream_events(payload, state):
                 yield _responses_sse_event(response_event)
-            yield b"data: [DONE]\n\n"
-            return
 
-        for response_event in _chat_chunk_to_response_stream_events(payload, state):
+        for response_event in _complete_response_stream_events(state):
             yield _responses_sse_event(response_event)
-
-    for response_event in _complete_response_stream_events(state):
-        yield _responses_sse_event(response_event)
-    yield b"data: [DONE]\n\n"
+        yield b"data: [DONE]\n\n"
+    except GeneratorExit:
+        if hasattr(chat_sse_stream, "aclose"):
+            await chat_sse_stream.aclose()
+        return
+    finally:
+        if hasattr(chat_sse_stream, "aclose"):
+            try:
+                await chat_sse_stream.aclose()
+            except Exception:
+                pass
 
 
 def _parse_sse_payload(event: str | bytes) -> dict[str, Any] | str | None:

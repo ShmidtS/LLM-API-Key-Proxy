@@ -70,6 +70,10 @@ async def streaming_response_wrapper(
                 yield b"data: [DONE]\n\n"
                 return
 
+            if not isinstance(chunk, dict):
+                logger.warning("Unexpected chunk type %s in stream, skipping", type(chunk).__name__)
+                continue
+
             # chunk is a dict — serialize to SSE only here (single serialize point)
             chunk_str = sse_data_event(chunk)
             _buffer.append(chunk_str)
@@ -90,10 +94,6 @@ async def streaming_response_wrapper(
                 _buffer_size = 0
                 await asyncio.sleep(0)
                 _bytes_since_yield = 0
-
-            if not isinstance(chunk, dict):
-                logger.warning("Unexpected chunk type %s in stream, skipping", type(chunk).__name__)
-                continue
 
             if logger is not None:
                 await logger.log_stream_chunk(chunk)

@@ -132,6 +132,24 @@ async def init_model_info():
     return await init_model_info_service()
 
 
+async def _safe_close_async(coro_fn, label: str) -> None:
+    """Safely call an async close method, logging errors without propagating."""
+    try:
+        await coro_fn()
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.exception("Error closing %s: %s", label, e)
+
+
+def _safe_close_sync(close_fn, label: str) -> None:
+    """Safely call a sync close method, logging errors without propagating."""
+    try:
+        close_fn()
+    except Exception as e:
+        logger.exception("Error closing %s: %s", label, e)
+
+
 # --- Lifespan factory ---
 
 
@@ -329,7 +347,11 @@ def create_lifespan(config: LifespanConfig):
         }
 
         # Load global timeout from environment (default 30 seconds)
-        global_timeout = int(os.getenv("GLOBAL_TIMEOUT", "30"))
+        try:
+            global_timeout = int(os.getenv("GLOBAL_TIMEOUT", "30"))
+        except ValueError:
+            logger.warning("Invalid GLOBAL_TIMEOUT value, using default 30")
+            global_timeout = 30
         if global_timeout < 5:
             logger.warning(
                 "GLOBAL_TIMEOUT=%d is too low, clamping to 5", global_timeout
@@ -493,12 +515,7 @@ def create_lifespan(config: LifespanConfig):
 
             # Close litellm's internal aiohttp/httpx sessions to prevent
             # "Unclosed client session" warnings on shutdown
-            try:
-                await litellm.close_litellm_async_clients()
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.exception("Error closing litellm async clients: %s", e)
+            await _safe_close_async(litellm.close_litellm_async_clients, "litellm async clients")
 
             # Clear litellm's internal httpx handler cache (creates unclosed sessions)
             try:
@@ -515,9 +532,9 @@ def create_lifespan(config: LifespanConfig):
                         _obj = getattr(_handler, _attr, None)
                         if _obj is not None:
                             if hasattr(_obj, "aclose"):
-                                await _obj.aclose()
+                                await _safe_close_async(_obj.aclose, f"custom_httpx.{_attr}")
                             elif hasattr(_obj, "close"):
-                                _obj.close()
+                                _safe_close_sync(_obj.close, f"custom_httpx.{_attr}")
                     _custom_httpx.httpx_handler = None
             except asyncio.CancelledError:
                 raise
@@ -528,28 +545,15 @@ def create_lifespan(config: LifespanConfig):
                 hasattr(litellm, "aclient_session")
                 and litellm.aclient_session is not None
             ):
-                try:
-                    await litellm.aclient_session.aclose()
-                    litellm.aclient_session = None
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logger.exception(
-                        "Error closing litellm aclient_session: %s", e
-                    )
+                await _safe_close_async(litellm.aclient_session.aclose, "litellm aclient_session")
+                litellm.aclient_session = None
+
             if (
                 hasattr(litellm, "client_session")
                 and litellm.client_session is not None
             ):
-                try:
-                    litellm.client_session.close()
-                    litellm.client_session = None
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logger.exception(
-                        "Error closing litellm client_session: %s", e
-                    )
+                _safe_close_sync(litellm.client_session.close, "litellm client_session")
+                litellm.client_session = None
 
             # Stop model info service
             if (

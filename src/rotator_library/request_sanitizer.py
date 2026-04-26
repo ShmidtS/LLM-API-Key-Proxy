@@ -24,6 +24,12 @@ KILOCODE_UNSUPPORTED_PARAMS: Set[str] = {
     "reasoning_effort",  # OpenAI-specific, not supported by Kilocode/Novita free models
 }
 
+# Fireworks AI rejects extra fields that other providers accept
+FIREWORKS_UNSUPPORTED_PARAMS: Set[str] = {
+    "chat_template_kwargs",
+    "reasoning_budget",
+}
+
 
 def sanitize_request_payload(
     payload: Dict[str, Any],
@@ -69,6 +75,12 @@ def sanitize_request_payload(
             for param in KILOCODE_UNSUPPORTED_PARAMS:
                 if param in payload:
                     del payload[param]
+
+    # Fireworks AI rejects extra fields with "Extra inputs are not permitted"
+    if normalized_model.startswith("fireworks/"):
+        for param in FIREWORKS_UNSUPPORTED_PARAMS:
+            if param in payload:
+                del payload[param]
 
     # Auto-adjust max_tokens to prevent context window overflow
     should_reject = False
