@@ -651,8 +651,10 @@ class ModelFetcher:
                 return models, None
 
         except ImportError as e:
+            logger.error(f"Failed to import requirements for model fetching: {e}", exc_info=True)
             return [], f"Import error: {e}"
         except Exception as e:
+            logger.error(f"Unexpected error during model fetch for {provider}: {e}", exc_info=True)
             return [], f"Failed to fetch: {str(e)}"
 
     @staticmethod
@@ -712,6 +714,7 @@ class ModelFetcher:
                     on_success(models)
 
             except Exception as e:
+                logger.error(f"Error in background model fetch thread: {e}", exc_info=True)
                 on_error(str(e))
 
         thread = threading.Thread(target=run_fetch, daemon=True)

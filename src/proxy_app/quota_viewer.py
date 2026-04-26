@@ -320,11 +320,14 @@ class QuotaViewer:
                 return False, "Auth failed"
             else:
                 return False, f"HTTP {response.status_code}"
-        except httpx.ConnectError:
+        except httpx.ConnectError as e:
+            logger.debug(f"Connection failed to {remote.get('name', 'unknown')}: {e}")
             return False, "Offline"
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as e:
+            logger.debug(f"Timeout connecting to {remote.get('name', 'unknown')}: {e}")
             return False, "Timeout"
         except Exception as e:
+            logger.error(f"Unexpected error checking connection to {remote.get('name', 'unknown')}: {e}", exc_info=True)
             return False, str(e)[:20]
 
     def fetch_stats(self, provider: Optional[str] = None) -> Optional[Dict[str, Any]]:

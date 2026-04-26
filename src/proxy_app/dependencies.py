@@ -18,7 +18,7 @@ api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 anthropic_api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
 
-async def _inc_streams(request):
+async def _inc_streams(request: Request) -> None:
     async with request.app.state.stream_lock:
         request.app.state.active_streams += 1
 

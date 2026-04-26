@@ -3,7 +3,7 @@
 
 import asyncio
 from collections import defaultdict
-from typing import List, Dict, Any, Tuple
+from typing import Any
 import logging
 import time
 from rotator_library import RotatingClient
@@ -19,19 +19,19 @@ class EmbeddingBatcher:
         self.worker_task = None
         self._worker_lock = asyncio.Lock()
 
-    async def _ensure_worker_locked(self):
+    async def _ensure_worker_locked(self) -> None:
         async with self._worker_lock:
             if self.worker_task is not None and not self.worker_task.done():
                 return
             self.worker_task = asyncio.get_running_loop().create_task(self._batch_worker())
 
-    async def add_request(self, request_data: Dict[str, Any]) -> Any:
+    async def add_request(self, request_data: dict[str, Any]) -> dict[str, Any]:
         await self._ensure_worker_locked()
         future = asyncio.Future()
         await self.queue.put((request_data, future))
         return await future
 
-    async def _batch_worker(self):
+    async def _batch_worker(self) -> None:
         while True:
             batch, futures = await self._gather_batch()
             if not batch:
@@ -102,7 +102,7 @@ class EmbeddingBatcher:
                         if not future.done():
                             future.set_exception(e)
 
-    async def _gather_batch(self) -> Tuple[List[Dict[str, Any]], List[asyncio.Future]]:
+    async def _gather_batch(self) -> tuple[list[dict[str, Any]], list[asyncio.Future[dict[str, Any]]]]:
         batch = []
         futures = []
         start_time = time.monotonic()
@@ -120,7 +120,7 @@ class EmbeddingBatcher:
 
         return batch, futures
 
-    async def stop(self):
+    async def stop(self) -> None:
         async with self._worker_lock:
             task = self.worker_task
             self.worker_task = None

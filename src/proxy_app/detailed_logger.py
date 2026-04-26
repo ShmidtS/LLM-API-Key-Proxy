@@ -99,7 +99,7 @@ class RawIOLogger:
         self.streaming = False
         self._dir_available = safe_mkdir(self.log_dir, logging)
 
-    async def _write_json(self, filename: str, data: Dict[str, Any]):
+    async def _write_json(self, filename: str, data: dict[str, Any]) -> None:
         """Helper to write data to a JSON file in the log directory."""
         if not self._dir_available:
             self._dir_available = safe_mkdir(self.log_dir, logging)
@@ -109,7 +109,7 @@ class RawIOLogger:
         async with aiofiles.open(self.log_dir / filename, "w", encoding="utf-8") as f:
             await f.write(sanitize_for_log(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode("utf-8")))
 
-    async def log_request(self, headers: Dict[str, Any], body: Dict[str, Any]):
+    async def log_request(self, headers: dict[str, Any], body: dict[str, Any]) -> None:
         """Logs the raw incoming request details."""
         self.streaming = body.get("stream", False)
         request_data = {
@@ -120,7 +120,7 @@ class RawIOLogger:
         }
         await self._write_json("request.json", request_data)
 
-    async def log_stream_chunk(self, chunk: Dict[str, Any]):
+    async def log_stream_chunk(self, chunk: dict[str, Any]) -> None:
         """Logs an individual chunk from a streaming response to a JSON Lines file."""
         if not self._dir_available:
             return

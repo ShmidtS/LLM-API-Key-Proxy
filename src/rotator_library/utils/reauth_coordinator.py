@@ -18,6 +18,7 @@ regardless of which provider the credential belongs to.
 import asyncio
 import logging
 import time
+import threading
 from typing import Callable, Optional, Dict, Any, Awaitable
 from pathlib import Path
 
@@ -232,11 +233,14 @@ class ReauthCoordinator(metaclass=SingletonMeta):
 
 # Global singleton instance
 _coordinator: Optional[ReauthCoordinator] = None
+_coordinator_lock = threading.Lock()
 
 
 def get_reauth_coordinator() -> ReauthCoordinator:
     """Get the global ReauthCoordinator instance."""
     global _coordinator
     if _coordinator is None:
-        _coordinator = ReauthCoordinator()
+        with _coordinator_lock:
+            if _coordinator is None:
+                _coordinator = ReauthCoordinator()
     return _coordinator

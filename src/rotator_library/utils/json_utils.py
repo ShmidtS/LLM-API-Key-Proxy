@@ -114,7 +114,7 @@ def json_deep_copy(obj: Any) -> Any:
     return orjson.loads(orjson.dumps(obj))
 
 
-def extract_reasoning(data: Dict[str, Any]) -> Optional[str]:
+def extract_reasoning(data: dict[str, Any]) -> Optional[str]:
     """Extract reasoning or reasoning_content from an OpenAI-compatible response dict.
 
     Checks top-level ``reasoning``, then ``choices[0].message.reasoning``,

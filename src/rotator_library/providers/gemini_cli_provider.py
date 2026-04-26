@@ -1416,9 +1416,7 @@ class GeminiCliProvider(
                     f"Discovered {dynamic_count} additional models for gemini_cli from API"
                 )
 
-        except Exception as e:
-            # Silently ignore dynamic discovery errors
-            lib_logger.debug(f"Dynamic model discovery failed for gemini_cli: {e}")
-            pass
+        except Exception:
+            lib_logger.exception("Gemini CLI dynamic model discovery failed")
 
         return models
