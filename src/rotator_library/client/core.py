@@ -27,20 +27,16 @@ patch_litellm_finish_reason()
 # CRITICAL: Patch aiohttp.TCPConnector to use TLS 1.2 and disable SSL verification
 # This fixes ConnectionResetError and SSLCertVerificationError with servers like noobrouterproduction.azurewebsites.net
 from ..ssl_patch import _patch_aiohttp_connector
-from ..quota_reporter import QuotaReporter
-from ..anthropic_adapter import AnthropicAdapter
 
 _patch_aiohttp_connector()
 
 import asyncio
-import fnmatch
 import logging
 from collections.abc import Mapping
 import httpx
 import litellm
-from litellm.litellm_core_utils.token_counter import token_counter
 from pathlib import Path
-from typing import List, Dict, Any, AsyncGenerator, Optional, Union, TYPE_CHECKING
+from typing import Any, AsyncGenerator, Optional, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..anthropic_compat.models import (
@@ -48,65 +44,13 @@ if TYPE_CHECKING:
         AnthropicCountTokensRequest,
     )
 
-
 lib_logger = logging.getLogger("rotator_library")
 
 
-# Image-only model detection — these models are rejected by /chat/completions upstream
-# and must be redirected to /v1/images/generations. Covers flux, z-image, dall-e, sd3, etc.
-_IMAGE_ONLY_SUBSTRINGS = (
-    "z-image",
-    "flux-",
-    "gpt-image",
-    "dall-e",
-    "sd3",
-    "stable-diffusion",
-    "imagen",
-    "firefly",
-    "cogview-4",
-)
-_IMAGE_ONLY_SUFFIXES = (
-    "-image",
-    "-image-pro",
-    "-image-turbo",
-    "-image-gen",
-)
-_IMAGE_ONLY_PATH_FRAGMENTS = ("/flux-", "/image-")
-
-# Allow-list of params accepted by image-generation endpoints.
-# Chat-specific params (messages, tools, stream, max_tokens, etc.)
-# are deliberately excluded.
-_IMAGE_PASSTHROUGH_PARAMS = {
-    "n",
-    "size",
-    "quality",
-    "style",
-    "response_format",
-    "user",
-    "extra_headers",
-    "extra_body",
-    "timeout",
-}
-
-_IMAGE_NATIVE_PROVIDERS = {"fireworks", "fireworks_ai", "qwen", "dashscope", "zai", "z.ai"}
 
 
-def _is_image_only_model(model: str) -> bool:
-    """Return True if model name matches known image-only patterns.
 
-    Used to redirect chat-completion calls for image models (flux, z-image,
-    dall-e, etc.) to the image generation endpoint.
-    """
-    if not model:
-        return False
-    m = model.lower()
-    if any(s in m for s in _IMAGE_ONLY_SUBSTRINGS):
-        return True
-    if any(m.endswith(sfx) for sfx in _IMAGE_ONLY_SUFFIXES):
-        return True
-    if any(frag in m for frag in _IMAGE_ONLY_PATH_FRAGMENTS):
-        return True
-    return False
+
 
 
 try:
@@ -167,9 +111,21 @@ from ..config import (
 from ._helpers import HelpersMixin
 from ._streaming import StreamingMixin
 from ._retry import RetryMixin
+from ._media import MediaMixin, _IMAGE_PASSTHROUGH_PARAMS, _IMAGE_NATIVE_PROVIDERS
+from ._models import ModelsMixin
+from ._quota import QuotaMixin
+from ._anthropic import AnthropicCompatibilityMixin
 
 
-class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
+class RotatingClient(
+    HelpersMixin,
+    StreamingMixin,
+    RetryMixin,
+    MediaMixin,
+    ModelsMixin,
+    QuotaMixin,
+    AnthropicCompatibilityMixin,
+):
     """
     A client that intelligently rotates and retries API keys using LiteLLM,
     with support for both streaming and non-streaming responses.
@@ -179,18 +135,18 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
 
     def __init__(
         self,
-        api_keys: Optional[Dict[str, List[str]]] = None,
-        oauth_credentials: Optional[Dict[str, List[str]]] = None,
+        api_keys: Optional[dict[str, list[str]]] = None,
+        oauth_credentials: Optional[dict[str, list[str]]] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
         usage_file_path: Optional[Union[str, Path]] = None,
         configure_logging: bool = True,
         global_timeout: int = DEFAULT_GLOBAL_TIMEOUT,
         abort_on_callback_error: bool = True,
-        litellm_provider_params: Optional[Dict[str, Any]] = None,
-        ignore_models: Optional[Dict[str, List[str]]] = None,
-        whitelist_models: Optional[Dict[str, List[str]]] = None,
+        litellm_provider_params: Optional[dict[str, Any]] = None,
+        ignore_models: Optional[dict[str, list[str]]] = None,
+        whitelist_models: Optional[dict[str, list[str]]] = None,
         enable_request_logging: bool = False,
-        max_concurrent_requests_per_key: Optional[Dict[str, int]] = None,
+        max_concurrent_requests_per_key: Optional[dict[str, int]] = None,
         rotation_tolerance: float = DEFAULT_ROTATION_TOLERANCE,
         data_dir: Optional[Union[str, Path]] = None,
     ):
@@ -278,7 +234,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         for provider, paths in self.oauth_credentials.items():
             all_credentials.setdefault(provider, []).extend(paths)
         self.all_credentials = all_credentials
-        self._cred_offset: Dict[str, int] = {}
+        self._cred_offset: dict[str, int] = {}
         self._lock_manager = ProviderLockManager()
 
         self.max_retries = max_retries
@@ -329,7 +285,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         self._http_pool: Optional[HttpClientPool] = None
         self._pool_initialized = False
         # Cache for provider API endpoints (for pre-warming)
-        self._provider_endpoints: Dict[str, str] = {}
+        self._provider_endpoints: dict[str, str] = {}
 
         # Credential priority cache for fast lookups (TTL=300s, auto-expiry)
         from cachetools import TTLCache
@@ -376,7 +332,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
                 self.max_concurrent_requests_per_key[provider] = 1
 
         # Track consecutive quota failures per credential for intelligent rotation
-        self._consecutive_quota_failures: Dict[str, int] = {}
+        self._consecutive_quota_failures: dict[str, int] = {}
 
         # Global backpressure semaphore — limits total concurrent outbound
         # API requests across all providers/keys. Prevents resource exhaustion.
@@ -396,13 +352,13 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
 
     async def _prepare_request_kwargs(
         self,
-        base_kwargs: Dict[str, Any],
+        base_kwargs: dict[str, Any],
         provider: str,
         credential: str,
         model: str,
         *,
         include_reasoning_effort: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Clone and normalize per-attempt request kwargs before provider execution."""
         litellm_kwargs = base_kwargs.copy()
 
@@ -432,96 +388,13 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
 
         return litellm_kwargs
 
-    def _match_model_pattern(
-        self,
-        provider: str,
-        model_id: str,
-        pattern_dict: dict,
-        wildcard_return: bool = False,
-    ) -> bool:
-        """
-        Checks if a model matches any pattern in the given dict.
 
-        Args:
-            provider: Provider name
-            model_id: Full model ID (e.g., "openai/gpt-4")
-            pattern_dict: Dict mapping provider -> list of fnmatch patterns
-            wildcard_return: Return value when pattern list is ["*"] (True for ignore, False for whitelist)
 
-        Pattern examples:
-        - "gpt-4" - exact match
-        - "gpt-4*" - prefix wildcard (matches gpt-4, gpt-4-turbo, etc.)
-        - "*-preview" - suffix wildcard
-        - "*" - match all
-        """
-        model_provider = model_id.split("/")[0]
-        if model_provider not in pattern_dict:
-            return False
 
-        pattern_list = pattern_dict[model_provider]
-        if pattern_list == ["*"]:
-            return wildcard_return
-
-        try:
-            provider_model_name = model_id.split("/", 1)[1]
-        except IndexError:
-            provider_model_name = model_id
-
-        for pattern in pattern_list:
-            if fnmatch.fnmatch(provider_model_name, pattern) or fnmatch.fnmatch(
-                model_id, pattern
-            ):
-                return True
-        return False
-
-    def _is_model_ignored(self, provider: str, model_id: str) -> bool:
-        """Checks if a model should be ignored based on the ignore list."""
-        return self._match_model_pattern(
-            provider, model_id, self.ignore_models, wildcard_return=True
-        )
-
-    def _is_model_whitelisted(self, provider: str, model_id: str) -> bool:
-        """Checks if a model is explicitly whitelisted."""
-        return self._match_model_pattern(
-            provider, model_id, self.whitelist_models, wildcard_return=False
-        )
-
-    def get_oauth_credentials(self) -> Dict[str, List[str]]:
+    def get_oauth_credentials(self) -> dict[str, list[str]]:
         return self.oauth_credentials
 
-    def _is_image_only_model(self, model: str) -> bool:
-        """Instance wrapper around module-level _is_image_only_model helper."""
-        return _is_image_only_model(model)
 
-    def _extract_prompt_from_chat_messages(self, messages: list) -> Optional[str]:
-        """Extract the last user-message text content to use as image prompt.
-
-        Supports both string content and list-of-parts content (OpenAI vision
-        format). Returns None when no user text is found.
-        """
-        if not messages:
-            return None
-        for msg in reversed(messages):
-            if not isinstance(msg, dict):
-                continue
-            if msg.get("role") != "user":
-                continue
-            content = msg.get("content")
-            if isinstance(content, str):
-                text = content.strip()
-                return text or None
-            if isinstance(content, list):
-                parts = []
-                for part in content:
-                    if not isinstance(part, dict):
-                        continue
-                    if part.get("type") == "text":
-                        text_val = part.get("text")
-                        if isinstance(text_val, str) and text_val:
-                            parts.append(text_val)
-                if parts:
-                    return "\n".join(parts)
-        return None
 
     def _is_custom_openai_compatible_provider(self, provider_name: str) -> bool:
         """
@@ -533,7 +406,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         """
         return self.provider_config.is_custom_provider(provider_name)
 
-    def _build_credential_to_provider_map(self) -> Dict[str, str]:
+    def _build_credential_to_provider_map(self) -> dict[str, str]:
         """Build a reverse mapping from credential identifier to provider name."""
         mapping: Dict[str, str] = {}
         for provider, creds in self.all_credentials.items():
@@ -601,56 +474,6 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         # Check if already registered (e.g. by usage_manager)
         return self._provider_instances.get(provider_name)
 
-    async def _resolve_model_id(self, model: str, provider: str) -> str:
-        """
-        Resolves the actual model ID to send to the provider.
-
-        For custom models with name/ID mappings, returns the ID.
-        Otherwise, returns the model name unchanged.
-
-        Results are cached with TTL to avoid repeated provider lookups.
-        Cache is invalidated when providers are refreshed.
-
-        Args:
-            model: Full model string with provider (e.g., "iflow/DS-v3.2")
-            provider: Provider name (e.g., "iflow")
-
-        Returns:
-            Full model string with ID (e.g., "iflow/deepseek-v3.2")
-        """
-        cache_key = (model, provider)
-        lock = await self._lock_manager.get_lock(provider)
-        async with lock:
-            cached = self._resolve_model_id_cache.get(cache_key)
-            if cached is not None:
-                return cached
-
-            # Extract model name from "provider/model_name" format
-            model_name = model.split("/")[-1] if "/" in model else model
-
-            # Try to get provider instance to check for model definitions
-            provider_plugin = self._get_provider_instance(provider)
-
-            # Check if provider has model definitions
-            if provider_plugin and hasattr(provider_plugin, "model_definitions"):
-                model_id = provider_plugin.model_definitions.get_model_id(
-                    provider, model_name
-                )
-                if model_id and model_id != model_name:
-                    result = f"{provider}/{model_id}"
-                    self._resolve_model_id_cache[cache_key] = result
-                    return result
-
-            # Fallback: use client's own model definitions
-            model_id = self.model_definitions.get_model_id(provider, model_name)
-            if model_id and model_id != model_name:
-                result = f"{provider}/{model_id}"
-                self._resolve_model_id_cache[cache_key] = result
-                return result
-
-            # No conversion needed, return original
-            self._resolve_model_id_cache[cache_key] = model
-            return model
 
     async def __aenter__(self):
         return self
@@ -696,7 +519,7 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
         kwargs["model"] = model
         provider = extract_provider_from_model(model)
 
-        if _is_image_only_model(model):
+        if self._is_image_only_model(model):
             prompt = self._extract_prompt_from_chat_messages(kwargs.get("messages", []))
             if prompt:
                 image_kwargs = {
@@ -793,592 +616,24 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
             **kwargs,
         )
 
-    def _media_request(
-        self,
-        endpoint_fn: callable,
-        request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
-        **kwargs,
-    ) -> Any:
-        return self._rate_limited_execute(
-            endpoint_fn,
-            request=request,
-            pre_request_callback=pre_request_callback,
-            **kwargs,
-        )
 
-    async def aimage_generation(
-        self,
-        request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
-        **kwargs,
-    ) -> Any:
-        """Generate an image via the image generation endpoint.
 
-        Tries /v1/images/generations first. If the provider doesn't support
-        that endpoint (400 Invalid path, 404 Not Found, etc.), falls back to
-        /chat/completions with prompt conversion. The runtime error decides
-        which path to take — no hardcoded provider lists.
-        """
-        # Auto-resolve unsupported image sizes — let the model pick the best fit
-        size = kwargs.get("size")
-        if size and size.lower() not in {
-            "1024x1024",
-            "1024x1536",
-            "1536x1024",
-            "1792x1024",
-            "1024x1792",
-            "auto",
-        }:
-            kwargs = kwargs.copy()
-            kwargs["size"] = "auto"
-            lib_logger.info(
-                "Remapping unsupported image size %s to auto for model %s",
-                size,
-                kwargs.get("model", ""),
-            )
 
-        response_format = kwargs.get("response_format")
-        if isinstance(response_format, Mapping):
-            response_format_type = response_format.get("type")
-            if response_format_type in {"image", "url"}:
-                kwargs = kwargs.copy()
-                kwargs["response_format"] = "url"
-            elif response_format_type in {"b64_json", "base64"}:
-                kwargs = kwargs.copy()
-                kwargs["response_format"] = "b64_json"
 
-        model = normalize_model_string(str(kwargs.get("model", "")))
-        native_provider = kwargs.pop("_native_provider", None)
-        provider = native_provider or extract_provider_from_model(model)
-        model_name = model.split("/", 1)[1] if "/" in model else model
-        api_base = str(kwargs.get("api_base", "")).lower()
-        if provider == "openai" and ("dashscope" in api_base or model_name.startswith("z-image")):
-            provider = "qwen"
-        if provider in _IMAGE_NATIVE_PROVIDERS:
-            kwargs = kwargs.copy()
-            kwargs["model"] = model
-            kwargs["_native_provider"] = provider
-            return await self._rate_limited_execute(
-                self._native_image_generation,
-                request=request,
-                pre_request_callback=pre_request_callback,
-                **kwargs,
-            )
 
-        # Truncate long prompts — some models reject content > 1000 chars
-        # at /images/generations (e.g. Qwen/DashScope returns 400).
-        prompt = kwargs.get("prompt")
-        if prompt and isinstance(prompt, str) and len(prompt) > 1000:
-            kwargs = kwargs.copy()
-            kwargs["prompt"] = prompt[:997] + "..."
-            lib_logger.info(
-                "Truncated image prompt from %d to 1000 chars for model %s",
-                len(prompt), kwargs.get("model", ""),
-            )
 
-        try:
-            response = await self._rate_limited_execute(
-                litellm.aimage_generation,
-                request=request,
-                pre_request_callback=pre_request_callback,
-                **kwargs,
-            )
-            if self._is_image_endpoint_mismatch_response(response):
-                lib_logger.info(
-                    "Provider doesn't support /images/generations, falling back to /chat/completions for model=%s",
-                    kwargs.get("model", ""),
-                )
-                return await self._image_via_chat_completion(
-                    request=request,
-                    pre_request_callback=pre_request_callback,
-                    **kwargs,
-                )
-            return response
-        except (
-            litellm.BadRequestError,
-            litellm.NotFoundError,
-            litellm.APIError,
-            OpenAIError,
-        ) as e:
-            err_lower = str(e).lower()
-            is_endpoint_mismatch = self._is_image_endpoint_mismatch_text(err_lower)
-            is_html_404 = "<!doctype" in err_lower and ("not found" in err_lower or "404" in err_lower)
-            if not is_endpoint_mismatch and not is_html_404:
-                raise
-            if _is_image_only_model(str(kwargs.get("model", ""))):
-                lib_logger.error(
-                    "Provider doesn't support /images/generations for image-only model=%s. Failing fast.",
-                    kwargs.get("model", ""),
-                )
-                raise NoAvailableKeysError(
-                    f"Model {kwargs.get('model', 'unknown')} is not supported by this provider for image generation"
-                ) from e
 
-            lib_logger.info(
-                "Provider doesn't support /images/generations, falling back to /chat/completions for model=%s",
-                kwargs.get("model", ""),
-            )
-            try:
-                return await self._image_via_chat_completion(
-                    request=request,
-                    pre_request_callback=pre_request_callback,
-                    **kwargs,
-                )
-            except (litellm.NotFoundError, OpenAIError) as chat_e:
-                chat_err_lower = str(chat_e).lower()
-                if (
-                    isinstance(chat_e, OpenAIError)
-                    and "not found" not in chat_err_lower
-                    and "404" not in chat_err_lower
-                ):
-                    raise
-                lib_logger.error(
-                    "Provider doesn't support /images/generations or /chat/completions for image model=%s. Failing fast.",
-                    kwargs.get("model", ""),
-                )
-                raise NoAvailableKeysError(
-                    f"Model {kwargs.get('model', 'unknown')} is not supported by this provider for image generation"
-                ) from chat_e
 
-    async def _native_image_generation(self, **kwargs) -> Any:
-        model = normalize_model_string(str(kwargs.get("model", "")))
-        provider = kwargs.pop("_native_provider", None) or extract_provider_from_model(model)
-        model_name = model.split("/", 1)[1] if "/" in model else model
-        if provider == "openai" and model_name.startswith("z-image"):
-            provider = "qwen"
-        provider = {"dashscope": "qwen", "fireworks_ai": "fireworks", "z.ai": "zai"}.get(provider, provider)
-        api_key = kwargs.pop("api_key")
-        provider_plugin = self._get_provider_instance(provider)
-        if not provider_plugin or not hasattr(provider_plugin, "native_image_generation"):
-            raise ValueError(f"Unsupported native image provider: {provider}")
-        http_client = await self._get_http_client_async(streaming=False)
-        data = await provider_plugin.native_image_generation(
-            http_client, api_key, timeout=kwargs.get("timeout", self.global_timeout), **kwargs
-        )
-        return self._native_image_response(data)
 
-    def _native_image_response(self, data: Any) -> dict:
-        import time as _time
 
-        images = self._extract_native_images(data)
-        return {"created": int(_time.time()), "data": images, "object": "list"}
 
-    def _extract_native_images(self, data: Any) -> list[dict]:
-        if not isinstance(data, Mapping):
-            return []
-        images = []
-        for key in ("base64", "b64_json"):
-            if isinstance(data.get(key), str):
-                images.append({"b64_json": data[key]})
-        for key in ("url", "image_url", "sample", "image"):
-            if isinstance(data.get(key), str):
-                value = data[key]
-                if key == "image" and not value.startswith("http"):
-                    images.append({"b64_json": value})
-                else:
-                    images.append({"url": value})
-        result = data.get("result")
-        if isinstance(result, str):
-            images.append({"url": result})
-        elif isinstance(result, Mapping):
-            images.extend(self._extract_native_images(result))
-        output = data.get("output")
-        if isinstance(output, Mapping):
-            for key in ("results", "images"):
-                items = output.get(key)
-                if isinstance(items, list):
-                    for item in items:
-                        images.extend(self._extract_native_images(item))
-            choices = output.get("choices")
-            if isinstance(choices, list):
-                for choice in choices:
-                    images.extend(self._extract_native_images(choice))
-            for key in ("url", "image_url"):
-                if isinstance(output.get(key), str):
-                    images.append({"url": output[key]})
-        if isinstance(data.get("data"), list):
-            for item in data["data"]:
-                images.extend(self._extract_native_images(item))
-        for key in ("results", "images"):
-            if isinstance(data.get(key), list):
-                for item in data[key]:
-                    images.extend(self._extract_native_images(item))
-        return images
 
-    def _is_image_endpoint_mismatch_response(self, response: Any) -> bool:
-        if not isinstance(response, Mapping):
-            return False
-        error = response.get("error")
-        if not isinstance(error, Mapping):
-            return False
-        error_type = str(error.get("type", "")).lower()
-        message = str(error.get("message", "")).lower()
-        return error_type == "invalid_request" and self._is_image_endpoint_mismatch_text(message)
 
-    def _is_image_endpoint_mismatch_text(self, text: str) -> bool:
-        return any(
-            pattern in text
-            for pattern in (
-                "only accepts the path",
-                "invalid_path",
-                "path not found",
-                "not found: /v1/images/generations",
-                "/v1/images/generations",
-                "images/generations endpoint",
-                "image generation endpoint",
-                "endpoint does not support",
-                "endpoint not found",
-            )
-        )
 
-    async def _image_via_chat_completion(
-        self,
-        request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
-        **kwargs,
-    ) -> Any:
-        """Route image generation through /chat/completions as fallback.
 
-        Called when /v1/images/generations is rejected by the provider.
-        Sends the prompt as a user message and converts the chat response
-        into OpenAI image generation format.
-        """
-        import re
-        import time as _time
 
-        model = kwargs.get("model", "")
-        prompt = kwargs.get("prompt", "")
-        n = kwargs.get("n", 1)
-        size = kwargs.get("size", "1024x1024")
 
-        # Truncate prompt to avoid exceeding chat API content limits (e.g. Qwen)
-        max_prompt_len = 2000
-        if prompt and len(prompt) > max_prompt_len:
-            prompt = prompt[:max_prompt_len - 3] + "..."
-            lib_logger.info(
-                "Truncated image prompt from %d to %d chars for chat fallback",
-                len(kwargs.get("prompt", "")), max_prompt_len,
-            )
 
-        size_hint = f" (size: {size})" if size else ""
-        user_content = f"Generate an image: {prompt}{size_hint}"
-
-        chat_kwargs = {
-            "model": model,
-            "messages": [{"role": "user", "content": user_content}],
-            "stream": False,
-        }
-        # Drop response_format — chat APIs reject 'image' (only accept json_object/text)
-        for key in ("temperature", "top_p", "seed"):
-            if key in kwargs:
-                chat_kwargs[key] = kwargs[key]
-
-        chat_resp = await self._rate_limited_execute(
-            litellm.acompletion,
-            request=request,
-            pre_request_callback=pre_request_callback,
-            **chat_kwargs,
-        )
-
-        if isinstance(chat_resp, Mapping) and "error" in chat_resp:
-            return chat_resp
-
-        images = []
-        for choice in chat_resp.get("choices") or []:
-            msg = choice.get("message", {})
-            content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
-
-            url_matches = re.findall(
-                r"https?://\S+\.(?:png|jpg|jpeg|webp|gif)\S*", content
-            )
-            b64_matches = re.findall(
-                r"data:image/[^;]+;base64,[A-Za-z0-9+/=]+", content
-            )
-
-            for url in url_matches:
-                images.append({"url": url})
-            for b64 in b64_matches:
-                images.append({"b64_json": b64.split(",", 1)[1] if "," in b64 else b64})
-
-            if not url_matches and not b64_matches and content.strip():
-                images.append({"url": content.strip()})
-
-        while len(images) < n and images:
-            images.append(images[-1])
-
-        return {
-            "created": int(_time.time()),
-            "data": images[:n] if n else images,
-            "object": "list",
-        }
-
-    def aimage_edit(
-        self,
-        request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
-        **kwargs,
-    ) -> Any:
-        """Edit an image via the image edit endpoint."""
-        return self._media_request(
-            litellm.aimage_edit,
-            request=request,
-            pre_request_callback=pre_request_callback,
-            **kwargs,
-        )
-
-    def aimage_variation(
-        self,
-        request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
-        **kwargs,
-    ) -> Any:
-        """Create a variation of an image via the image variation endpoint."""
-        return self._media_request(
-            litellm.aimage_variation,
-            request=request,
-            pre_request_callback=pre_request_callback,
-            **kwargs,
-        )
-
-    def aspeech(
-        self,
-        request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
-        **kwargs,
-    ) -> Any:
-        """Generate speech audio via the speech endpoint."""
-        return self._media_request(
-            litellm.aspeech,
-            request=request,
-            pre_request_callback=pre_request_callback,
-            **kwargs,
-        )
-
-    def atranscription(
-        self,
-        request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
-        **kwargs,
-    ) -> Any:
-        """Transcribe audio via the transcription endpoint."""
-        return self._media_request(
-            litellm.atranscription,
-            request=request,
-            pre_request_callback=pre_request_callback,
-            **kwargs,
-        )
-
-    def token_count(self, **kwargs) -> int:
-        """Calculates the number of tokens for a given text or list of messages.
-
-        For Antigravity provider models, this also includes the preprompt tokens
-        that get injected during actual API calls (agent instruction + identity override).
-        This ensures token counts match actual usage.
-        """
-        model = kwargs.get("model")
-        text = kwargs.get("text")
-        messages = kwargs.get("messages")
-
-        if not model:
-            raise ValueError("'model' is a required parameter.")
-
-        # Calculate base token count
-        if messages:
-            base_count = token_counter(model=model, messages=messages)
-        elif text:
-            base_count = token_counter(model=model, text=text)
-        else:
-            raise ValueError("Either 'text' or 'messages' must be provided.")
-
-        # Add preprompt tokens for Antigravity provider
-        # The Antigravity provider injects system instructions during actual API calls,
-        # so we need to account for those tokens in the count
-        provider = extract_provider_from_model(model)
-        if provider == "antigravity":
-            try:
-                from ..providers.antigravity.constants import (
-                    get_antigravity_preprompt_text,
-                )
-
-                preprompt_text = get_antigravity_preprompt_text()
-                if preprompt_text:
-                    preprompt_tokens = token_counter(model=model, text=preprompt_text)
-                    base_count += preprompt_tokens
-            except ImportError:
-                # Provider not available, skip preprompt token counting
-                lib_logger.debug(
-                    "Provider not available, skip preprompt token counting"
-                )
-
-        return base_count
-
-    async def get_available_models(self, provider: str) -> List[str]:
-        """Returns a list of available models for a specific provider, with caching."""
-        lib_logger.info("Getting available models for provider: %s", provider)
-        lock = await self._lock_manager.get_lock(provider)
-        async with lock:
-            if provider in self._model_list_cache:
-                cached_models, cached_at = self._model_list_cache[provider]
-                if time.monotonic() - cached_at < self._MODEL_LIST_CACHE_TTL:
-                    lib_logger.debug("Returning cached models for provider: %s", provider)
-                    return cached_models
-
-            credentials_for_provider = self.all_credentials.get(provider)
-            if not credentials_for_provider:
-                lib_logger.warning("No credentials for provider: %s", provider)
-                return []
-
-            shuffled_credentials = list(credentials_for_provider)
-            offset = self._cred_offset.get(provider, 0)
-            self._cred_offset[provider] = (offset + 1) % len(shuffled_credentials)
-            shuffled_credentials = (
-                shuffled_credentials[offset:] + shuffled_credentials[:offset]
-            )
-
-        provider_instance = self._get_provider_instance(provider)
-        if provider_instance:
-            # For providers with hardcoded models (like gemini_cli), we only need to call once.
-            # For others, we might need to try multiple keys if one is invalid.
-            # The current logic of iterating works for both, as the credential is not
-            # always used in get_models.
-            consecutive_auth_errors = 0
-            for credential in shuffled_credentials:
-                try:
-                    # Display last 6 chars for API keys, or the filename for OAuth paths
-                    cred_display = mask_credential(credential)
-                    lib_logger.debug(
-                        f"Attempting to get models for {provider} with credential {cred_display}"
-                    )
-                    models = await provider_instance.get_models(
-                        credential, await self._get_http_client_async(streaming=False)
-                    )
-
-                    consecutive_auth_errors = 0  # Reset on success
-
-                    lib_logger.info(
-                        f"Got {len(models)} models for provider: {provider}"
-                    )
-
-                    # Whitelist and blacklist logic
-                    final_models = []
-                    for m in models:
-                        is_whitelisted = self._is_model_whitelisted(provider, m)
-                        is_blacklisted = self._is_model_ignored(provider, m)
-
-                        if is_whitelisted:
-                            final_models.append(m)
-                            continue
-
-                        if not is_blacklisted:
-                            final_models.append(m)
-
-                    if len(final_models) != len(models):
-                        lib_logger.info(
-                            f"Filtered out {len(models) - len(final_models)} models for provider {provider}."
-                        )
-
-                    async with lock:
-                        self._model_list_cache[provider] = (final_models, time.monotonic())
-                    return final_models
-                except Exception as e:
-                    classified_error = classify_error(e, provider=provider)
-                    cred_display = mask_credential(credential)
-                    is_auth_error = classified_error.error_type in (
-                        "authentication",
-                        "forbidden",
-                    )
-                    if is_auth_error:
-                        consecutive_auth_errors += 1
-                        lib_logger.warning(
-                            f"Auth error for {provider} with {cred_display}: {classified_error.error_type} ({consecutive_auth_errors} consecutive)"
-                        )
-                        if consecutive_auth_errors >= 2:
-                            lib_logger.warning(
-                                f"Stopping model discovery for {provider}: {consecutive_auth_errors} consecutive auth errors"
-                            )
-                            break
-                    else:
-                        lib_logger.debug(
-                            f"Failed to get models for provider {provider} with credential {cred_display}: {classified_error.error_type}. Trying next credential."
-                        )
-                    continue  # Try the next credential
-
-        # Discovery failure is a degradation (static models still usable),
-        # not a hard failure — downgrade to warning and include static count.
-        static_fallback = []
-        try:
-            static_fallback = self.model_definitions.get_all_provider_models(provider)
-        except Exception:
-            static_fallback = []
-        lib_logger.warning(
-            "Failed to get models for provider %s after trying all credentials; "
-            "provider unreachable, using %d static models",
-            provider,
-            len(static_fallback),
-        )
-        return []
-
-    async def get_all_available_models(
-        self, grouped: bool = True
-    ) -> Union[Dict[str, List[str]], List[str]]:
-        """Returns a list of all available models, either grouped by provider or as a flat list."""
-        lib_logger.info("Getting all available models...")
-
-        all_providers = list(self.all_credentials.keys())
-        tasks = [self.get_available_models(provider) for provider in all_providers]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        all_provider_models = {}
-        for provider, result in zip(all_providers, results):
-            if isinstance(result, Exception):
-                lib_logger.error(
-                    f"Failed to get models for provider {provider}: {result}"
-                )
-                all_provider_models[provider] = []
-            else:
-                all_provider_models[provider] = result
-
-        lib_logger.info("Finished getting all available models.")
-        if grouped:
-            return all_provider_models
-        else:
-            flat_models = []
-            for models in all_provider_models.values():
-                flat_models.extend(models)
-            return flat_models
-
-    @property
-    def quota_reporter(self):
-        if not hasattr(self, "_quota_reporter_instance"):
-            self._quota_reporter_instance = QuotaReporter(
-                self.usage_manager,
-                self._provider_plugins,
-                self._provider_instances,
-                self.all_credentials,
-            )
-        return self._quota_reporter_instance
-
-    async def get_quota_stats(
-        self,
-        provider_filter: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        return await self.quota_reporter.get_quota_stats(provider_filter)
-
-    async def reload_usage_from_disk(self) -> None:
-        """
-        Force reload usage data from disk.
-
-        Useful when wanting fresh stats without making external API calls.
-        """
-        await self.usage_manager.reload_from_disk()
-
-    async def force_refresh_quota(
-        self,
-        provider: Optional[str] = None,
-        credential: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        return await self.quota_reporter.force_refresh_quota(provider, credential)
 
     # --- Provider-specific API Methods (non-litellm) ---
 
@@ -1434,31 +689,5 @@ class RotatingClient(HelpersMixin, StreamingMixin, RetryMixin):
 
     # --- Anthropic API Compatibility Methods ---
 
-    @property
-    def anthropic_adapter(self):
-        if not hasattr(self, "_anthropic_adapter_instance"):
-            self._anthropic_adapter_instance = AnthropicAdapter(
-                self.acompletion,
-                self.token_count,
-                extract_provider_from_model,
-                self.all_credentials,
-                self.enable_request_logging,
-            )
-        return self._anthropic_adapter_instance
 
-    async def anthropic_messages(
-        self,
-        request: "AnthropicMessagesRequest",
-        raw_request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
-        raw_body_data: Optional[dict] = None,
-    ) -> Any:
-        return await self.anthropic_adapter.anthropic_messages(
-            request, raw_request, pre_request_callback, raw_body_data
-        )
 
-    async def anthropic_count_tokens(
-        self,
-        request: "AnthropicCountTokensRequest",
-    ) -> dict:
-        return await self.anthropic_adapter.anthropic_count_tokens(request)

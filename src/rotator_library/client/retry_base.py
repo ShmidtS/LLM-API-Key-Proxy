@@ -56,15 +56,15 @@ class HalfOpenSlot:
 class _RetryContext:
     model: str
     provider: str
-    credentials_for_provider: list
+    credentials_for_provider: list[str]
     provider_plugin: Any
     deadline: float
     transaction_logger: Any
-    tried_creds: set = field(default_factory=set)
+    tried_creds: set[str] = field(default_factory=set)
     last_exception: Optional[Exception] = None
     parent_log_dir: Optional[str] = None
-    credential_priorities: dict = field(default_factory=dict)
-    credential_tier_names: dict = field(default_factory=dict)
+    credential_priorities: dict[str, int] = field(default_factory=dict)
+    credential_tier_names: dict[str, str] = field(default_factory=dict)
     error_accumulator: Any = None
 
 
@@ -102,13 +102,13 @@ class RetryBaseMixin:
 
     async def _select_next_key(
         self,
-        credentials_for_provider: list,
-        tried_creds: set,
+        credentials_for_provider: list[str],
+        tried_creds: set[str],
         model: str,
         provider: str,
         deadline: float,
-        credential_priorities: dict,
-        credential_tier_names: dict,
+        credential_priorities: dict[str, int],
+        credential_tier_names: dict[str, str],
         suppress_cb_logging: bool = False,
     ) -> _KeySelectionResult:
         """Select and acquire the next available credential.
@@ -204,7 +204,7 @@ class RetryBaseMixin:
         key_acquired: bool,
         provider: str,
         cb_slot_held: bool,
-    ):
+    ) -> None:
         """Release credential and circuit breaker slot (for use in finally blocks)."""
         if key_acquired and current_cred:
             await self.usage_manager.release_key(current_cred, model)

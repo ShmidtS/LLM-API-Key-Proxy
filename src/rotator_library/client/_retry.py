@@ -179,8 +179,8 @@ class RetryMixin(RetryBaseMixin):
         return classified, error_message
 
     async def _apply_error_classifications(
-        self, provider, current_cred, model, e, classified_error,
-    ):
+        self, provider: str, current_cred: str, model: str, e: Exception, classified_error: ClassifiedError,
+    ) -> str:
         """Handle rate_limit and quota_exceeded classification logic.
         Returns "fail" for non-retryable requests, "force_rotate" if quota failure limit reached, "rotate" otherwise.
         """
@@ -526,7 +526,7 @@ class RetryMixin(RetryBaseMixin):
             )
             raise
 
-    async def _record_streaming_success(self, current_cred, model, provider):
+    async def _record_streaming_success(self, current_cred: str, model: str, provider: str) -> None:
         """Record success bookkeeping after streaming completes.
 
         Performs: resilience record_success/rate_success, reset quota.
