@@ -7,6 +7,7 @@ Provides a beautiful Rich-based interface for configuration and execution.
 """
 
 import os
+import secrets
 import sys
 
 import orjson
@@ -675,7 +676,7 @@ class LauncherTUI:
                 default_port = 8000
                 default_logging = False
                 default_raw_logging = False
-                default_api_key = "VerysecretKey"
+                default_api_key = os.environ.get("DEFAULT_API_KEY", secrets.token_urlsafe(32))
 
                 # Get current values
                 current_host = self.config.config["host"]

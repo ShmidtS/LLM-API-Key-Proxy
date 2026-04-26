@@ -6,6 +6,8 @@ import logging
 import orjson
 from fastapi import APIRouter, Request, Depends
 
+logger = logging.getLogger(__name__)
+
 from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key
 from proxy_app.streaming import streaming_response_wrapper, make_sse_response
@@ -114,4 +116,5 @@ async def chat_completions(
             raw_logger.log_final_response(
                 status_code=500, headers=None, body={"error": str(e)}
             )
+        logger.exception("Chat completions error: %s", e)
         raise

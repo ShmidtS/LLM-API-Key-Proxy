@@ -4,8 +4,9 @@
 import asyncio
 import time
 
+import orjson
 from fastapi import APIRouter, Request, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import Response
 
 from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key
@@ -14,12 +15,13 @@ from rotator_library import PROVIDER_PLUGINS
 router = APIRouter()
 
 # Module-level cache shared across requests
-_models_cache: dict = {"data": None, "expires": 0.0}
+_models_cache: dict = {"data": None, "bytes": None, "expires": 0.0}
 _models_cache_lock = asyncio.Lock()
 
 
 def invalidate_models_cache():
     _models_cache["data"] = None
+    _models_cache["bytes"] = None
     _models_cache["expires"] = 0.0
 
 
@@ -38,8 +40,8 @@ async def list_models(
                   If False, returns minimal OpenAI-compatible response.
     """
     now = time.monotonic()
-    if _models_cache["data"] is not None and _models_cache["expires"] > now:
-        return JSONResponse(content=_models_cache["data"], headers={"Cache-Control": "max-age=60"})
+    if _models_cache["bytes"] is not None and _models_cache["expires"] > now:
+        return Response(content=_models_cache["bytes"], media_type="application/json", headers={"Cache-Control": "max-age=60"})
 
     model_ids = await client.get_all_available_models(grouped=False)
 
@@ -50,8 +52,9 @@ async def list_models(
             response_data = {"object": "list", "data": enriched_data}
             async with _models_cache_lock:
                 _models_cache["data"] = response_data
+                _models_cache["bytes"] = orjson.dumps(response_data)
                 _models_cache["expires"] = now + 60
-            return JSONResponse(content=response_data, headers={"Cache-Control": "max-age=60"})
+            return Response(content=_models_cache["bytes"], media_type="application/json", headers={"Cache-Control": "max-age=60"})
 
     # Fallback to basic model cards
     model_cards = [
@@ -66,8 +69,9 @@ async def list_models(
     response_data = {"object": "list", "data": model_cards}
     async with _models_cache_lock:
         _models_cache["data"] = response_data
+        _models_cache["bytes"] = orjson.dumps(response_data)
         _models_cache["expires"] = now + 60
-    return JSONResponse(content=response_data, headers={"Cache-Control": "max-age=60"})
+    return Response(content=_models_cache["bytes"], media_type="application/json", headers={"Cache-Control": "max-age=60"})
 
 
 @router.get("/v1/models/{model_id:path}")

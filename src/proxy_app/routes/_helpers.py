@@ -27,10 +27,11 @@ async def resolve_request_context(request: Request, client: RotatingClient) -> R
     """Parse body, log request, and resolve app state in a single pass."""
     request_data = await _parse_and_log(request)
     enable_raw_logging = getattr(request.app.state, "enable_raw_logging", False)
-    raw_logger = None
     if enable_raw_logging:
         from proxy_app.detailed_logger import RawIOLogger
         raw_logger = RawIOLogger()
+    else:
+        raw_logger = None
     override_temp_zero = getattr(request.app.state, "override_temp_zero", "false")
     return RequestContext(
         client=client,

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+import functools
 import os
 from typing import Optional
 
@@ -34,6 +35,7 @@ PROVIDER_URL_MAP = {
     "trybons": "https://go.trybons.ai",
 }
 
+@functools.lru_cache(maxsize=256)
 def get_provider_endpoint(provider: str, model_name: str, incoming_path: str) -> Optional[str]:
     """
     Constructs the full provider endpoint URL based on the provider and incoming request path.

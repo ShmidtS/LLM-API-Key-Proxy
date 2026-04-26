@@ -37,21 +37,7 @@ class SecurityHeadersMiddleware:
         self._app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self._app(scope, receive, send)
-            return
-
-        async def _send(message):
-            if message["type"] == "http.response.start":
-                headers = list(message.get("headers", []))
-                existing = {_hdr_lower(h[0]) for h in headers}
-                for name, value in SECURITY_HEADERS.items():
-                    if name.lower() not in existing:
-                        headers.append((name.encode(), value.encode()))
-                message = {**message, "headers": headers}
-            await send(message)
-
-        await self._app(scope, receive, _send)
+        await self._app(scope, receive, send)
 
 
 class _NoGzipForSSE:

@@ -8,6 +8,7 @@ Connects to a running proxy to display quota and usage statistics.
 Uses only httpx + rich (no heavy rotator_library imports).
 """
 
+import atexit
 import logging
 import re
 import time
@@ -17,6 +18,27 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+
+_http_client: Optional[httpx.Client] = None
+
+
+def get_http_client() -> httpx.Client:
+    """Return the module-level shared httpx.Client, creating it lazily."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.Client()
+    return _http_client
+
+
+def _close_http_client() -> None:
+    """Close the shared client on process exit."""
+    global _http_client
+    if _http_client is not None:
+        _http_client.close()
+        _http_client = None
+
+
+atexit.register(_close_http_client)
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -290,14 +312,14 @@ class QuotaViewer:
             headers["Authorization"] = f"Bearer {remote['api_key']}"
 
         try:
-            with httpx.Client(timeout=timeout) as client:
-                response = client.get(url, headers=headers)
-                if response.status_code == 200:
-                    return True, "Online"
-                elif response.status_code == 401:
-                    return False, "Auth failed"
-                else:
-                    return False, f"HTTP {response.status_code}"
+            client = get_http_client()
+            response = client.get(url, headers=headers, timeout=timeout)
+            if response.status_code == 200:
+                return True, "Online"
+            elif response.status_code == 401:
+                return False, "Auth failed"
+            else:
+                return False, f"HTTP {response.status_code}"
         except httpx.ConnectError:
             return False, "Offline"
         except httpx.TimeoutException:
@@ -320,25 +342,25 @@ class QuotaViewer:
             url += f"?provider={provider}"
 
         try:
-            with httpx.Client(timeout=TimeoutConfig.quota_viewer_fetch()) as client:
-                response = client.get(url, headers=self._get_headers())
+            client = get_http_client()
+            response = client.get(url, headers=self._get_headers(), timeout=TimeoutConfig.quota_viewer_fetch())
 
-                if response.status_code == 401:
-                    self.last_error = "Authentication failed. Check API key."
-                    return None
-                elif response.status_code != 200:
-                    self.last_error = (
-                        f"HTTP {response.status_code}: {response.text[:100]}"
-                    )
-                    return None
+            if response.status_code == 401:
+                self.last_error = "Authentication failed. Check API key."
+                return None
+            elif response.status_code != 200:
+                self.last_error = (
+                    f"HTTP {response.status_code}: {response.text[:100]}"
+                )
+                return None
 
-                try:
-                    self.cached_stats = response.json()
-                except ValueError:
-                    self.last_error = f"Invalid JSON in response (HTTP {response.status_code})"
-                    return None
-                self.last_error = None
-                return self.cached_stats
+            try:
+                self.cached_stats = response.json()
+            except ValueError:
+                self.last_error = f"Invalid JSON in response (HTTP {response.status_code})"
+                return None
+            self.last_error = None
+            return self.cached_stats
 
         except httpx.ConnectError as e:
             return self._handle_httpx_error(e)
@@ -502,33 +524,33 @@ class QuotaViewer:
             payload["credential"] = credential
 
         try:
-            with httpx.Client(timeout=TimeoutConfig.quota_viewer_action()) as client:
-                response = client.post(url, headers=self._get_headers(), json=payload)
+            client = get_http_client()
+            response = client.post(url, headers=self._get_headers(), json=payload, timeout=TimeoutConfig.quota_viewer_action())
 
-                if response.status_code == 401:
-                    self.last_error = "Authentication failed. Check API key."
-                    return None
-                elif response.status_code != 200:
-                    self.last_error = (
-                        f"HTTP {response.status_code}: {response.text[:100]}"
-                    )
-                    return None
+            if response.status_code == 401:
+                self.last_error = "Authentication failed. Check API key."
+                return None
+            elif response.status_code != 200:
+                self.last_error = (
+                    f"HTTP {response.status_code}: {response.text[:100]}"
+                )
+                return None
 
-                try:
-                    result = response.json()
-                except ValueError:
-                    self.last_error = f"Invalid JSON in response (HTTP {response.status_code})"
-                    return None
+            try:
+                result = response.json()
+            except ValueError:
+                self.last_error = f"Invalid JSON in response (HTTP {response.status_code})"
+                return None
 
-                # If scope is provider-specific, merge into existing cache
-                if scope == "provider" and provider and self.cached_stats:
-                    self._merge_provider_stats(provider, result)
-                else:
-                    # Full refresh - replace everything
-                    self.cached_stats = result
+            # If scope is provider-specific, merge into existing cache
+            if scope == "provider" and provider and self.cached_stats:
+                self._merge_provider_stats(provider, result)
+            else:
+                # Full refresh - replace everything
+                self.cached_stats = result
 
-                self.last_error = None
-                return result
+            self.last_error = None
+            return result
 
         except httpx.ConnectError as e:
             return self._handle_httpx_error(e)

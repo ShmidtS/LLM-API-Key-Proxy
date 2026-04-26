@@ -24,6 +24,7 @@ Directory structure:
         metadata.json          # Summary metadata
 """
 
+import asyncio
 import orjson
 import time
 import uuid
@@ -122,14 +123,14 @@ class RawIOLogger:
         }
         self._write_json("request.json", request_data)
 
-    def log_stream_chunk(self, chunk: Dict[str, Any]):
+    async def log_stream_chunk(self, chunk: Dict[str, Any]):
         """Logs an individual chunk from a streaming response to a JSON Lines file."""
         if not self._dir_available:
             return
 
         log_entry = {"timestamp_utc": datetime.now(timezone.utc).isoformat(), "chunk": chunk}
         content = orjson.dumps(log_entry).decode() + "\n"
-        safe_log_write(self.log_dir / "streaming_chunks.jsonl", content, logging)
+        await asyncio.to_thread(safe_log_write, self.log_dir / "streaming_chunks.jsonl", content, logging)
 
     def log_final_response(
         self, status_code: int, headers: Optional[Dict[str, Any]], body: Dict[str, Any]

@@ -63,7 +63,7 @@ async def audio_speech(
                     logger.info("Client disconnected during audio streaming")
                     break
         except Exception as e:
-            logger.error(f"Audio streaming error: {e}")
+            logger.exception("Audio streaming error: %s", e)
 
     return StreamingResponse(
         _audio_stream(),

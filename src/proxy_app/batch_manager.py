@@ -21,10 +21,22 @@ class EmbeddingBatcher:
         self.batch_size = batch_size
         self.timeout = timeout
         self.queue = asyncio.Queue()
-        self.worker_task = asyncio.create_task(self._batch_worker())
+        self.worker_task = None
+
+    def _ensure_worker(self):
+        """Lazily start the batch worker if it is not already running."""
+        if self.worker_task is None or self.worker_task.done():
+            try:
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(self._batch_worker())
+                if self.worker_task is None or self.worker_task.done():
+                    self.worker_task = task
+            except RuntimeError:
+                pass
 
     async def add_request(self, request_data: Dict[str, Any]) -> Any:
         """Submit a single embedding request and wait for its result. Args: request_data: Dict with model, input, and optional parameters. Returns: The embedding response for this specific request."""
+        self._ensure_worker()
         future = asyncio.Future()
         await self.queue.put((request_data, future))
         return await future
@@ -122,6 +134,8 @@ class EmbeddingBatcher:
 
     async def stop(self):
         """Cancel the background worker and drain pending requests."""
+        if self.worker_task is None:
+            return
         self.worker_task.cancel()
         try:
             await self.worker_task

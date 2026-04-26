@@ -46,7 +46,7 @@ async def streaming_response_wrapper(
     _owns_counter = not getattr(request, '_stream_tracked', False)
     if _owns_counter:
         try:
-            _inc_streams(request)
+            await _inc_streams(request)
         except AttributeError:
             logging.debug("stream_response: request lacks stream counter attribute on increment")
 
@@ -92,10 +92,11 @@ async def streaming_response_wrapper(
                 _bytes_since_yield = 0
 
             if not isinstance(chunk, dict):
+                logger.warning("Unexpected chunk type %s in stream, skipping", type(chunk).__name__)
                 continue
 
             if logger is not None:
-                logger.log_stream_chunk(chunk)
+                await logger.log_stream_chunk(chunk)
                 if aggregator is not None:
                     aggregator.add_chunk(chunk)
     except (GeneratorExit, asyncio.CancelledError):
@@ -147,7 +148,7 @@ async def streaming_response_wrapper(
     finally:
         if _owns_counter:
             try:
-                _dec_streams(request)
+                await _dec_streams(request)
             except AttributeError:
                 logging.debug("stream_response: request lacks stream counter attribute on decrement")
         if logger and aggregator is not None:

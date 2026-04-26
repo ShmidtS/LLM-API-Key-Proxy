@@ -114,8 +114,9 @@ async def process_credential(provider: str, path: str, provider_instance):
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        logger.error(
-            f"Failed to process OAuth token for {provider} at '{path}': {e}"
+        logger.exception(
+            "Failed to process OAuth token for %s at '%s': %s",
+            provider, path, e,
         )
         return (provider, path, None, e)
 
@@ -314,8 +315,9 @@ def create_lifespan(config: LifespanConfig):
                         except asyncio.CancelledError:
                             raise
                         except Exception as e:
-                            logger.error(
-                                f"Failed to update metadata for '{path}': {e}"
+                            logger.exception(
+                                "Failed to update metadata for '%s': %s",
+                                path, e,
                             )
 
             logger.info("OAuth credential processing complete.")
@@ -378,6 +380,7 @@ def create_lifespan(config: LifespanConfig):
         client.background_refresher.start()  # Start the background task
         app.state.rotating_client = client
         app.state.active_streams = 0
+        app.state.stream_lock = asyncio.Lock()
         app.state.proxy_api_key = config.proxy_api_key
         app.state.bearer_proxy_api_key = config.bearer_proxy_api_key
         app.state.override_temp_zero = config.override_temp_zero
@@ -427,8 +430,8 @@ def create_lifespan(config: LifespanConfig):
         async def _prewarm_models():
             try:
                 await client.get_all_available_models(grouped=True)
-            except Exception:
-                pass  # non-critical, models will be fetched on first request
+            except Exception as e:
+                logger.exception("Model prewarm failed: %s", e)
 
         asyncio.create_task(_prewarm_models())
 
@@ -470,14 +473,14 @@ def create_lifespan(config: LifespanConfig):
                             except asyncio.CancelledError:
                                 raise
                             except Exception as e:
-                                logger.debug(
+                                logger.exception(
                                     "Error during stream cleanup: %s", e
                                 )
                         active_stream_gens.clear()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.debug(
+                logger.exception(
                     "Error waiting for active streams during shutdown: %s", e
                 )
 
@@ -495,7 +498,7 @@ def create_lifespan(config: LifespanConfig):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.debug("Error closing litellm async clients: %s", e)
+                logger.exception("Error closing litellm async clients: %s", e)
 
             # Clear litellm's internal httpx handler cache (creates unclosed sessions)
             try:
@@ -519,7 +522,7 @@ def create_lifespan(config: LifespanConfig):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.debug("Error clearing custom_httpx handler: %s", e)
+                logger.exception("Error clearing custom_httpx handler: %s", e)
 
             if (
                 hasattr(litellm, "aclient_session")
@@ -531,7 +534,7 @@ def create_lifespan(config: LifespanConfig):
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    logger.debug(
+                    logger.exception(
                         "Error closing litellm aclient_session: %s", e
                     )
             if (
@@ -544,7 +547,7 @@ def create_lifespan(config: LifespanConfig):
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    logger.debug(
+                    logger.exception(
                         "Error closing litellm client_session: %s", e
                     )
 

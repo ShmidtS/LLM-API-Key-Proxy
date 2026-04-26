@@ -18,13 +18,15 @@ api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
 anthropic_api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
 
-def _inc_streams(request):
-    request.app.state.active_streams += 1
+async def _inc_streams(request):
+    async with request.app.state.stream_lock:
+        request.app.state.active_streams += 1
 
 
-def _dec_streams(request):
-    cur = getattr(request.app.state, "active_streams", 0)
-    request.app.state.active_streams = max(0, cur - 1)
+async def _dec_streams(request):
+    async with request.app.state.stream_lock:
+        cur = getattr(request.app.state, "active_streams", 0)
+        request.app.state.active_streams = max(0, cur - 1)
 
 
 def _register_stream_gen(request, gen):
@@ -80,7 +82,7 @@ async def track_stream(request: Request, stream: AsyncGenerator[Any, None]) -> A
     """Wrap an async generator to track active streaming connections for graceful shutdown."""
     request._stream_tracked = True
     try:
-        _inc_streams(request)
+        await _inc_streams(request)
     except AttributeError:
         logger.error("track_stream: request lacks stream counter attribute")
     try:
@@ -101,7 +103,7 @@ async def track_stream(request: Request, stream: AsyncGenerator[Any, None]) -> A
     finally:
         _unregister_stream_gen(request, stream)
         try:
-            _dec_streams(request)
+            await _dec_streams(request)
         except AttributeError:
             logger.error("track_stream: request lacks stream counter attribute on decrement")
 
