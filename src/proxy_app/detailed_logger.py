@@ -129,7 +129,11 @@ class RawIOLogger:
             return
 
         log_entry = {"timestamp_utc": datetime.now(timezone.utc).isoformat(), "chunk": chunk}
-        content = orjson.dumps(log_entry).decode() + "\n"
+        try:
+            content = orjson.dumps(log_entry).decode() + "\n"
+        except Exception:
+            logging.warning("Failed to serialize log entry", exc_info=True)
+            return
         await asyncio.to_thread(safe_log_write, self.log_dir / "streaming_chunks.jsonl", content, logging)
 
     def log_final_response(

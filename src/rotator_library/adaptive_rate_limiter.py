@@ -120,6 +120,10 @@ class AdaptiveRateLimiter:
             return
 
         lock = await self._lock_manager.get_lock(provider)
+
+        # Capture log args outside lock to minimize critical section
+        _log: Optional[tuple] = None
+
         async with lock:
             state = await self._ensure_state(provider)
             now = time.monotonic()
@@ -133,10 +137,7 @@ class AdaptiveRateLimiter:
 
                 if state.ceiling_rps is not None and state.ceiling_time is not None:
                     if (now - state.ceiling_time) >= self.increase_interval * 3:
-                        lib_logger.info(
-                            f"AdaptiveRateLimiter: ceiling expired for {provider}, "
-                            f"clearing {state.ceiling_rps:.1f} rps cap"
-                        )
+                        _log = ("info", "ceiling_expired", provider, state.ceiling_rps)
                         state.ceiling_rps = None
                         state.ceiling_time = None
 
@@ -151,10 +152,7 @@ class AdaptiveRateLimiter:
                 state.last_increase = now
 
                 if state.current_rps != old_rps:
-                    lib_logger.debug(
-                        f"AdaptiveRateLimiter: {provider} rate increased "
-                        f"{old_rps:.1f} -> {state.current_rps:.1f} rps"
-                    )
+                    _log = ("debug", "rate_increased", provider, old_rps, state.current_rps)
             else:
                 state.ceiling_rps = state.current_rps
                 state.ceiling_time = now
@@ -165,10 +163,31 @@ class AdaptiveRateLimiter:
                 state.total_429s += 1
                 state.tokens = 0.0
 
-                lib_logger.info(
-                    f"AdaptiveRateLimiter: {provider} 429 received, rate decreased "
-                    f"{old_rps:.1f} -> {state.current_rps:.1f} rps "
-                    f"(ceiling={state.ceiling_rps:.1f}, 429s={state.total_429s})"
+                _log = ("info", "rate_decreased", provider, old_rps, state.current_rps, state.ceiling_rps, state.total_429s)
+
+        # Logging outside lock — I/O no longer blocks other waiters
+        if _log is not None:
+            level, kind = _log[0], _log[1]
+            if kind == "ceiling_expired":
+                _, _, _provider, _cap = _log
+                lib_logger.log(
+                    getattr(logging, level.upper()),
+                    "AdaptiveRateLimiter: ceiling expired for %s, clearing %.1f rps cap",
+                    _provider, _cap,
+                )
+            elif kind == "rate_increased":
+                _, _, _provider, _old, _new = _log
+                lib_logger.log(
+                    getattr(logging, level.upper()),
+                    "AdaptiveRateLimiter: %s rate increased %.1f -> %.1f rps",
+                    _provider, _old, _new,
+                )
+            elif kind == "rate_decreased":
+                _, _, _provider, _old, _new, _ceil, _count = _log
+                lib_logger.log(
+                    getattr(logging, level.upper()),
+                    "AdaptiveRateLimiter: %s 429 received, rate decreased %.1f -> %.1f rps (ceiling=%.1f, 429s=%d)",
+                    _provider, _old, _new, _ceil, _count,
                 )
 
     async def record_success(self, provider: str) -> None:

@@ -69,10 +69,43 @@ class UsageManagerSerializationMixin:
 
         return data
 
+    def _score_key(
+        self,
+        cred: str,
+        usage_count: int,
+        credential_priorities: Optional[Dict[str, int]] = None,
+    ) -> Tuple[int, int, float, str]:
+        """Compute composite sort score for a credential.
+
+        Lower tuple = higher priority for ascending sort.
+        Components: (priority, -usage_count, -last_used, cred_id)
+
+        Args:
+            cred: Credential identifier
+            usage_count: Current usage count for load balancing
+            credential_priorities: Optional dict mapping credentials to priority levels
+
+        Returns:
+            Sort key tuple suitable for ascending comparison
+        """
+        priority = credential_priorities.get(cred, 999) if credential_priorities else 999
+        last_used = (
+            self._usage_data.get(cred, {}).get("last_used_ts", 0)
+            if self._usage_data
+            else 0
+        )
+        return (
+            priority,  # ASC: lower priority number = higher priority
+            -usage_count,  # DESC: higher usage = more established
+            -last_used,  # DESC: more recent = preferred for ties
+            cred,  # ASC: stable alphabetical ordering
+        )
+
     def _sort_sequential(
         self,
         candidates: List[Tuple[str, int]],
         credential_priorities: Optional[Dict[str, int]] = None,
+        scores: Optional[Dict[str, Tuple[int, int, float, str]]] = None,
     ) -> List[Tuple[str, int]]:
         """
         Sort credentials for sequential mode with position retention.
@@ -89,6 +122,7 @@ class UsageManagerSerializationMixin:
         Args:
             candidates: List of (credential_id, usage_count) tuples
             credential_priorities: Optional dict mapping credentials to priority levels
+            scores: Optional pre-computed score dict from _score_key for reuse across calls
 
         Returns:
             Sorted list of candidates (same format as input)
@@ -99,24 +133,14 @@ class UsageManagerSerializationMixin:
         if len(candidates) == 1:
             return candidates
 
-        def sort_key(item: Tuple[str, int]) -> Tuple[int, int, float, str]:
-            cred, usage_count = item
-            priority = (
-                credential_priorities.get(cred, 999) if credential_priorities else 999
-            )
-            last_used = (
-                self._usage_data.get(cred, {}).get("last_used_ts", 0)
-                if self._usage_data
-                else 0
-            )
-            return (
-                priority,  # ASC: lower priority number = higher priority
-                -usage_count,  # DESC: higher usage = more established
-                -last_used,  # DESC: more recent = preferred for ties
-                cred,  # ASC: stable alphabetical ordering
-            )
+        # Pre-compute scores if not provided by caller
+        if scores is None:
+            scores = {
+                cred: self._score_key(cred, usage, credential_priorities)
+                for cred, usage in candidates
+            }
 
-        sorted_candidates = sorted(candidates, key=sort_key)
+        sorted_candidates = sorted(candidates, key=lambda item: scores[item[0]])
 
         # Debug logging - show top 3 credentials in ordering
         if lib_logger.isEnabledFor(logging.DEBUG):

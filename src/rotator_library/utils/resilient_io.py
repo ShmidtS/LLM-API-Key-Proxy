@@ -573,6 +573,9 @@ def safe_write_json(
     Note: Uses orjson with OPT_INDENT_2 always. orjson never ASCII-escapes
     (it outputs UTF-8 directly), which is safe for JSON files read as UTF-8.
 
+    This is a synchronous function. For async callers, use async_safe_write_json
+    instead to avoid blocking the event loop during Windows os.replace retries.
+
     Args:
         path: File path to write to
         data: JSON-serializable data
@@ -644,6 +647,101 @@ def safe_write_json(
         logger.warning(f"Failed to write JSON to {path}: {e}")
 
         # Register for retry if buffering is enabled
+        if buffer_on_failure:
+            registry = BufferedWriteRegistry.get_instance()
+            registry.register_pending(
+                path,
+                data,
+                serializer,
+                {"secure_permissions": secure_permissions},
+            )
+            logger.debug(f"Buffered {path.name} for retry on next interval or shutdown")
+
+        return False
+
+
+async def async_safe_write_json(
+    path: Union[str, Path],
+    data: Dict[str, Any],
+    logger: logging.Logger,
+    atomic: bool = True,
+    secure_permissions: bool = False,
+    buffer_on_failure: bool = False,
+) -> bool:
+    """
+    Async variant of safe_write_json for use in async hot paths.
+
+    Uses _async_resilient_os_replace instead of _resilient_os_replace to avoid
+    blocking the event loop during Windows os.replace retries (time.sleep -> asyncio.sleep).
+
+    Args:
+        path: File path to write to
+        data: JSON-serializable data
+        logger: Logger for warnings
+        atomic: Use atomic write pattern (tempfile + move)
+        secure_permissions: Set file permissions to 0o600 (default: False)
+        buffer_on_failure: Register with BufferedWriteRegistry on failure (default: False)
+
+    Returns:
+        True on success, False on failure (never raises)
+    """
+    path = Path(path)
+
+    def serializer(d: Any) -> str:
+        return orjson.dumps(d, option=orjson.OPT_INDENT_2).decode()
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = serializer(data)
+
+        if atomic:
+            tmp_fd = None
+            tmp_path = None
+            try:
+                tmp_fd, tmp_path = tempfile.mkstemp(
+                    dir=path.parent, prefix=".tmp_", suffix=".json"
+                )
+                with os.fdopen(tmp_fd, "wb") as f:
+                    f.write(content.encode("utf-8"))
+                    tmp_fd = None
+
+                if secure_permissions and os.name != "nt":
+                    try:
+                        os.chmod(tmp_path, 0o600)
+                    except (OSError, AttributeError) as e:
+                        _logger.debug("Failed to set secure permissions: %s", e)
+
+                await _async_resilient_os_replace(tmp_path, path)
+                tmp_path = None
+            finally:
+                if tmp_fd is not None:
+                    try:
+                        os.close(tmp_fd)
+                    except OSError as e:
+                        logger.debug("I/O operation failed: %s", e)
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError as e:
+                        logger.debug("I/O operation failed: %s", e)
+        else:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+            if secure_permissions and os.name != "nt":
+                try:
+                    os.chmod(path, 0o600)
+                except (OSError, AttributeError) as e:
+                    logger.debug("Failed to set secure permissions: %s", e)
+
+        if buffer_on_failure:
+            BufferedWriteRegistry.get_instance().unregister(path)
+
+        return True
+
+    except (OSError, PermissionError, IOError, TypeError, ValueError) as e:
+        logger.warning(f"Failed to write JSON to {path}: {e}")
+
         if buffer_on_failure:
             registry = BufferedWriteRegistry.get_instance()
             registry.register_pending(

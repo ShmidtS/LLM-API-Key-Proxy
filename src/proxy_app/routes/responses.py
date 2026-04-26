@@ -406,7 +406,7 @@ async def _chat_sse_to_responses_sse(
             try:
                 await chat_sse_stream.aclose()
             except Exception:
-                pass
+                logger.debug("Error closing SSE stream", exc_info=True)
 
 
 def _parse_sse_payload(event: str | bytes) -> dict[str, Any] | str | None:

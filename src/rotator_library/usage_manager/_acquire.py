@@ -221,14 +221,18 @@ class UsageManagerAcquireMixin:
                         # Sequential mode: sort credentials by priority, usage, recency
                         # Keep all candidates in sorted order (no filtering to single key)
                         selection_method = "sequential"
-                        if tier1_keys:
+                        all_seq_keys = tier2_keys + tier1_keys
+                        if all_seq_keys:
+                            seq_scores = {
+                                cred: self._score_key(cred, usage, credential_priorities)
+                                for cred, usage in all_seq_keys
+                            }
                             tier1_keys = self._sort_sequential(
-                                tier1_keys, credential_priorities
-                            )
-                        if tier2_keys:
+                                tier1_keys, credential_priorities, scores=seq_scores
+                            ) if tier1_keys else []
                             tier2_keys = self._sort_sequential(
-                                tier2_keys, credential_priorities
-                            )
+                                tier2_keys, credential_priorities, scores=seq_scores
+                            ) if tier2_keys else []
                         all_available_keys = tier2_keys + tier1_keys
                     elif self.rotation_tolerance > 0:
                         # Balanced mode with weighted randomness across ALL candidates
@@ -244,15 +248,11 @@ class UsageManagerAcquireMixin:
                         else:
                             all_available_keys = []
                     else:
-                        # Deterministic: sort by usage within each tier
+                        # Deterministic: sort by usage, idle keys first
                         selection_method = "least-used"
-                        tier1_keys.sort(key=lambda x: x[1])
-                        tier2_keys.sort(key=lambda x: x[1])
-
-                        # Combine idle keys first, then active, sorted by usage.
-                        # Preferring idle keys spreads load across more credentials.
-                        all_available_keys = tier2_keys + tier1_keys
-                        all_available_keys.sort(key=lambda x: x[1])
+                        all_available_keys = sorted(
+                            tier2_keys + tier1_keys, key=lambda x: x[1]
+                        )
 
                     for key, usage in all_available_keys:
                         state = self.key_states[key]
@@ -448,14 +448,18 @@ class UsageManagerAcquireMixin:
                     # Sequential mode: sort credentials by priority, usage, recency
                     # Keep all candidates in sorted order (no filtering to single key)
                     selection_method = "sequential"
-                    if tier1_keys:
+                    all_seq_keys = tier2_keys + tier1_keys
+                    if all_seq_keys:
+                        seq_scores = {
+                            cred: self._score_key(cred, usage, credential_priorities)
+                            for cred, usage in all_seq_keys
+                        }
                         tier1_keys = self._sort_sequential(
-                            tier1_keys, credential_priorities
-                        )
-                    if tier2_keys:
+                            tier1_keys, credential_priorities, scores=seq_scores
+                        ) if tier1_keys else []
                         tier2_keys = self._sort_sequential(
-                            tier2_keys, credential_priorities
-                        )
+                            tier2_keys, credential_priorities, scores=seq_scores
+                        ) if tier2_keys else []
                     # Combine idle keys first, then active, for better distribution.
                     all_available_keys = tier2_keys + tier1_keys
                 elif self.rotation_tolerance > 0:
@@ -472,15 +476,11 @@ class UsageManagerAcquireMixin:
                     else:
                         all_available_keys = []
                 else:
-                    # Deterministic: sort by usage within each tier
+                    # Deterministic: sort by usage, idle keys first
                     selection_method = "least-used"
-                    tier1_keys.sort(key=lambda x: x[1])
-                    tier2_keys.sort(key=lambda x: x[1])
-
-                    # Combine idle keys first, then active, sorted by usage.
-                    # Preferring idle keys spreads load across more credentials.
-                    all_available_keys = tier2_keys + tier1_keys
-                    all_available_keys.sort(key=lambda x: x[1])
+                    all_available_keys = sorted(
+                        tier2_keys + tier1_keys, key=lambda x: x[1]
+                    )
 
                 # Attempt to acquire a key, preferring idle keys for better distribution.
                 for key, usage in all_available_keys:

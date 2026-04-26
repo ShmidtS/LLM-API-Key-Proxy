@@ -29,7 +29,7 @@ from typing import Any, Dict, Optional
 from ..async_locks import ReadWriteLock
 from ..config import env_bool as _env_bool, env_int as _env_int
 from ..utils.json_utils import json_loads
-from ..utils.resilient_io import safe_write_json
+from ..utils.resilient_io import safe_write_json, async_safe_write_json
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -285,7 +285,7 @@ class ProviderCache:
                 },
             }
 
-            if safe_write_json(
+            if await async_safe_write_json(
                 self._cache_file, cache_data, lib_logger, secure_permissions=True
             ):
                 self._stats["writes"] += 1

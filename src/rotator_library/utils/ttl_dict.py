@@ -5,10 +5,13 @@
 # pylint: disable=R0903
 
 import asyncio
+import logging
 import threading
 import time
 from collections import OrderedDict
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class TTLDict:
@@ -189,6 +192,22 @@ class TTLDict:
         except RuntimeError:
             pass
 
+    def start_cleanup_task(self, interval: Optional[float] = None) -> None:
+        if interval is not None:
+            self._cleanup_interval = interval
+        if self._cleanup_task is not None and not self._cleanup_task.done():
+            return
+        try:
+            asyncio.get_running_loop()
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+        except RuntimeError:
+            pass
+
+    def stop_cleanup_task(self) -> None:
+        if self._cleanup_task is not None:
+            self._cleanup_task.cancel()
+            self._cleanup_task = None
+
     async def _cleanup_loop(self) -> None:
         while True:
             try:
@@ -197,7 +216,7 @@ class TTLDict:
             except asyncio.CancelledError:
                 break
             except Exception:
-                pass
+                logger.debug("TTL dict cleanup error", exc_info=True)
 
     def close(self) -> None:
         if self._cleanup_task is not None:

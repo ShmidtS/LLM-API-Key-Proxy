@@ -9,6 +9,7 @@ import logging
 import orjson
 import os
 import re
+import secrets
 import time
 from pathlib import Path
 from dotenv import set_key, get_key
@@ -1121,9 +1122,9 @@ def ensure_env_defaults():
 
     # Check for PROXY_API_KEY, similar to setup_env.bat
     if get_key(str(_get_env_file()), "PROXY_API_KEY") is None:
-        default_key = "VerysecretKey"
+        default_key = secrets.token_urlsafe(32)
         console.print(
-            f"Adding default [bold cyan]PROXY_API_KEY[/bold cyan] to [bold yellow]{_get_env_file().name}[/bold yellow]..."
+            f"Adding generated [bold cyan]PROXY_API_KEY[/bold cyan] to [bold yellow]{_get_env_file().name}[/bold yellow]..."
         )
         set_key(str(_get_env_file()), "PROXY_API_KEY", default_key)
 
@@ -2662,7 +2663,7 @@ def run_credential_tool(from_launcher=False):
     # Check if we need to show loading screen
     if not from_launcher:
         # Standalone mode - show full loading UI
-        os.system("cls" if os.name == "nt" else "clear")
+        print("\033[2J\033[H", end="", flush=True)
 
         _start_time = time.time()
 

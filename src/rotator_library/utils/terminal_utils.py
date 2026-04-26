@@ -21,7 +21,7 @@ def clear_screen(subtitle: str = ""):
         subtitle: If provided, displays a header panel with this subtitle.
                   If empty/None, just clears the screen.
     """
-    os.system("cls" if os.name == "nt" else "clear")
+    print("\033[2J\033[H", end="", flush=True)
     if subtitle:
         _console.print(
             Panel(
