@@ -306,6 +306,8 @@ class UsageManagerRecordingMixin:
                         if cost is not None:
                             usage_data_ref["approx_cost"] += cost
                 except Exception as e:
+                    # LiteLLM currently raises a generic Exception for cost map misses,
+                    # so string matching is required until a typed exception is exposed.
                     if "not found in cost map" in str(e).lower():
                         lib_logger.debug(f"Cost map entry missing for model {model}, skipping cost calculation")
                     else:

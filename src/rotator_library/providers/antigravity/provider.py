@@ -15,6 +15,7 @@ from ...utils.json_utils import json_loads
 from ...config import env_bool, env_int
 from ...error_handler import EmptyResponseError, TransientQuotaError
 from ...model_definitions import ModelDefinitions
+from ...timeout_config import TimeoutConfig
 from ...transaction_logger import AntigravityProviderLogger
 from ...utils.duration import parse_duration as _parse_duration_shared
 from ..provider_interface import ProviderInterface, UsageResetConfigDef, QuotaGroupMap, build_bearer_headers
@@ -553,7 +554,7 @@ class AntigravityProvider(
             }
 
             response = await client.post(
-                url, json=payload, headers=headers, timeout=30.0
+                url, json=payload, headers=headers, timeout=TimeoutConfig.provider_request()
             )
             try:
                 response.raise_for_status()

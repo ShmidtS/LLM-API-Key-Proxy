@@ -5,6 +5,7 @@ from typing import Any
 
 import orjson
 from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi.responses import JSONResponse
 
 from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key, make_error_response
@@ -30,7 +31,19 @@ async def web_search(
     The request is forwarded to the appropriate provider based on
     the model prefix in the request body.
     """
-    request_data = orjson.loads(await request.body())
+    try:
+        request_data = orjson.loads(await request.body())
+    except orjson.JSONDecodeError:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "Invalid JSON in request body",
+                    "type": "invalid_request_error",
+                    "code": "invalid_json",
+                }
+            },
+        )
 
     log_request_to_console(
         url=str(request.url),

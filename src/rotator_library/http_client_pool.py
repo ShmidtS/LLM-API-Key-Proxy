@@ -323,6 +323,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         try:
             ssl_context.set_ciphers(AZURE_COMPATIBLE_CIPHERS)
         except ssl.SSLError:
+            lib_logger.debug("SSL cipher configuration failed, using defaults", exc_info=True)
             pass  # Use default ciphers if set_ciphers fails
 
         if not self._ssl_verify:

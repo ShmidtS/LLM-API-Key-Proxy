@@ -26,6 +26,11 @@ from rotator_library.credential_manager import CredentialManager
 from rotator_library.dns_fix import close_doh_client, close_dns_executor
 from rotator_library.model_info_service import init_model_info_service
 from proxy_app.batch_manager import EmbeddingBatcher
+from proxy_app.config import (
+    DEFAULT_GLOBAL_TIMEOUT,
+    MAX_GLOBAL_TIMEOUT,
+    MIN_GLOBAL_TIMEOUT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -163,20 +168,12 @@ def create_lifespan(config: LifespanConfig):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage the RotatingClient's lifecycle with the app's lifespan."""
-        # Startup guard: warn if PROXY_API_KEY is missing and auth not explicitly disabled
-        if not os.getenv("PROXY_API_KEY") and os.getenv(
-            "ALLOW_NO_AUTH", ""
-        ).lower() != "true":
+        # Startup guard: warn if PROXY_API_KEY is missing; local/dev open access is allowed.
+        if not config.proxy_api_key:
             logger.warning("=" * 70)
-            logger.warning(
-                "SECURITY: PROXY_API_KEY is not set and ALLOW_NO_AUTH is not enabled!"
-            )
-            logger.warning(
-                "Your proxy is running WITHOUT authentication — anyone can access it."
-            )
-            logger.warning(
-                "Set PROXY_API_KEY in .env or set ALLOW_NO_AUTH=true to suppress this warning."
-            )
+            logger.warning("SECURITY: PROXY_API_KEY is not set; proxy authentication is disabled.")
+            logger.warning("Your proxy is running WITHOUT authentication — anyone can access it.")
+            logger.warning("Set PROXY_API_KEY in .env to require Authorization: Bearer authentication.")
             logger.warning("=" * 70)
 
         # Suppress noisy ConnectionResetError from Windows ProactorEventLoop
@@ -346,22 +343,29 @@ def create_lifespan(config: LifespanConfig):
             "gemini_cli": {"project_id": os.getenv("GEMINI_CLI_PROJECT_ID")}
         }
 
-        # Load global timeout from environment (default 30 seconds)
+        # Load global timeout from environment.
         try:
-            global_timeout = int(os.getenv("GLOBAL_TIMEOUT", "30"))
+            global_timeout = int(os.getenv("GLOBAL_TIMEOUT", str(DEFAULT_GLOBAL_TIMEOUT)))
         except ValueError:
-            logger.warning("Invalid GLOBAL_TIMEOUT value, using default 30")
-            global_timeout = 30
-        if global_timeout < 5:
             logger.warning(
-                "GLOBAL_TIMEOUT=%d is too low, clamping to 5", global_timeout
+                "Invalid GLOBAL_TIMEOUT value, using default %d",
+                DEFAULT_GLOBAL_TIMEOUT,
             )
-            global_timeout = 5
-        elif global_timeout > 600:
+            global_timeout = DEFAULT_GLOBAL_TIMEOUT
+        if global_timeout < MIN_GLOBAL_TIMEOUT:
             logger.warning(
-                "GLOBAL_TIMEOUT=%d is too high, clamping to 600", global_timeout
+                "GLOBAL_TIMEOUT=%d is too low, clamping to %d",
+                global_timeout,
+                MIN_GLOBAL_TIMEOUT,
             )
-            global_timeout = 600
+            global_timeout = MIN_GLOBAL_TIMEOUT
+        elif global_timeout > MAX_GLOBAL_TIMEOUT:
+            logger.warning(
+                "GLOBAL_TIMEOUT=%d is too high, clamping to %d",
+                global_timeout,
+                MAX_GLOBAL_TIMEOUT,
+            )
+            global_timeout = MAX_GLOBAL_TIMEOUT
 
         # The client now uses the root logger configuration
         client = RotatingClient(

@@ -27,10 +27,7 @@ from proxy_app.config import DEFAULT_HOST, DEFAULT_PORT, env_int
 
 console = Console()
 
-
-
-
-
+LauncherConfigValue = str | int | bool
 
 
 class LauncherConfig:
@@ -38,15 +35,15 @@ class LauncherConfig:
 
     def __init__(self, config_path: Path = Path("launcher_config.json")):
         self.config_path = config_path
-        self.defaults = {
+        self.defaults: dict[str, LauncherConfigValue] = {
             "host": DEFAULT_HOST,
             "port": DEFAULT_PORT,
             "enable_request_logging": False,
             "enable_raw_logging": False,
         }
-        self.config = self.load()
+        self.config: dict[str, LauncherConfigValue] = self.load()
 
-    def load(self) -> dict:
+    def load(self) -> dict[str, LauncherConfigValue]:
         """Load config from file or create with defaults."""
         if self.config_path.exists():
             try:
@@ -89,10 +86,10 @@ class SettingsDetector:
     """Detects settings from .env for display"""
 
     @staticmethod
-    def _load_local_env() -> dict:
+    def _load_local_env() -> dict[str, str]:
         """Load environment variables from local .env file only"""
         env_file = get_data_file(".env")
-        env_dict = {}
+        env_dict: dict[str, str] = {}
         if not env_file.exists():
             return env_dict
         try:

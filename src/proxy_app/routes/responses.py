@@ -4,7 +4,7 @@
 import logging
 import time
 import uuid
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, TypedDict
 
 import orjson
 from fastapi import APIRouter, Request, Depends
@@ -36,6 +36,24 @@ _RESPONSES_ONLY_FIELDS = {
     "store",
     "truncation",
 }
+
+
+class ChatTextPart(TypedDict):
+    type: str
+    text: str
+
+
+class ImageUrl(TypedDict):
+    url: str
+
+
+class ChatImagePart(TypedDict):
+    type: str
+    image_url: ImageUrl | dict[str, Any]
+
+
+ChatContentPart = ChatTextPart | ChatImagePart
+ChatContent = str | list[ChatContentPart]
 
 
 @router.post("/v1/responses")
@@ -256,13 +274,13 @@ def _append_chat_message(
     messages.append(message)
 
 
-def _content_to_chat_content(content: Any) -> Any:
+def _content_to_chat_content(content: object) -> ChatContent:
     if isinstance(content, str):
         return content
 
     if isinstance(content, list):
-        parts = []
-        text_parts = []
+        parts: list[ChatContentPart] = []
+        text_parts: list[str] = []
         has_non_text = False
 
         for part in content:
@@ -290,7 +308,7 @@ def _content_to_chat_content(content: Any) -> Any:
     return "" if content is None else str(content)
 
 
-def _content_part_to_chat_part(part: Any) -> Any:
+def _content_part_to_chat_part(part: object) -> str | ChatImagePart | None:
     if isinstance(part, str):
         return part
     if not isinstance(part, dict):
@@ -298,7 +316,8 @@ def _content_part_to_chat_part(part: Any) -> Any:
 
     part_type = part.get("type")
     if part_type in ("input_text", "output_text", "text"):
-        return part.get("text", "")
+        text = part.get("text", "")
+        return text if isinstance(text, str) else None
 
     if part_type == "input_image":
         image_url = part.get("image_url") or part.get("url")

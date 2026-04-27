@@ -992,7 +992,7 @@ class ModelRegistry(metaclass=SingletonMeta):
             except asyncio.CancelledError:
                 break
             except Exception as ex:
-                logger.error("Registry refresh error: %s", ex)
+                logger.error("Registry refresh error: %s", ex, exc_info=True)
 
     async def _load_all_sources(self):
         """Fetch from all adapters concurrently."""

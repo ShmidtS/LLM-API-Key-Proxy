@@ -17,6 +17,7 @@ All values can be overridden via environment variables:
     TIMEOUT_QUOTA_VIEWER_FETCH - Quota viewer stats fetch (default: 30s)
     TIMEOUT_QUOTA_VIEWER_ACTION - Quota viewer POST actions (default: 60s)
     TIMEOUT_MODEL_FILTER_FETCH - Model filter GUI model list fetch (default: 30s)
+    TIMEOUT_PROVIDER_REQUEST - Provider metadata/request helper timeout (default: 30s)
 """
 
 import os
@@ -51,6 +52,7 @@ class TimeoutConfig:
     _QUOTA_VIEWER_FETCH = 30.0  # Fetching stats from proxy
     _QUOTA_VIEWER_ACTION = 60.0  # Posting actions (reload, force_refresh)
     _MODEL_FILTER_FETCH = 30.0  # Fetching model lists from providers
+    _PROVIDER_REQUEST = 30.0  # Provider metadata/request helper calls
 
     # Cached httpx.Timeout instances
     _STREAMING_TIMEOUT: Optional[httpx.Timeout] = None
@@ -88,6 +90,11 @@ class TimeoutConfig:
     def model_filter_fetch(cls) -> float:
         """Model list fetch timeout for model filter GUI."""
         return cls._get_env_float("TIMEOUT_MODEL_FILTER_FETCH", cls._MODEL_FILTER_FETCH)
+
+    @classmethod
+    def provider_request(cls) -> float:
+        """Provider metadata/request helper timeout."""
+        return cls._get_env_float("TIMEOUT_PROVIDER_REQUEST", cls._PROVIDER_REQUEST)
 
     @classmethod
     def dns_query(cls) -> float:

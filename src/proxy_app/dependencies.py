@@ -70,9 +70,11 @@ def get_embedding_batcher(request: Request) -> EmbeddingBatcher:
     return batcher
 
 
-def make_error_response(message: str, error_type: str = "api_error", code: str | None = None) -> dict:
+def make_error_response(
+    message: str, error_type: str = "api_error", code: str | None = None
+) -> dict[str, dict[str, str]]:
     """Build a consistent error JSON payload for HTTPException.detail."""
-    err: dict = {"message": message, "type": error_type}
+    err: dict[str, str] = {"message": message, "type": error_type}
     if code is not None:
         err["code"] = code
     return {"error": err}

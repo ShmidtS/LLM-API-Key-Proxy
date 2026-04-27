@@ -17,12 +17,15 @@ import json
 import os
 import logging
 from typing import List, Dict, Any, AsyncGenerator, Union
+import aiohttp
 import httpx
 import litellm
+import orjson
 from litellm.types.utils import Delta as DeltaType, ChatCompletionMessageToolCall
 
 from .provider_interface import ProviderInterface, strip_provider_prefix, build_bearer_headers
 from .base_streaming_provider import parse_sse_stream
+from ..timeout_config import TimeoutConfig
 from ..utils.json_utils import json_loads
 
 lib_logger = logging.getLogger("rotator_library")
@@ -56,7 +59,7 @@ class ElysiverProvider(ProviderInterface):
         try:
             url = f"{self.api_base}/models"
             headers = build_bearer_headers(api_key)
-            response = await client.get(url, headers=headers, timeout=10)
+            response = await client.get(url, headers=headers, timeout=TimeoutConfig.provider_request())
             if response.status_code < 400:
                 data = response.json()
                 return [
@@ -67,8 +70,18 @@ class ElysiverProvider(ProviderInterface):
             lib_logger.warning(
                 "Elysiver model discovery HTTP %d", response.status_code,
             )
+        except aiohttp.ClientResponseError as ex:
+            lib_logger.warning("Elysiver model discovery HTTP %d", ex.status)
+        except aiohttp.ClientError as ex:
+            lib_logger.warning("Elysiver model discovery connection issue: %s", ex)
+        except httpx.HTTPStatusError as ex:
+            lib_logger.warning("Elysiver model discovery HTTP %d", ex.response.status_code)
+        except httpx.RequestError as ex:
+            lib_logger.warning("Elysiver model discovery connection issue: %s", ex)
+        except (orjson.JSONDecodeError, ValueError) as ex:
+            lib_logger.warning("Elysiver model discovery parse failure: %s", ex)
         except Exception:
-            lib_logger.debug("Elysiver model discovery failed", exc_info=True)
+            lib_logger.warning("Elysiver model discovery failed", exc_info=True)
         return []
 
     def has_custom_logic(self) -> bool:

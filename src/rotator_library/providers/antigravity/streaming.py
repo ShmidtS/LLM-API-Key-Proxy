@@ -654,7 +654,7 @@ class AntigravityStreamingMixin:
             headers = build_bearer_headers(token)
 
             response = await client.post(
-                url, headers=headers, json=antigravity_payload, timeout=30
+                url, headers=headers, json=antigravity_payload, timeout=TimeoutConfig.provider_request()
             )
             try:
                 response.raise_for_status()

@@ -5,7 +5,7 @@ import json
 import os
 import httpx
 import logging
-from typing import List, Dict, Any
+from typing import Any
 from .provider_interface import ProviderInterface
 from ..model_definitions import ModelDefinitions
 
@@ -44,7 +44,7 @@ class OpenAICompatibleProvider(ProviderInterface):
         # Initialize model definitions loader
         self.model_definitions = ModelDefinitions()
 
-    async def get_models(self, api_key: str, client: httpx.AsyncClient) -> List[str]:
+    async def get_models(self, api_key: str, client: httpx.AsyncClient) -> list[str]:
         """
         Fetches the list of available models from the OpenAI-compatible API.
         Combines dynamic discovery with static model definitions.
@@ -127,7 +127,7 @@ class OpenAICompatibleProvider(ProviderInterface):
 
         return models
 
-    def get_model_options(self, model_name: str) -> Dict[str, Any]:
+    def get_model_options(self, model_name: str) -> dict[str, Any]:
         """
         Get options for a specific model from static definitions or environment variables.
 
@@ -150,7 +150,7 @@ class OpenAICompatibleProvider(ProviderInterface):
         """
         return False
 
-    async def get_auth_header(self, credential_identifier: str) -> Dict[str, str]:
+    async def get_auth_header(self, credential_identifier: str) -> dict[str, str]:
         """
         Returns the standard Bearer token header for API key authentication.
         """
