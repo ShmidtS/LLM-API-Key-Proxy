@@ -136,6 +136,7 @@ KNOWN_PROVIDERS: Set[str] = _build_known_providers_set()
 # Manually add providers with custom plugins that aren't in scraped LiteLLM data
 KNOWN_PROVIDERS.add("trybons")
 KNOWN_PROVIDERS.add("colin")  # COLIN uses OpenAI Responses API format
+KNOWN_PROVIDERS.add("elysiver")  # Elysiver uses OpenAI Responses API format
 KNOWN_PROVIDERS.add("zai")  # ZAI has custom quota tracking provider
 KNOWN_PROVIDERS.add("fireworks")  # fireworks_ai alias — users specify "fireworks/" prefix
 

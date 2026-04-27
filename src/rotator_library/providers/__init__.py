@@ -15,6 +15,7 @@ from .qwen_auth_base import QwenAuthBase as _QwenAuthBase
 from .iflow_auth_base import IFlowAuthBase as _IFlowAuthBase
 from .antigravity_auth_base import AntigravityAuthBase as _AntigravityAuthBase
 from .colin_provider import ColinProvider as _ColinProvider
+from .elysiver_provider import ElysiverProvider as _ElysiverProvider
 from .openai_compatible_provider import OpenAICompatibleProvider
 
 __all__ = [
@@ -38,6 +39,7 @@ PROVIDER_AUTH_MAP: Dict[str, type] = {
     "iflow": _IFlowAuthBase,
     "antigravity": _AntigravityAuthBase,
     "colin": _ColinProvider,
+    "elysiver": _ElysiverProvider,
 }
 
 
@@ -45,6 +47,7 @@ PROVIDER_AUTH_MAP: Dict[str, type] = {
 # These providers implement has_custom_logic() = True and need early registration
 # to bypass the standard litellm flow
 PROVIDER_PLUGINS["colin"] = _ColinProvider
+PROVIDER_PLUGINS["elysiver"] = _ElysiverProvider
 
 
 # --- Lazy Provider Loading ---
