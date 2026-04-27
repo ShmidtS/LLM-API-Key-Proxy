@@ -44,7 +44,7 @@ async def create_response(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """
     OpenAI Responses API endpoint.
 
@@ -405,8 +405,8 @@ async def _chat_sse_to_responses_sse(
         if hasattr(chat_sse_stream, "aclose"):
             try:
                 await chat_sse_stream.aclose()
-            except Exception:
-                logger.debug("Error closing SSE stream", exc_info=True)
+            except Exception as e:
+                logger.debug("Error closing SSE stream: %s", e)
 
 
 def _parse_sse_payload(event: str | bytes) -> dict[str, Any] | str | None:

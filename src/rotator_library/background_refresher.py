@@ -6,6 +6,7 @@
 import os
 import asyncio
 import logging
+import httpx
 from typing import TYPE_CHECKING, Optional, Dict, Any, List
 
 if TYPE_CHECKING:
@@ -269,10 +270,8 @@ class BackgroundRefresher:
                     self._client.usage_manager, credentials
                 )
                 lib_logger.debug(f"{provider_name} {job_name}: initial run complete")
-            except Exception as e:
-                lib_logger.error(
-                    f"Error in {provider_name} {job_name} (initial run): {e}"
-                )
+            except (httpx.HTTPError, TimeoutError, ValueError, KeyError) as e:
+                lib_logger.error(f"Error in {provider_name} {job_name} (initial run): {type(e).__name__}: {e}")
 
         # Main loop
         while True:
@@ -285,8 +284,8 @@ class BackgroundRefresher:
             except asyncio.CancelledError:
                 lib_logger.debug(f"{provider_name} {job_name}: cancelled")
                 break
-            except Exception as e:
-                lib_logger.error(f"Error in {provider_name} {job_name}: {e}")
+            except (httpx.HTTPError, TimeoutError, ValueError, KeyError) as e:
+                lib_logger.error(f"Error in {provider_name} {job_name}: {type(e).__name__}: {e}")
 
     async def _run_usage_reset(self) -> None:
         """Periodically check and reset daily/window usage stats.
@@ -303,7 +302,7 @@ class BackgroundRefresher:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                lib_logger.error(f"Error in usage reset background task: {e}")
+                lib_logger.error(f"Error in usage reset background task: {type(e).__name__}: {e}")
 
     async def _run_cooldown_cleanup(self) -> None:
         """Periodically clean expired cooldown entries.
@@ -320,7 +319,7 @@ class BackgroundRefresher:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                lib_logger.error(f"Error in cooldown cleanup background task: {e}")
+                lib_logger.error(f"Error in cooldown cleanup background task: {type(e).__name__}: {e}")
 
     async def _run(self):
         """The main loop for OAuth token refresh."""
@@ -370,4 +369,4 @@ class BackgroundRefresher:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                lib_logger.error(f"Unexpected error in background refresher loop: {e}")
+                lib_logger.error(f"Unexpected error in background refresher loop: {type(e).__name__}: {e}")

@@ -137,6 +137,6 @@ class FirmwareQuotaTracker(LightweightQuotaMixin):
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
             return dt.timestamp()
-        except Exception as e:
-            lib_logger.warning(f"Failed to parse ISO timestamp '{iso_string}': {e}")
+        except (ValueError, TypeError, KeyError) as e:
+            lib_logger.warning(f"Failed to parse ISO timestamp '{iso_string}': {e}", exc_info=True)
             return None

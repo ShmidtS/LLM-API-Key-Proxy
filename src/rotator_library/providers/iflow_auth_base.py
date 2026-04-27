@@ -648,7 +648,7 @@ class IFlowAuthBase(GoogleOAuthBase):
                     creds_from_file["api_key"] = user_info["api_key"]
                 if user_info.get("email"):
                     creds_from_file["email"] = user_info["email"]
-            except Exception as e:
+            except (httpx.HTTPError, ValueError, KeyError) as e:
                 lib_logger.warning(
                     f"Failed to update API key during token refresh: {e}"
                 )
@@ -794,7 +794,7 @@ class IFlowAuthBase(GoogleOAuthBase):
                 try:
                     webbrowser.open(auth_url)
                     lib_logger.info("Browser opened successfully for iFlow OAuth flow")
-                except Exception as e:
+                except (OSError, webbrowser.Error) as e:
                     lib_logger.warning(
                         f"Failed to open browser automatically: {e}. Please open the URL manually."
                     )
@@ -878,7 +878,7 @@ class IFlowAuthBase(GoogleOAuthBase):
                 creds["_proxy_metadata"]["last_check_timestamp"] = time.time()
 
             return {"email": email}
-        except Exception as e:
+        except (httpx.HTTPError, ValueError, KeyError, OSError, IOError) as e:
             lib_logger.error(f"Failed to get iFlow user info from credentials: {e}")
             return {"email": None}
 

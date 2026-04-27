@@ -574,7 +574,7 @@ class AntigravityProvider(
             if models:
                 lib_logger.info(f"Discovered {len(models)} models")
                 return models
-        except Exception as e:
+        except httpx.HTTPError as e:
             lib_logger.warning(f"Dynamic model discovery failed: {e}")
 
         return [f"antigravity/{m}" for m in AVAILABLE_MODELS]
@@ -851,7 +851,7 @@ class AntigravityProvider(
                 # Already retried internally - don't catch, propagate for credential rotation
                 raise
 
-            except Exception as e:
+            except (httpx.HTTPError, ValueError, KeyError) as e:
                 # Non-HTTP errors (network issues, timeouts, etc.) - try fallback URL
                 if self._try_next_base_url():
                     lib_logger.warning(f"Retrying with fallback URL: {e}")

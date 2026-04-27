@@ -3,6 +3,8 @@
 
 import logging
 
+from typing import Any
+
 import orjson
 from fastapi import APIRouter, Request, Depends
 
@@ -24,7 +26,7 @@ async def chat_completions(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """
     OpenAI-compatible endpoint powered by the RotatingClient.
     Handles both streaming and non-streaming responses and logs them.
@@ -114,7 +116,7 @@ async def chat_completions(
         # Raw I/O logger: log the failed response if request logging is enabled
         if getattr(request.app.state, "enable_request_logging", False) and raw_logger:
             raw_logger.log_final_response(
-                status_code=500, headers=None, body={"error": str(e)}
+                status_code=500, headers=None, body={"error": "Internal server error"}
             )
         logger.exception("Chat completions error: %s", e)
         raise

@@ -231,7 +231,7 @@ class ProviderInterface(ABC):
         if hasattr(error, "response") and hasattr(error.response, "text"):
             try:
                 return error.response.text
-            except Exception as e:
+            except (AttributeError, RuntimeError) as e:
                 logging.debug("Failed to extract error response text: %s", e)
         if hasattr(error, "body") and error.body:
             return str(error.body)
@@ -290,7 +290,7 @@ class ProviderInterface(ABC):
             json_text = extract_json_object(body)
             if json_text:
                 data = json_loads(json_text)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError) as e:
             lib_logger.debug("JSON parse error in provider_interface", exc_info=True)
 
         for spec in patterns:

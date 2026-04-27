@@ -33,6 +33,7 @@ import logging
 import orjson
 import os
 import time
+import httpx
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
@@ -276,7 +277,7 @@ class BaseQuotaTracker:
             }
             await asyncio.to_thread(self._write_costs_file, costs_file, payload)
             lib_logger.debug(f"Saved learned quota costs to {costs_file}")
-        except Exception as e:
+        except (OSError, IOError, TypeError, ValueError) as e:
             lib_logger.warning(f"Failed to save learned quota costs: {e}")
 
     def _save_learned_costs(self) -> None:
@@ -720,7 +721,7 @@ class BaseQuotaTracker:
                     with open(credential_path, "r", encoding="utf-8") as f:
                         cred_data = json_loads(f.read())
                         tier = cred_data.get("_proxy_metadata", {}).get("tier")
-                except Exception as e:
+                except (OSError, IOError, ValueError, KeyError) as e:
                     lib_logger.debug("Failed to load tier from credential file %s: %s", credential_path, e)
 
         if not tier or tier == "unknown":
@@ -731,7 +732,7 @@ class BaseQuotaTracker:
                     tier = quota_data.get("tier") or self.project_tier_cache.get(
                         credential_path
                     )
-            except Exception as e:
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
                 result["errors"].append(f"Failed to discover tier: {e}")
 
         if not tier or tier == "unknown":
@@ -856,7 +857,7 @@ class BaseQuotaTracker:
                         discovered_costs[group_model] = cost_percent
                     updated_groups.append(quota_group)
 
-            except Exception as e:
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
                 result["errors"].append(f"{model}: Exception: {e}")
                 lib_logger.warning(f"Error testing {model}: {e}")
 

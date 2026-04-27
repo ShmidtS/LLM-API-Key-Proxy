@@ -5,6 +5,7 @@ import os
 import sys
 
 import time
+
 # Phase 1: Minimal imports for arg parsing and TUI
 import asyncio
 from pathlib import Path
@@ -32,10 +33,14 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 if sys.platform == "win32":
     import io
 
-    if hasattr(sys.stdout, 'buffer') and sys.stdout.buffer is not None:
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    if hasattr(sys.stderr, 'buffer') and sys.stderr.buffer is not None:
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    if hasattr(sys.stdout, "buffer") and sys.stdout.buffer is not None:
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", errors="replace"
+        )
+    if hasattr(sys.stderr, "buffer") and sys.stderr.buffer is not None:
+        sys.stderr = io.TextIOWrapper(
+            sys.stderr.buffer, encoding="utf-8", errors="replace"
+        )
 
     try:
         sys.stdout.reconfigure(line_buffering=True)
@@ -46,8 +51,10 @@ if sys.platform == "win32":
 # --- Argument Parsing (BEFORE heavy imports) ---
 parser = argparse.ArgumentParser(description="API Key Proxy Server")
 parser.add_argument(
-    "--host", type=str, default="127.0.0.1",
-    help="Host to bind the server to. Use 0.0.0.0 to expose to all interfaces."
+    "--host",
+    type=str,
+    default="127.0.0.1",
+    help="Host to bind the server to. Use 0.0.0.0 to expose to all interfaces.",
 )
 parser.add_argument("--port", type=int, default=8000, help="Port to run the server on.")
 parser.add_argument(
@@ -119,7 +126,9 @@ if load_dotenv is not None:
 # Log discovered .env files for deployment verification
 if _env_files_found:
     _env_names = [_ef.name for _ef in _env_files_found]
-    logger.info("Loaded %d .env file(s): %s", len(_env_files_found), ', '.join(_env_names))
+    logger.info(
+        "Loaded %d .env file(s): %s", len(_env_files_found), ", ".join(_env_names)
+    )
 
 # Get proxy API key for display
 _early_proxy_api_key = os.getenv("PROXY_API_KEY")
@@ -152,6 +161,7 @@ with _console.status("[dim]Loading FastAPI framework...", spinner="dots"):
 logger.info("Loading core dependencies...")
 with _console.status("[dim]Loading core dependencies...", spinner="dots"):
     import colorlog
+
     # --- Early Log Level Configuration ---
     logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
@@ -186,7 +196,12 @@ _plugin_count = len(PROVIDER_PLUGINS)
 
 # Calculate total loading time
 _elapsed = time.time() - _start_time
-logger.info("Server ready in %.2fs (%d providers discovered in %.2fs)", _elapsed, _plugin_count, _provider_time)
+logger.info(
+    "Server ready in %.2fs (%d providers discovered in %.2fs)",
+    _elapsed,
+    _plugin_count,
+    _provider_time,
+)
 
 # Clear screen and reprint header for clean startup view
 # This pushes loading messages up (still in scroll history) but shows a clean final screen
@@ -199,7 +214,12 @@ logger.info("Starting proxy on %s:%s", args.host, args.port)
 logger.info("Proxy API Key status: %s", "Set" if _early_proxy_api_key else "Not Set")
 logger.info("GitHub: https://github.com/ShmidtS/LLM-API-Key-Proxy")
 logger.info("━" * 70)
-logger.info("Server ready in %.2fs (%d providers discovered in %.2fs)", _elapsed, _plugin_count, _provider_time)
+logger.info(
+    "Server ready in %.2fs (%d providers discovered in %.2fs)",
+    _elapsed,
+    _plugin_count,
+    _provider_time,
+)
 
 
 # Note: Debug logging will be added after logging configuration below
@@ -219,7 +239,9 @@ _info_file_handler.setFormatter(
 )
 _info_queue = queue.Queue(-1)
 info_file_handler = logging.handlers.QueueHandler(_info_queue)
-_info_queue_listener = logging.handlers.QueueListener(_info_queue, _info_file_handler, respect_handler_level=True)
+_info_queue_listener = logging.handlers.QueueListener(
+    _info_queue, _info_file_handler, respect_handler_level=True
+)
 _info_queue_listener.start()
 atexit.register(_info_queue_listener.stop)
 
@@ -232,7 +254,9 @@ _debug_file_handler.setFormatter(
 _debug_file_handler.addFilter(RotatorDebugFilter())
 _debug_queue = queue.Queue(-1)
 debug_file_handler = logging.handlers.QueueHandler(_debug_queue)
-_debug_queue_listener = logging.handlers.QueueListener(_debug_queue, _debug_file_handler, respect_handler_level=True)
+_debug_queue_listener = logging.handlers.QueueListener(
+    _debug_queue, _debug_file_handler, respect_handler_level=True
+)
 _debug_queue_listener.start()
 atexit.register(_debug_queue_listener.stop)
 
@@ -297,12 +321,13 @@ _BEARER_PROXY_API_KEY = f"Bearer {PROXY_API_KEY}" if PROXY_API_KEY else None
 # Cache OVERRIDE_TEMPERATURE_ZERO at module load time (stored on app.state during lifespan)
 OVERRIDE_TEMP_ZERO = os.getenv("OVERRIDE_TEMPERATURE_ZERO", "false").lower()
 
+
 def _parse_env_prefix_map(prefix: str, parser=None):
     """Parse env vars matching PREFIX into {suffix_lower: parser(value)} dict."""
     result = {}
     for key, value in os.environ.items():
         if key.startswith(prefix):
-            suffix = key[len(prefix):].lower()
+            suffix = key[len(prefix) :].lower()
             result[suffix] = parser(value) if parser else value
     return result
 
@@ -345,24 +370,28 @@ def _parse_max_concurrent(value: str):
         return 1
 
 
-max_concurrent_requests_per_key = _parse_env_prefix_map("MAX_CONCURRENT_REQUESTS_PER_KEY_", _parse_max_concurrent)
+max_concurrent_requests_per_key = _parse_env_prefix_map(
+    "MAX_CONCURRENT_REQUESTS_PER_KEY_", _parse_max_concurrent
+)
 
 
 # --- Lifespan Management (delegated to _lifecycle module) ---
 from proxy_app._lifecycle import LifespanConfig, create_lifespan
 
-lifespan = create_lifespan(LifespanConfig(
-    api_keys=api_keys,
-    proxy_api_key=PROXY_API_KEY,
-    bearer_proxy_api_key=_BEARER_PROXY_API_KEY,
-    override_temp_zero=OVERRIDE_TEMP_ZERO,
-    enable_request_logging=ENABLE_REQUEST_LOGGING,
-    enable_raw_logging=ENABLE_RAW_LOGGING,
-    use_embedding_batcher=USE_EMBEDDING_BATCHER,
-    max_concurrent_requests_per_key=max_concurrent_requests_per_key,
-    ignore_models=ignore_models,
-    whitelist_models=whitelist_models,
-))
+lifespan = create_lifespan(
+    LifespanConfig(
+        api_keys=api_keys,
+        proxy_api_key=PROXY_API_KEY,
+        bearer_proxy_api_key=_BEARER_PROXY_API_KEY,
+        override_temp_zero=OVERRIDE_TEMP_ZERO,
+        enable_request_logging=ENABLE_REQUEST_LOGGING,
+        enable_raw_logging=ENABLE_RAW_LOGGING,
+        use_embedding_batcher=USE_EMBEDDING_BATCHER,
+        max_concurrent_requests_per_key=max_concurrent_requests_per_key,
+        ignore_models=ignore_models,
+        whitelist_models=whitelist_models,
+    )
+)
 
 
 # --- FastAPI App Setup ---
@@ -374,9 +403,13 @@ _cors_origins_env = os.getenv("CORS_ALLOWED_ORIGINS", "")
 if _cors_origins_env.strip():
     _cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
     if _cors_origins == ["*"]:
-        logger.warning("CORS_ALLOWED_ORIGINS='*' — allowing all origins (dev-mode only, restrict in production!)")
+        logger.warning(
+            "CORS_ALLOWED_ORIGINS='*' — allowing all origins (dev-mode only, restrict in production!)"
+        )
 else:
-    logger.warning("CORS_ALLOWED_ORIGINS not set — defaulting to same-origin only (set CORS_ALLOWED_ORIGINS to allow specific origins)")
+    logger.warning(
+        "CORS_ALLOWED_ORIGINS not set — defaulting to same-origin only (set CORS_ALLOWED_ORIGINS to allow specific origins)"
+    )
     _cors_origins = []
 app.add_middleware(
     CORSMiddleware,
@@ -385,13 +418,13 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
     expose_headers=[
-            "X-Accel-Buffering",
-            "X-Request-Id",
-            "X-Provider",
-            "Retry-After",
-            "X-RateLimit-Limit",
-            "X-RateLimit-Remaining",
-        ],  # Custom headers visible to JS clients
+        "X-Accel-Buffering",
+        "X-Request-Id",
+        "X-Provider",
+        "Retry-After",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+    ],  # Custom headers visible to JS clients
 )
 
 # SSE-aware gzip: compresses non-streaming responses >= minimum_size, passes SSE through raw
@@ -520,18 +553,35 @@ if __name__ == "__main__":
 
         if sys.platform == "win32":
             import signal as _signal
+
             if hasattr(_signal, "SIGBREAK"):
-                _signal.signal(_signal.SIGBREAK, lambda *_: _signal.raise_signal(_signal.SIGINT))
+                _signal.signal(
+                    _signal.SIGBREAK, lambda *_: _signal.raise_signal(_signal.SIGINT)
+                )
 
         try:
             _limit_concurrency = int(os.getenv("MAX_CONCURRENT_REQUESTS", "1000"))
         except ValueError:
-            logger.warning("Invalid integer value for MAX_CONCURRENT_REQUESTS env var, using default")
+            logger.warning(
+                "Invalid integer value for MAX_CONCURRENT_REQUESTS env var, using default"
+            )
             _limit_concurrency = 1000
+
+        try:
+            _timeout_graceful_shutdown = int(
+                os.getenv("TIMEOUT_GRACEFUL_SHUTDOWN", "15")
+            )
+        except ValueError:
+            logger.warning(
+                "Invalid integer value for TIMEOUT_GRACEFUL_SHUTDOWN env var, using default"
+            )
+            _timeout_graceful_shutdown = 15
+
         uvicorn.run(
             app,
             host=args.host,
             port=args.port,
             limit_concurrency=_limit_concurrency,
             backlog=2048,
+            timeout_graceful_shutdown=_timeout_graceful_shutdown,
         )

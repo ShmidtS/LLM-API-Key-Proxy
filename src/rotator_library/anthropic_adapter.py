@@ -109,7 +109,7 @@ class AnthropicAdapter:
                         TRACE,
                         f"Pre-computed input tokens for {original_model}: {precomputed_input_tokens}"
                     )
-            except Exception as e:
+            except (ValueError, TypeError, Exception) as e:
                 lib_logger.warning(f"Failed to pre-compute input tokens: {e}")
 
             response_generator = self._acompletion(

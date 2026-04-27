@@ -139,7 +139,7 @@ class GoogleProjectDiscoveryMixin:
                     f"loadCodeAssist returned {response.status_code} at {endpoint}"
                 )
                 last_error = f"HTTP {response.status_code}"
-            except Exception as e:
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
                 lib_logger.debug(f"loadCodeAssist failed at {endpoint}: {e}")
                 last_error = str(e)
                 continue
@@ -178,7 +178,7 @@ class GoogleProjectDiscoveryMixin:
                     f"onboardUser returned {response.status_code} at {endpoint}"
                 )
                 last_error = f"HTTP {response.status_code}"
-            except Exception as e:
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
                 lib_logger.debug(f"onboardUser failed at {endpoint}: {e}")
                 last_error = str(e)
                 continue
@@ -547,7 +547,7 @@ class GoogleProjectDiscoveryMixin:
             if e.response is not None:
                 try:
                     error_body = e.response.text
-                except Exception as e:
+                except (httpx.HTTPError, RuntimeError, AttributeError) as e:
                     lib_logger.debug("Failed to extract Google project HTTP error body: %s", e)
                 if e.response.status_code == 403:
                     lib_logger.error(

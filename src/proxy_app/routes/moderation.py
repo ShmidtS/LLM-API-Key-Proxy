@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from typing import Any
+
 import orjson
 from fastapi import APIRouter, Request, Depends
 
@@ -18,7 +20,7 @@ async def moderations(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """
     OpenAI-compatible endpoint for content moderation.
 

@@ -15,7 +15,7 @@ def _safe_set_ciphers(ctx, cipher_string):
     """Set ciphers on an SSL context, silently skipping on Windows/Schannel."""
     try:
         ctx.set_ciphers(cipher_string)
-    except Exception as exc:
+    except (_ssl_module.SSLError, OSError) as exc:
         if os.name == "nt" and isinstance(exc, _ssl_module.SSLError):
             logging.warning("[SSL-FIX] Schannel does not support set_ciphers, skipping on Windows")
         else:
@@ -105,7 +105,5 @@ def _patch_litellm_ssl():
         os.environ["SSL_VERIFY"] = "False"
         logging.info("[SSL-FIX] Set SSL_VERIFY=False environment variable")
 
-    except ImportError:
-        logging.debug("[SSL-FIX] litellm not installed, skipping litellm SSL patch", exc_info=True)
-    except Exception as e:
+    except (ImportError, Exception) as e:
         logging.error(f"[SSL-FIX] Failed to patch litellm SSL: {e}")

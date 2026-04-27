@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from typing import Any
+
 import orjson
 from fastapi import APIRouter, Request, Depends, HTTPException
 
@@ -19,7 +21,7 @@ async def web_search(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """
     Web search tool endpoint.
 
@@ -90,7 +92,7 @@ async def tool_tokenizer(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """ZAI tokenizer tool endpoint."""
     return await proxy_provider_call(request, client, "zai", "tool_tokenizer")
 
@@ -101,7 +103,7 @@ async def tool_layout_parsing(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """ZAI layout parsing tool endpoint."""
     return await proxy_provider_call(request, client, "zai", "tool_layout_parsing")
 
@@ -112,6 +114,6 @@ async def tool_web_reader(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """ZAI web reader tool endpoint."""
     return await proxy_provider_call(request, client, "zai", "tool_web_reader")

@@ -235,9 +235,8 @@ class GeminiCliProvider(
                             parsed = _parse_duration_shared(retry_delay)
                             if parsed:
                                 result["retry_after"] = parsed
-
-        except (json.JSONDecodeError, AttributeError, TypeError):
-            logger.debug("Failed to parse retry-after from response headers/body", exc_info=True)
+        except (json.JSONDecodeError, AttributeError, TypeError, ValueError) as e:
+            logger.debug("Failed to parse retry-after from response headers/body: %s", e, exc_info=True)
 
         if not result["retry_after"]:
             return None
@@ -1009,7 +1008,7 @@ class GeminiCliProvider(
                                     await file_logger.log_error(
                                         f"API error {response.status_code}: {error_body.decode()}"
                                     )
-                                except Exception as e:
+                                except (RuntimeError, ValueError, OSError) as e:
                                     lib_logger.debug("Failed to read error body for status %s: %s", response.status_code, e)
 
                             # This will raise an HTTPStatusError for 4xx/5xx responses
@@ -1054,7 +1053,7 @@ class GeminiCliProvider(
                         if e.response is not None:
                             try:
                                 error_body = e.response.text
-                            except Exception as e:
+                            except (RuntimeError, ValueError, OSError) as e:
                                 lib_logger.debug("Failed to extract error body from HTTPStatusError response: %s", e)
 
                         # Only log to file logger (for detailed logging)
@@ -1116,7 +1115,7 @@ class GeminiCliProvider(
                         # No more endpoints to try
                         raise e
 
-                    except Exception as e:
+                    except httpx.HTTPError as e:
                         await file_logger.log_error(f"Stream handler exception: {str(e)}")
                         raise
 
@@ -1416,7 +1415,7 @@ class GeminiCliProvider(
                     f"Discovered {dynamic_count} additional models for gemini_cli from API"
                 )
 
-        except Exception:
-            lib_logger.exception("Gemini CLI dynamic model discovery failed")
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as e:
+            lib_logger.error("Gemini CLI dynamic model discovery failed: %s", e)
 
         return models

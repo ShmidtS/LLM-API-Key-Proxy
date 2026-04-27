@@ -340,8 +340,8 @@ class AuthQueueMixin:
                                 error_desc = error_data.get("error_description", "")
                                 if not error_desc:
                                     error_desc = error_data.get("message", str(e))
-                            except Exception:
-                                lib_logger.debug("Failed to parse OAuth error response JSON", exc_info=True)
+                            except (httpx.HTTPStatusError, ValueError) as e:
+                                lib_logger.debug("Failed to parse OAuth error response JSON: %s", e)
                                 error_type = ""
                                 error_desc = str(e)
 
@@ -370,7 +370,7 @@ class AuthQueueMixin:
 
                     except asyncio.CancelledError:
                         raise
-                    except Exception as e:
+                    except (httpx.HTTPError, httpx.TimeoutException, KeyError, ValueError) as e:
                         await self._handle_refresh_failure(path, force, str(e))
 
                 finally:
@@ -389,7 +389,7 @@ class AuthQueueMixin:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except (httpx.HTTPError, httpx.TimeoutException, KeyError, ValueError, OSError) as e:
                 lib_logger.error(f"Error in refresh queue processor: {e}")
                 if path:
                     async with self._queue_tracking_lock:
@@ -428,7 +428,7 @@ class AuthQueueMixin:
 
                 except asyncio.CancelledError:
                     raise
-                except Exception as e:
+                except (httpx.HTTPError, httpx.TimeoutException, KeyError, ValueError, OSError) as e:
                     lib_logger.error(f"Re-auth FAILED for '{Path(path).name}': {e}")
                     # No automatic retry for re-auth (requires user action)
 
@@ -446,7 +446,7 @@ class AuthQueueMixin:
                         self._queued_credentials.discard(path)
                         self._unavailable_credentials.pop(path, None)
                 break
-            except Exception as e:
+            except (httpx.HTTPError, httpx.TimeoutException, KeyError, ValueError, OSError) as e:
                 lib_logger.error(f"Error in re-auth queue processor: {e}")
                 if path:
                     async with self._queue_tracking_lock:
@@ -597,7 +597,7 @@ class OAuthFlowMixin:
                 if reason == "token is expired" and creds.get("refresh_token"):
                     try:
                         return await self._refresh_token(path, creds)
-                    except Exception as e:
+                    except (httpx.HTTPError, httpx.TimeoutException, KeyError, ValueError) as e:
                         lib_logger.warning(
                             f"Automatic token refresh for '{display_name}' failed: {e}. Proceeding to interactive login."
                         )
@@ -618,12 +618,13 @@ class OAuthFlowMixin:
                 f"{self.ENV_PREFIX} OAuth token at '{display_name}' is valid."
             )
             return creds
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, ValueError):
             raise
-        except Exception as e:
+        except (httpx.HTTPError, httpx.TimeoutException, KeyError, OSError) as e:
+            lib_logger.error("Failed to initialize %s OAuth for '%s': %s", self.ENV_PREFIX, path, e)
             raise ValueError(
                 f"Failed to initialize {self.ENV_PREFIX} OAuth for '{path}': {e}"
-            )
+            ) from e
 
 
 # =========================================================================

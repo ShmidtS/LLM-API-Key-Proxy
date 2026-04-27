@@ -463,7 +463,8 @@ class OpenRouterAdapter(DataSourceAdapter):
                 catalog[full_id] = self._normalize(entry)
 
             return catalog
-        except (URLError, json.JSONDecodeError, TimeoutError) as err:
+        except (URLError, json.JSONDecodeError, TimeoutError, ConnectionError) as err:
+            logger.error("OpenRouter fetch failed: %s", err)
             raise ConnectionError(f"OpenRouter unavailable: {err}") from err
 
     def _normalize(self, raw: Dict) -> Dict:
@@ -554,7 +555,8 @@ class ModelsDevAdapter(DataSourceAdapter):
                     catalog[full_id] = self._normalize(model_data, provider_key)
 
             return catalog
-        except (URLError, json.JSONDecodeError, TimeoutError) as err:
+        except (URLError, json.JSONDecodeError, TimeoutError, ConnectionError) as err:
+            logger.error("Models.dev fetch failed: %s", err)
             raise ConnectionError(f"Models.dev unavailable: {err}") from err
 
     def _normalize(self, raw: Dict, provider_key: str) -> Dict:

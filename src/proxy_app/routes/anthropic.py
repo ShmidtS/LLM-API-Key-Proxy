@@ -109,8 +109,8 @@ async def anthropic_count_tokens(
 
     except (
         litellm.InvalidRequestError,
-        ValueError,
         litellm.ContextWindowExceededError,
+        ValueError,
     ) as e:
         error_response = {
             "type": "error",

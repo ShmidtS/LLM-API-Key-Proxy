@@ -167,7 +167,7 @@ class TransactionLogger:
                 self.log_dir.mkdir(parents=True, exist_ok=True)
                 self._dir_available = True
                 return True
-            except Exception as e:
+            except (OSError, IOError) as e:
                 lib_logger.error(f"TransactionLogger: Failed to create directory: {e}")
                 self.enabled = False
         return False
@@ -282,7 +282,7 @@ class TransactionLogger:
                 has_provider_logs = provider_dir.exists() and any(
                     provider_dir.iterdir()
                 )
-            except OSError:
+            except (IOError, OSError):
                 has_provider_logs = False
 
         metadata = {
@@ -319,7 +319,7 @@ class TransactionLogger:
         try:
             async with aiofiles.open(self.log_dir / filename, "w", encoding="utf-8") as f:
                 await f.write(sanitize_for_log(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode("utf-8")))
-        except Exception as e:
+        except (OSError, IOError, TypeError, ValueError) as e:
             lib_logger.error(f"TransactionLogger: Failed to write {filename}: {e}")
 
     async def _append_text(self, filename: str, text: str) -> None:
@@ -329,7 +329,7 @@ class TransactionLogger:
         try:
             async with aiofiles.open(self.log_dir / filename, "a", encoding="utf-8") as f:
                 await f.write(text)
-        except Exception as e:
+        except (OSError, IOError) as e:
             lib_logger.error(f"TransactionLogger: Failed to append to {filename}: {e}")
 
     @staticmethod
@@ -499,7 +499,7 @@ class ProviderLogger:
         try:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             return True
-        except Exception as e:
+        except (OSError, IOError) as e:
             lib_logger.error(f"ProviderLogger: Failed to create directory: {e}")
             self.enabled = False
             return False
@@ -563,7 +563,7 @@ class ProviderLogger:
         try:
             async with aiofiles.open(self.log_dir / filename, "w", encoding="utf-8") as f:
                 await f.write(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode("utf-8"))
-        except Exception as e:
+        except (OSError, IOError, TypeError, ValueError) as e:
             lib_logger.error(f"ProviderLogger: Failed to write {filename}: {e}")
 
     async def _append_text(self, filename: str, text: str) -> None:
@@ -573,7 +573,7 @@ class ProviderLogger:
         try:
             async with aiofiles.open(self.log_dir / filename, "a", encoding="utf-8") as f:
                 await f.write(text)
-        except Exception as e:
+        except (OSError, IOError) as e:
             lib_logger.error(f"ProviderLogger: Failed to append to {filename}: {e}")
 
 

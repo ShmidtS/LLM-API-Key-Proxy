@@ -43,7 +43,7 @@ def build_provider_rotation_modes(
             mode = env_cache.get(env_key, "balanced")
         modes[provider] = mode
         if mode != "balanced":
-            lib_logger.info(f"Provider '{provider}' using rotation mode: {mode}")
+            lib_logger.info("Provider '%s' using rotation mode: %s", provider, mode)
     return modes
 
 

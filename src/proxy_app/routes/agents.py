@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from typing import Any, Dict
+
 from fastapi import APIRouter, Request, Depends
 
 from rotator_library import RotatingClient
@@ -17,7 +19,7 @@ async def agent_chat(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """Synchronous agent chat endpoint (ZAI-specific)."""
     return await proxy_provider_call(request, client, "zai", "agent_chat")
 
@@ -28,7 +30,7 @@ async def agent_file_upload(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """Upload a file for agent processing (ZAI-specific)."""
     return await proxy_provider_call(request, client, "zai", "agent_file_upload")
 
@@ -40,7 +42,7 @@ async def agent_async_result(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """Retrieve async agent task result (ZAI-specific)."""
     return await client.call_provider_method(
         "zai", "agent_async_result", task_id=task_id
@@ -53,6 +55,6 @@ async def agent_conversation(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """Continue an agent conversation (ZAI-specific)."""
     return await proxy_provider_call(request, client, "zai", "agent_conversation")

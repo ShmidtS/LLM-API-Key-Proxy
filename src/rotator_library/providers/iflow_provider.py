@@ -195,7 +195,7 @@ class IFlowProvider(IFlowAuthBase, ACompletionMixin, ProviderInterface):
                 lib_logger.debug(f"HTTP error fetching iflow models: {e}")
         except httpx.RequestError as e:
             lib_logger.debug(f"Request error fetching iflow models: {e}")
-        except Exception as e:
+        except httpx.HTTPError as e:
             # Silently ignore dynamic discovery errors
             lib_logger.debug(f"Dynamic model discovery failed for iflow: {e}")
 

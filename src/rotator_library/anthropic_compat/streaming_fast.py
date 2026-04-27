@@ -16,6 +16,7 @@ Performance optimizations:
 
 import asyncio
 import logging
+import httpx
 from time import monotonic
 import uuid
 from typing import AsyncGenerator, Callable, Optional, Awaitable, Any, TYPE_CHECKING
@@ -349,7 +350,7 @@ async def anthropic_streaming_wrapper_fast(
 
                 try:
                     chunk = json_loads(data_content)
-                except Exception as e:
+                except (ValueError, KeyError, TypeError) as e:
                     logger.debug("Failed to parse SSE data chunk: %s: %s", data_content, e, exc_info=True)
                     continue
             else:
@@ -492,7 +493,7 @@ async def anthropic_streaming_wrapper_fast(
         raise
     except asyncio.CancelledError:
         raise
-    except Exception as e:
+    except (httpx.HTTPError, ConnectionError) as e:
         logger.error(f"Error in Anthropic streaming wrapper: {e}")
 
         # Send error as visible text
@@ -566,7 +567,7 @@ async def _log_anthropic_response(
             if not args_str:
                 args_str = "{}"
             input_data = json_loads(args_str)
-        except Exception as exc:
+        except (RuntimeError, ValueError, TypeError, Exception) as exc:
             logging.getLogger(__name__).debug("Suppressed: %s", exc)
             input_data = {}
         content_blocks.append({

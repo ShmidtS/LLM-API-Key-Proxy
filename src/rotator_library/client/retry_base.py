@@ -186,9 +186,10 @@ class RetryBaseMixin:
                 all_provider_credentials=credentials_for_provider,
             )
             tried_creds.add(current_cred)
-        except Exception:
+        except (RuntimeError, ValueError, TimeoutError, ConnectionError) as e:
             # Release the half-open slot if anything fails after can_attempt() succeeded
             await self._resilience.release_half_open_slot(provider)
+            lib_logger.error("Failed to acquire credential: %s", e)
             raise
 
         return _KeySelectionResult(

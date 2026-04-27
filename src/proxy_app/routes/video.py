@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from typing import Any
+
 from fastapi import APIRouter, Request, Depends
 
 from rotator_library import RotatingClient
@@ -17,7 +19,7 @@ async def video_generate(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """Submit an async video generation request (ZAI-specific)."""
     return await proxy_provider_call(request, client, "zai", "video_generate")
 
@@ -29,7 +31,7 @@ async def video_status(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """Check the status of an async video generation task (ZAI-specific)."""
     return await client.call_provider_method(
         "zai", "video_status", video_id=video_id

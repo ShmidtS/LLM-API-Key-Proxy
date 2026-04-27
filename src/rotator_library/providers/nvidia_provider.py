@@ -324,5 +324,5 @@ class NvidiaProvider(ProviderInterface):
                 lib_logger.debug(
                     f"NVIDIA quota sync: cleaned {cleaned} old windows"
                 )
-        except Exception as e:
-            lib_logger.error(f"Error in NVIDIA quota sync job: {e}")
+        except httpx.HTTPError as e:
+            lib_logger.error(f"Error in NVIDIA quota sync job: {e}", exc_info=True)

@@ -493,8 +493,8 @@ class HttpClientPool(metaclass=SingletonMeta):
                             )
                     else:
                         lib_logger.debug(
-                            "Warmup error for %s: %s",
-                            host, type(result).__name__,
+                            "Warmup error for %s: %s: %s",
+                            host, type(result).__name__, type(result).__name__ + ": " + str(result),
                         )
                 else:
                     warmed += 1
@@ -721,14 +721,14 @@ class HttpClientPool(metaclass=SingletonMeta):
             if self._streaming_client:
                 try:
                     await self._streaming_client.aclose()
-                except Exception as e:
+                except (httpx.HTTPError, ConnectionError, OSError, TimeoutError) as e:
                     errors.append(f"streaming: {e}")
                 self._streaming_client = None
 
             if self._non_streaming_client:
                 try:
                     await self._non_streaming_client.aclose()
-                except Exception as e:
+                except (httpx.HTTPError, ConnectionError, OSError, TimeoutError) as e:
                     errors.append(f"non-streaming: {e}")
                 self._non_streaming_client = None
 
@@ -840,14 +840,14 @@ class HttpClientPool(metaclass=SingletonMeta):
             try:
                 new_streaming = await self._create_client(streaming=True)
                 recovered.append("streaming")
-            except Exception as e:
+            except (httpx.HTTPError, ConnectionError, OSError, TimeoutError) as e:
                 lib_logger.error(f"Failed to recover streaming client: {e}")
 
         if need_non_streaming:
             try:
                 new_non_streaming = await self._create_client(streaming=False)
                 recovered.append("non-streaming")
-            except Exception as e:
+            except (httpx.HTTPError, ConnectionError, OSError, TimeoutError) as e:
                 lib_logger.error(f"Failed to recover non-streaming client: {e}")
 
         # Assign under lock — cheap pointer swaps, no I/O

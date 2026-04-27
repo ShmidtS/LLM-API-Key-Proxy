@@ -140,7 +140,7 @@ class ACompletionMixin(StreamingResponseMixin):
 
             except httpx.HTTPStatusError:
                 raise
-            except Exception as e:
+            except (httpx.HTTPError, ValueError, KeyError, Exception) as e:
                 await file_logger.log_error(
                     f"Error during {self.provider_name} stream processing: {e}"
                 )

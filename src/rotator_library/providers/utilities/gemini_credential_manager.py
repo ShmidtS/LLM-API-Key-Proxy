@@ -11,6 +11,7 @@ GeminiCliProvider and AntigravityProvider.
 
 import json
 import logging
+import httpx
 from ...utils.json_utils import json_loads
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -153,7 +154,7 @@ class GeminiCredentialManager:
                 lib_logger.debug(
                     f"Discovered tier '{discovered_tier}' for {Path(credential_path).name}"
                 )
-            except Exception as e:
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
                 lib_logger.warning(
                     f"Failed to discover tier for {Path(credential_path).name}: {e}. "
                     f"Credential will use default priority."

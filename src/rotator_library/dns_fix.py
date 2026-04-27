@@ -266,7 +266,7 @@ def _dns_query(host: str, dns_host: str, dns_port: int = 53) -> Optional[str]:
         else:
             return None
 
-    except Exception as e:
+    except (OSError, socket.gaierror, ValueError) as e:
         logger.debug("Error querying DNS: %s", e)
         return None
 

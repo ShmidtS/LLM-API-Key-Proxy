@@ -182,7 +182,7 @@ class StreamingMixin:
                     stream_completed = False
                     raise
 
-                except Exception as e:
+                except (ValueError, KeyError, TypeError) as e:
                     # JSON decode errors from fragmented chunks — log and skip
                     error_str = str(e)
                     if "Expecting value" in error_str or "Unterminated string" in error_str:
@@ -195,8 +195,8 @@ class StreamingMixin:
                     # For other errors during iteration, log and break
                     lib_logger.error(
                         "Error during streaming for model %s, "
-                        "credential %s, chunk %s: %s",
-                        model, mask_credential(key), chunk_index, e,
+                        "credential %s, chunk %s: %s (%s)",
+                        model, mask_credential(key), chunk_index, type(e).__name__, e,
                     )
                     stream_completed = False
                     break
@@ -209,8 +209,8 @@ class StreamingMixin:
             # Re-raise key exhaustion so retry logic can try next key
             raise
 
-        except Exception as e:
-            # Catch any unexpected errors in the wrapper itself
+        except (httpx.HTTPError, ConnectionError) as e:
+            # Catch HTTP/connection errors in the wrapper itself
             lib_logger.error(
                 "Unexpected error in streaming wrapper for model %s: %s",
                 model, e,
@@ -233,7 +233,7 @@ class StreamingMixin:
                     not request or not await request.is_disconnected()
                 ):
                     yield STREAM_DONE
-            except Exception as e:
+            except (httpx.HTTPError, ConnectionError, RuntimeError) as e:
                 lib_logger.exception("Error during stream cleanup: %s", e)
 
     async def _transaction_logging_stream_wrapper(
@@ -283,7 +283,7 @@ class StreamingMixin:
                         chunks, request_data
                     )
                     await transaction_logger.log_response(final_response)
-                except Exception as e:
+                except (ValueError, KeyError, TypeError, OSError) as e:
                     lib_logger.warning(
                         "TransactionLogger: Failed to assemble/log final response: %s",
                         e,

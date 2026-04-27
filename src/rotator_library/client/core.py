@@ -36,7 +36,7 @@ from collections.abc import Mapping
 import httpx
 import litellm
 from pathlib import Path
-from typing import Any, AsyncGenerator, Optional, Union, TYPE_CHECKING
+from typing import Any, AsyncGenerator, Dict, Optional, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..anthropic_compat.models import (
@@ -676,9 +676,9 @@ class RotatingClient(
                     )
                     continue
                 raise
-            except Exception as e:
+            except (httpx.HTTPError, TimeoutError, ConnectionError, ValueError, RuntimeError) as e:
                 lib_logger.debug(
-                    f"Failed on credential for {provider_name}.{method_name}: {e}, "
+                    f"Failed on credential for {provider_name}.{method_name}: {type(e).__name__}: {e}, "
                     f"trying next"
                 )
                 continue

@@ -3,6 +3,8 @@
 
 import logging
 
+from typing import Any
+
 import orjson
 from fastapi import APIRouter, Request, Depends, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
@@ -23,7 +25,7 @@ async def audio_speech(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> StreamingResponse:
     """
     OpenAI-compatible TTS (text-to-speech) endpoint.
 
@@ -62,8 +64,10 @@ async def audio_speech(
                 if chunk_count % 50 == 0 and await request.is_disconnected():
                     logger.info("Client disconnected during audio streaming")
                     break
+        except (ConnectionError, TimeoutError, OSError) as e:
+            logger.error("Audio streaming error: %s", e)
         except Exception as e:
-            logger.exception("Audio streaming error: %s", e)
+            logger.exception("Unexpected audio streaming error: %s", e)
 
     return StreamingResponse(
         _audio_stream(),
@@ -82,19 +86,18 @@ async def audio_transcriptions(
     model: str = Form(...),
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """
     OpenAI-compatible STT (speech-to-text) endpoint.
 
     Accepts multipart form data with an audio file and model name,
     returns transcription text.
     """
-    # Read file bytes and build kwargs for litellm.atranscription
-    file_bytes = await file.read()
+    # Use the SpooledTemporaryFile directly for streaming upload
     file_filename = file.filename or "audio.mp3"
 
     # Collect optional form fields
-    kwargs = {"model": model, "file": (file_filename, file_bytes)}
+    kwargs = {"model": model, "file": (file_filename, file.file)}
 
     # Read additional form fields that may be present
     form = await request.form()

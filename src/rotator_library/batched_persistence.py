@@ -143,7 +143,7 @@ class BatchedPersistence:
                self._state = json_loads(content)
             lib_logger.debug(f"Loaded state from {self._file_path.name}")
         except (json.JSONDecodeError, IOError, OSError) as e:
-            lib_logger.warning(f"Failed to load state from {self._file_path.name}: {e}")
+            lib_logger.warning(f"Failed to load state from {self._file_path.name}: {type(e).__name__}: {e}")
 
     async def _writer_loop(self) -> None:
         """Background task: periodically write dirty state to disk."""
@@ -197,7 +197,7 @@ class BatchedPersistence:
                     self._stats["write_errors"] += 1
                     return False
 
-            except Exception as e:
+            except (OSError, IOError, json.JSONDecodeError, TypeError, ValueError) as e:
                 lib_logger.error(f"Failed to write state to {self._file_path.name}: {e}")
                 self._stats["write_errors"] += 1
                 return False

@@ -269,7 +269,7 @@ class HelpersMixin:
                     handler._async_client_cache.clear()
                     lib_logger.debug("Cleared custom_httpx async client cache")
 
-        except Exception as e:
+        except (ImportError, AttributeError) as e:
             # Non-critical - just log and continue
             lib_logger.debug("Could not reset LiteLLM client cache: %s", e)
 

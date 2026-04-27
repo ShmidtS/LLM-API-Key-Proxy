@@ -87,6 +87,7 @@ def handle_route_errors(
                     detail=make_error_response(str(e), "api_error"),
                 )
             except Exception as e:
+                # Capture only unexpected, non-litellm exceptions here
                 if error_format in ("openai", "anthropic"):
                     if isinstance(e, LITELLM_ERROR_TYPES):
                         logger.error(
@@ -97,6 +98,7 @@ def handle_route_errors(
                         )
                         raise handle_litellm_error(e, error_format=error_format)
 
+                    # Handle structured exceptions if possible
                     detail = getattr(e, "args", [None])[0]
                     if isinstance(detail, dict) and "error" in detail:
                         status_code = 500
@@ -123,11 +125,6 @@ def handle_route_errors(
                                 "message": "Internal server error",
                             },
                         },
-                    )
-                elif error_format == "openai":
-                    raise HTTPException(
-                        status_code=500,
-                        detail=make_error_response("Internal server error", "api_error"),
                     )
                 else:
                     raise HTTPException(

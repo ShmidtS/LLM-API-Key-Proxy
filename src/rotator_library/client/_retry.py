@@ -84,7 +84,7 @@ class RetryMixin(RetryBaseMixin):
                 self._apply_default_safety_settings(litellm_kwargs, provider)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:
+            except (ValueError, TypeError, KeyError, AttributeError) as exc:
                 label = f" {log_label}" if log_label else ""
                 lib_logger.warning(
                     "Could not apply default safety settings for%s %s: %s; continuing.",
@@ -152,7 +152,7 @@ class RetryMixin(RetryBaseMixin):
             await pre_request_callback(request, litellm_kwargs)
         except asyncio.CancelledError:
             raise
-        except Exception as e:
+        except (ValueError, TypeError, KeyError, RuntimeError) as e:
             if self.abort_on_callback_error:
                 async with HalfOpenSlot(self._resilience, provider):
                     raise PreRequestCallbackError(
@@ -1045,6 +1045,7 @@ class RetryMixin(RetryBaseMixin):
                             else:
                                 break
                         except Exception as e:
+                            lib_logger.error(f"Unexpected error in retry loop: {type(e).__name__}: {e}")
                             last_exception = e
                             dec = await self._handle_generic_error(
                                 e, provider, current_cred, model,

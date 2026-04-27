@@ -102,7 +102,7 @@ def _setup_failure_logger(logs_dir: Path) -> logging.Logger:
         _fl_queue_listener.start()
         atexit.register(_fl_queue_listener.stop)
         logger.addHandler(_fl_queue_handler)
-    except (OSError, PermissionError, IOError) as e:
+    except (OSError, IOError) as e:
         logging.warning(f"Cannot create failure log file handler: {e}")
         # Add NullHandler to prevent "no handlers" warning
         logger.addHandler(logging.NullHandler())
@@ -148,7 +148,7 @@ def _extract_response_body(error: Exception) -> str:
         if isinstance(inner, dict):
             try:
                 return orjson.dumps(inner, option=orjson.OPT_INDENT_2).decode("utf-8")
-            except Exception as e:
+            except (TypeError, ValueError) as e:
                 logging.debug("orjson serialization failed: %s", e)
                 return str(inner)
         # If data is an exception, recurse to extract from it
@@ -167,7 +167,7 @@ def _extract_response_body(error: Exception) -> str:
         if hasattr(response, "content") and response.content:
             try:
                 return response.content.decode("utf-8", errors="replace")
-            except Exception as e:
+            except (UnicodeError, AttributeError) as e:
                 logging.debug("Response content decode failed: %s", e)
                 return str(response.content)
 

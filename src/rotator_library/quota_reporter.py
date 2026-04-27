@@ -211,7 +211,7 @@ class QuotaReporter:
                                     reset_iso = datetime.fromtimestamp(
                                         reset_ts, tz=timezone.utc
                                     ).isoformat()
-                                except (ValueError, OSError) as e:
+                                except (ValueError, OSError, TypeError) as e:
                                     lib_logger.debug("Could not process timestamp: %s", e)
 
                             requests_remaining = (
@@ -413,7 +413,7 @@ class QuotaReporter:
                                 f"{Path(cred_path).name}: {data.get('error', 'Unknown error')}"
                             )
 
-                except Exception as e:
+                except (RuntimeError, ValueError, OSError, Exception) as e:
                     lib_logger.error(f"Failed to refresh quota for {prov}: {e}")
                     result["errors"].append(f"{prov}: {str(e)}")
                     result["failed_count"] += len(creds_to_refresh)

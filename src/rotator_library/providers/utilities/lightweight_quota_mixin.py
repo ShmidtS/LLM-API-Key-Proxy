@@ -242,7 +242,7 @@ class LightweightQuotaMixin:
                             f"(error: {usage_data.get('error')}), marking as exhausted"
                         )
 
-                except Exception as e:
+                except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
                     counters["errors"] += 1
                     lib_logger.warning(
                         f"Failed to refresh {self.provider_name} quota usage: {e}"

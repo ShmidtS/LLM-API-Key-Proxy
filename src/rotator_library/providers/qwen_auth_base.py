@@ -143,7 +143,7 @@ class QwenAuthBase(GoogleOAuthBase):
                             error_data = e.response.json()
                             error_type = error_data.get("error", "")
                             error_desc = error_data.get("error_description", "")
-                        except Exception as parse_err:
+                        except ValueError as parse_err:
                             lib_logger.debug("Failed to parse OAuth error response JSON: %s", parse_err)
                             error_type = ""
                             error_desc = error_body
@@ -401,7 +401,7 @@ class QwenAuthBase(GoogleOAuthBase):
             try:
                 webbrowser.open(dev_data["verification_uri_complete"])
                 lib_logger.info("Browser opened successfully for Qwen OAuth flow")
-            except Exception as e:
+            except (OSError, webbrowser.Error) as e:
                 lib_logger.warning(
                     f"Failed to open browser automatically: {e}. Please open the URL manually."
                 )
@@ -532,7 +532,7 @@ class QwenAuthBase(GoogleOAuthBase):
                 creds["_proxy_metadata"]["last_check_timestamp"] = time.time()
 
             return {"email": email}
-        except Exception as e:
+        except (httpx.HTTPError, ValueError, KeyError, OSError, IOError) as e:
             lib_logger.error(f"Failed to get Qwen user info from credentials: {e}")
             return {"email": None}
 

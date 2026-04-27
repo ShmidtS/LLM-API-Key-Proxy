@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from typing import Any
+
 from fastapi import APIRouter, Request, Depends
 
 from rotator_library import RotatingClient
@@ -17,7 +19,7 @@ async def image_generations(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """
     OpenAI-compatible endpoint for image generation.
 
@@ -33,7 +35,7 @@ async def image_edits(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """
     OpenAI-compatible endpoint for image editing.
 
@@ -49,7 +51,7 @@ async def image_variations(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """
     OpenAI-compatible endpoint for generating image variations.
 
@@ -65,7 +67,7 @@ async def async_image_generations(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """Async image generation endpoint (ZAI-specific). Returns a task ID for polling."""
     return await proxy_provider_call(request, client, "zai", "async_image_generate")
 
@@ -77,7 +79,7 @@ async def get_image_status(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """Retrieve status/result of an async image generation task (ZAI-specific)."""
     return await client.call_provider_method(
         "zai", "async_image_status", image_id=image_id

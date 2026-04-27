@@ -6,6 +6,8 @@ import logging
 import time
 
 import orjson
+from typing import Any, Dict
+
 from fastapi import APIRouter, Request, HTTPException, Depends
 
 from rotator_library import RotatingClient
@@ -22,7 +24,7 @@ async def get_quota_stats(
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
     provider: str = None,
-):
+) -> Dict[str, Any]:
     """
     Returns quota and usage statistics for all credentials.
 
@@ -62,7 +64,7 @@ async def refresh_quota_stats(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Dict[str, Any]:
     """
     Refresh quota and usage statistics.
 
@@ -151,7 +153,7 @@ async def token_count(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-):
+) -> Dict[str, Any]:
     """
     Calculates the token count for a given list of messages and a model.
     """
@@ -170,7 +172,7 @@ async def token_count(
 
 @router.post("/v1/cost-estimate")
 @handle_route_errors(error_format="simple", log_context="Cost estimate failed")
-async def cost_estimate(request: Request, _=Depends(verify_api_key)):
+async def cost_estimate(request: Request, _=Depends(verify_api_key)) -> Dict[str, Any]:
     """
     Estimates the cost for a request based on token counts and model pricing.
 
@@ -259,8 +261,10 @@ async def cost_estimate(request: Request, _=Depends(verify_api_key)):
             }
             result["source"] = "litellm_fallback"
             return result
-    except Exception as e:
+    except (ImportError, AttributeError, ValueError) as e:
         logging.debug("Pricing lookup failed for model %s: %s", result.get("model", "?"), e)
+    except Exception as e:
+        logging.exception("Unexpected error in pricing lookup for model %s: %s", result.get("model", "?"), e)
 
     result["source"] = "unknown"
     result["error"] = "Pricing data not available for this model"

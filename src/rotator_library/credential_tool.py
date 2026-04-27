@@ -5,7 +5,9 @@
 
 import asyncio
 import functools
+import json
 import logging
+import httpx
 import orjson
 import os
 import re
@@ -201,7 +203,7 @@ def _get_api_keys_from_env() -> dict:
         for provider_name in api_keys:
             api_keys[provider_name].sort(key=lambda x: _extract_key_number(x[0]))
 
-    except Exception as e:
+    except (ValueError, OSError, KeyError, httpx.HTTPError, json.JSONDecodeError) as e:
         console.print(f"[bold red]Error reading .env file: {e}[/bold red]")
 
     return api_keys
@@ -286,7 +288,7 @@ def _delete_api_key_from_env(key_name: str) -> bool:
 
         return True
 
-    except Exception as e:
+    except (ValueError, OSError) as e:
         console.print(f"[bold red]Error during API key deletion: {e}[/bold red]")
         return False
 
@@ -309,7 +311,7 @@ def _get_oauth_credentials_summary() -> dict:
             auth_instance = auth_class()
             credentials = auth_instance.list_credentials(_get_oauth_base_dir())
             oauth_summary[provider_name] = credentials
-        except Exception as e:  # non-critical: provider auth unavailable
+        except (ValueError, KeyError, OSError) as e:  # non-critical: provider auth unavailable
             logging.debug("Provider auth listing failed for %s: %s", provider_name, e)
             oauth_summary[provider_name] = []
 
@@ -386,7 +388,7 @@ def _get_existing_custom_providers() -> list:
                 }
             )
 
-    except Exception as e:
+    except (ValueError, OSError, KeyError, httpx.HTTPError, json.JSONDecodeError) as e:
         console.print(f"[bold red]Error reading .env file: {e}[/bold red]")
 
     return custom_providers
@@ -548,7 +550,7 @@ def _display_provider_credentials(provider_name: str):
         auth_class = _get_provider_auth_class(provider_name)
         auth_instance = auth_class()
         credentials = auth_instance.list_credentials(_get_oauth_base_dir())
-    except Exception as e:  # non-critical: credential listing failed
+    except (httpx.HTTPError, ValueError, KeyError, OSError, json.JSONDecodeError) as e:  # non-critical: credential listing failed
         logging.debug("Credential listing failed for %s: %s", provider_name, e)
         credentials = []
 
@@ -600,7 +602,7 @@ async def _edit_oauth_credential_email(provider_name: str):
         auth_class = _get_provider_auth_class(provider_name)
         auth_instance = auth_class()
         credentials = auth_instance.list_credentials(_get_oauth_base_dir())
-    except Exception as e:
+    except (httpx.HTTPError, ValueError, KeyError, OSError, json.JSONDecodeError) as e:
         console.print(f"[bold red]Error loading credentials: {e}[/bold red]")
         return
 
@@ -662,7 +664,7 @@ async def _edit_oauth_credential_email(provider_name: str):
             )
         )
 
-    except Exception as e:
+    except (httpx.HTTPError, ValueError, KeyError, OSError, json.JSONDecodeError) as e:
         console.print(f"[bold red]Error editing credential: {e}[/bold red]")
 
 
@@ -789,7 +791,7 @@ async def _view_oauth_credentials_detail(provider_name: str):
         auth_class = _get_provider_auth_class(provider_name)
         auth_instance = auth_class()
         credentials = auth_instance.list_credentials(_get_oauth_base_dir())
-    except Exception as e:  # non-critical: credential listing failed
+    except (httpx.HTTPError, ValueError, KeyError, OSError, json.JSONDecodeError) as e:  # non-critical: credential listing failed
         logging.debug("Credential listing failed for %s: %s", provider_name, e)
         credentials = []
 
@@ -958,7 +960,7 @@ async def _delete_api_key_menu():
                 )
             )
 
-    except Exception as e:
+    except (ValueError, OSError) as e:
         console.print(f"[bold red]Error: {e}[/bold red]")
 
 
@@ -1049,7 +1051,7 @@ async def _delete_oauth_credential_menu():
                 )
             )
 
-    except Exception as e:
+    except (ValueError, OSError) as e:
         console.print(f"[bold red]Error: {e}[/bold red]")
 
 
@@ -1106,7 +1108,7 @@ async def _edit_oauth_credential_menu():
         provider_name, _ = providers_with_creds[provider_idx]
         await _edit_oauth_credential_email(provider_name)
 
-    except Exception as e:
+    except (ValueError, OSError) as e:
         console.print(f"[bold red]Error: {e}[/bold red]")
 
 
@@ -1760,7 +1762,15 @@ async def setup_new_credential(provider_name: str):
 
         console.print(Panel(success_text, style="bold green", title="Success"))
 
-    except Exception as e:
+    except (
+        httpx.HTTPError,
+        httpx.TimeoutException,
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+    ) as e:
         console.print(
             Panel(
                 f"An error occurred during setup for {provider_name}: {e}",
@@ -1857,7 +1867,14 @@ async def export_gemini_cli_to_env():
         console.print(
             "[bold red]Invalid input. Please enter a number or 'b'.[/bold red]"
         )
-    except Exception as e:
+    except (
+        httpx.HTTPError,
+        httpx.TimeoutException,
+        OSError,
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+    ) as e:
         console.print(
             Panel(
                 f"An error occurred during export: {e}", style="bold red", title="Error"
@@ -1952,7 +1969,14 @@ async def export_qwen_code_to_env():
         console.print(
             "[bold red]Invalid input. Please enter a number or 'b'.[/bold red]"
         )
-    except Exception as e:
+    except (
+        httpx.HTTPError,
+        httpx.TimeoutException,
+        OSError,
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+    ) as e:
         console.print(
             Panel(
                 f"An error occurred during export: {e}", style="bold red", title="Error"
@@ -2047,7 +2071,14 @@ async def export_iflow_to_env():
         console.print(
             "[bold red]Invalid input. Please enter a number or 'b'.[/bold red]"
         )
-    except Exception as e:
+    except (
+        httpx.HTTPError,
+        httpx.TimeoutException,
+        OSError,
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+    ) as e:
         console.print(
             Panel(
                 f"An error occurred during export: {e}", style="bold red", title="Error"
@@ -2142,7 +2173,14 @@ async def export_antigravity_to_env():
         console.print(
             "[bold red]Invalid input. Please enter a number or 'b'.[/bold red]"
         )
-    except Exception as e:
+    except (
+        httpx.HTTPError,
+        httpx.TimeoutException,
+        OSError,
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+    ) as e:
         console.print(
             Panel(
                 f"An error occurred during export: {e}", style="bold red", title="Error"
@@ -2162,7 +2200,7 @@ async def export_all_provider_credentials(provider_name: str):
     try:
         auth_class = _get_provider_auth_class(provider_name)
         auth_instance = auth_class()
-    except Exception as e:  # non-critical: provider auth unavailable
+    except (ValueError, TypeError, OSError) as e:  # non-critical: provider auth unavailable
         logging.debug("Provider auth instantiation failed for %s: %s", provider_name, e)
         console.print(f"[bold red]Unknown provider: {provider_name}[/bold red]")
         return
@@ -2207,7 +2245,14 @@ async def export_all_provider_credentials(provider_name: str):
                     f"  ✗ Failed to export {Path(cred_info['file_path']).name}"
                 )
 
-        except Exception as e:
+        except (
+            httpx.HTTPError,
+            httpx.TimeoutException,
+            OSError,
+            KeyError,
+            TypeError,
+            json.JSONDecodeError,
+        ) as e:
             console.print(
                 f"  ✗ Failed to export {Path(cred_info['file_path']).name}: {e}"
             )
@@ -2233,7 +2278,7 @@ async def combine_provider_credentials(provider_name: str):
     try:
         auth_class = _get_provider_auth_class(provider_name)
         auth_instance = auth_class()
-    except Exception as e:  # non-critical: provider auth unavailable
+    except (ValueError, TypeError, OSError) as e:  # non-critical: provider auth unavailable
         logging.debug("Provider auth instantiation failed for %s: %s", provider_name, e)
         console.print(f"[bold red]Unknown provider: {provider_name}[/bold red]")
         return
@@ -2283,7 +2328,13 @@ async def combine_provider_credentials(provider_name: str):
             combined_lines.append("")  # Blank line between credentials
             combined_count += 1
 
-        except Exception as e:
+        except (
+            OSError,
+            KeyError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as e:
             console.print(
                 f"  ✗ Failed to process {Path(cred_info['file_path']).name}: {e}"
             )
@@ -2335,7 +2386,7 @@ async def combine_all_credentials():
         try:
             auth_class = _get_provider_auth_class(provider_name)
             auth_instance = auth_class()
-        except Exception as e:  # non-critical: provider auth unavailable
+        except (ValueError, TypeError, OSError) as e:  # non-critical: provider auth unavailable
             logging.debug("Provider auth instantiation skipped for %s: %s", provider_name, e)
             continue  # Skip providers that don't have auth classes
 
@@ -2363,7 +2414,13 @@ async def combine_all_credentials():
                 provider_count += 1
                 total_count += 1
 
-            except Exception as e:
+            except (
+                OSError,
+                KeyError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as e:
                 console.print(
                     f"  ✗ Failed to process {Path(cred_info['file_path']).name}: {e}"
                 )

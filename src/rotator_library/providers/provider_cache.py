@@ -162,10 +162,8 @@ class ProviderCache:
             await self._load_from_disk()
             await self._start_background_tasks()
             self._initialized = True
-        except Exception as e:
-            lib_logger.error(
-                f"ProviderCache[{self._cache_name}] async init failed: {e}"
-            )
+        except (OSError, IOError, JSONDecodeError, AttributeError, RuntimeError) as e:
+            lib_logger.error(f"ProviderCache[{self._cache_name}] async init failed: {e}", exc_info=True)
             self._initialized = True  # Allow operation even if init failed
 
     async def _load_from_disk(self) -> None:
@@ -213,8 +211,8 @@ class ProviderCache:
             lib_logger.warning(
                 f"ProviderCache[{self._cache_name}]: File corrupted: {e}"
             )
-        except Exception as e:
-            lib_logger.error(f"ProviderCache[{self._cache_name}]: Load failed: {e}")
+        except (OSError, IOError, AttributeError, ValueError) as e:
+            lib_logger.error(f"ProviderCache[{self._cache_name}]: Load failed: {e}", exc_info=True)
 
     # =========================================================================
     # DISK PERSISTENCE
@@ -337,11 +335,11 @@ class ProviderCache:
                             self._dirty = False
                         elif not success:
                             self._dirty = True
-                except Exception as e:
+                except (OSError, IOError, JSONDecodeError, AttributeError, RuntimeError) as e:
                     async with self._rw_lock.write():
                         self._dirty = True
                     lib_logger.error(
-                        f"ProviderCache[{self._cache_name}]: Writer error: {e}"
+                        f"ProviderCache[{self._cache_name}]: Writer error: {e}", exc_info=True
                     )
         except asyncio.CancelledError:
             lib_logger.debug(f"ProviderCache[{self._cache_name}]: Writer loop cancelled")
@@ -560,7 +558,7 @@ class ProviderCache:
         except (JSONDecodeError, IOError, OSError):
             self._disk_entry_cache = {}
             self._disk_cache_valid = True
-        except Exception as e:
+        except (AttributeError, ValueError) as e:
             lib_logger.debug(
                 f"ProviderCache[{self._cache_name}]: Disk index load failed: {e}"
             )
@@ -604,7 +602,7 @@ class ProviderCache:
                     f"ProviderCache[{self._cache_name}]: Loaded {key} from disk"
                 )
             return value if return_value else None
-        except Exception as e:
+        except (OSError, IOError, JSONDecodeError, AttributeError, ValueError) as e:
             lib_logger.debug(
                 f"ProviderCache[{self._cache_name}]: Disk lookup failed: {e}"
             )
@@ -655,7 +653,7 @@ class ProviderCache:
                 await self._init_task
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except (OSError, IOError, JSONDecodeError, AttributeError, RuntimeError) as e:
                 lib_logger.debug(f"ProviderCache[{self._cache_name}]: Init task error during shutdown: {e}")
 
         # Cancel background tasks
@@ -666,7 +664,7 @@ class ProviderCache:
                     await task
                 except asyncio.CancelledError:
                     lib_logger.debug(f"ProviderCache[{self._cache_name}]: Shutdown cancelled")
-                except Exception as e:
+                except (OSError, IOError, JSONDecodeError, AttributeError, RuntimeError) as e:
                     lib_logger.debug(f"ProviderCache[{self._cache_name}]: Shutdown task error: {e}")
 
         # Wait for pending tasks to complete

@@ -6,6 +6,7 @@ Google OAuth Quota Tracker Base
 """
 
 import logging
+import httpx
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from pathlib import Path
 import time
@@ -76,7 +77,7 @@ class GoogleQuotaTrackerBase(BaseQuotaTracker):
             else:
                 result["models"] = {name: info for name, info in parsed}
             return result
-        except Exception as e:
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
             lib_logger.warning(f"Failed to fetch quota for {identifier}: {e}")
             return {
                 "status": "error",
@@ -116,5 +117,5 @@ class GoogleQuotaTrackerBase(BaseQuotaTracker):
             if response.status_code == 200:
                 return {"success": True, "error": None}
             return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
-        except Exception as e:
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
             return {"success": False, "error": str(e)}

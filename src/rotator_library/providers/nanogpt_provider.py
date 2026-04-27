@@ -258,7 +258,7 @@ class NanoGptProvider(NanoGptQuotaTracker, ProviderInterface):
                 lib_logger.debug(f"HTTP error fetching nanogpt models: {e}")
         except httpx.RequestError as e:
             lib_logger.debug(f"Request error fetching nanogpt models: {e}")
-        except Exception as e:
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as e:
             lib_logger.debug(f"Dynamic model discovery failed for nanogpt: {e}")
 
             # Source 3: Fallback to hardcoded models if nothing discovered
@@ -331,7 +331,7 @@ class NanoGptProvider(NanoGptQuotaTracker, ProviderInterface):
         except httpx.RequestError as e:
             lib_logger.debug(f"Request error fetching nanogpt subscription models: {e}")
             self._subscription_models = self._discovered_models.copy()
-        except Exception as e:
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError) as e:
             lib_logger.debug(f"Subscription model discovery failed for nanogpt: {e}")
             # Fall back to treating all discovered models as subscription
             self._subscription_models = self._discovered_models.copy()
@@ -468,7 +468,7 @@ class NanoGptProvider(NanoGptQuotaTracker, ProviderInterface):
                             reset_timestamp=monthly_reset_ts if monthly_reset_ts > 0 else None,
                         )
 
-                except Exception as e:
+                except (httpx.HTTPError, json.JSONDecodeError, ValueError, KeyError) as e:
                     counters["errors"] += 1
                     lib_logger.warning(
                         f"Failed to refresh NanoGPT subscription usage: {e}"

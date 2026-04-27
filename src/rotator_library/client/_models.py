@@ -259,7 +259,8 @@ class ModelsMixin:
         static_fallback = []
         try:
             static_fallback = self.model_definitions.get_all_provider_models(provider)
-        except Exception:
+        except (OSError, IOError, ValueError) as e:
+            lib_logger.error(f"Failed to get static models for provider {provider}: {type(e).__name__}: {e}")
             static_fallback = []
         lib_logger.warning(
             "Failed to get models for provider %s after trying all credentials; "

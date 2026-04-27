@@ -4,6 +4,8 @@
 import asyncio
 import time
 
+from typing import Any, Dict, List, Union
+
 import orjson
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import Response
@@ -31,7 +33,7 @@ async def list_models(
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
     enriched: bool = True,
-):
+) -> Response:
     """
     Returns a list of available models in the OpenAI-compatible format.
 
@@ -79,7 +81,7 @@ async def get_model(
     model_id: str,
     request: Request,
     _=Depends(verify_api_key),
-):
+) -> Dict[str, Any]:
     """
     Returns detailed information about a specific model.
 
@@ -106,7 +108,7 @@ async def get_model(
 async def model_info_stats(
     request: Request,
     _=Depends(verify_api_key),
-):
+) -> Dict[str, Any]:
     """
     Returns statistics about the model info service (for monitoring/debugging).
     """
@@ -116,7 +118,7 @@ async def model_info_stats(
 
 
 @router.get("/v1/providers")
-async def list_providers(_=Depends(verify_api_key)):
+async def list_providers(_=Depends(verify_api_key)) -> List[str]:
     """
     Returns a list of all available providers.
     """

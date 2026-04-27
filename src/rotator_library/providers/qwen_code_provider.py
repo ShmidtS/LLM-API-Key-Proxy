@@ -161,9 +161,9 @@ class QwenCodeProvider(QwenAuthBase, ACompletionMixin, ProviderInterface):
                 lib_logger.debug(f"HTTP error fetching qwen_code models: {e}")
         except httpx.RequestError as e:
             lib_logger.debug(f"Request error fetching qwen_code models: {e}")
-        except Exception as e:
+        except httpx.HTTPError as e:
             # Silently ignore dynamic discovery errors
-            lib_logger.debug(f"Dynamic model discovery failed for qwen_code: {e}")
+            lib_logger.debug(f"Dynamic model discovery failed for qwen_code: {e}", exc_info=True)
 
         return models
 

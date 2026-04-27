@@ -263,7 +263,7 @@ class AntigravityStreamingMixin:
                     # lib_logger.error(
                     #     f"API error {response.status_code}: {error_body.decode()}"
                     # )
-                except Exception as e:
+                except (httpx.HTTPError, ValueError, Exception) as e:
                     lib_logger.debug(f"Failed to read error body for logging: {e}")
 
             response.raise_for_status()
@@ -594,7 +594,7 @@ class AntigravityStreamingMixin:
                 # Other HTTP errors - raise immediately (let caller handle)
                 raise
 
-            except Exception as e:
+            except (httpx.HTTPError, Exception) as e:
                 lib_logger.debug("Non-HTTP streaming error: %s", e)
                 # Non-HTTP errors - raise immediately
                 raise
@@ -667,6 +667,6 @@ class AntigravityStreamingMixin:
             total = unwrapped.get("totalTokens", 0)
 
             return {"prompt_tokens": total, "total_tokens": total}
-        except Exception as e:
+        except (httpx.HTTPError, ValueError, json.JSONDecodeError, Exception) as e:
             lib_logger.error(f"Token counting failed: {e}")
             return {"prompt_tokens": 0, "total_tokens": 0}

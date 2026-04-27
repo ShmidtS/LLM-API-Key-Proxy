@@ -265,7 +265,7 @@ def _classify_rate_limit(
         if response_text:
             try:
                 quota_value, quota_id = _extract_quota_details(response_text)
-            except (AttributeError, OSError):
+            except (ValueError, OSError, KeyError, TypeError):
                 lib_logger.debug("Could not read error response for quota details", exc_info=True)
         return ClassifiedError(
             error_type="quota_exceeded",
@@ -409,7 +409,7 @@ def get_retry_after(error: Exception) -> Optional[int]:
                 result = _extract_retry_from_json_body(response_text)
                 if result is not None:
                     return result
-        except Exception as exc:
+        except (httpx.HTTPError, RuntimeError, AttributeError) as exc:
             lib_logger.debug("Response body unavailable for retry-after extraction (%s: %s)", type(exc).__name__, exc)
 
         # Fallback to HTTP headers
@@ -952,7 +952,7 @@ def _try_parse_provider_quota_error(
                 quota_reset_timestamp=quota_reset_timestamp,
                 reason=reason,
             )
-    except Exception as parse_error:
+    except (ValueError, KeyError, TypeError, AttributeError) as parse_error:
         lib_logger.debug(
             f"Provider-specific error parsing failed for '{provider}': {parse_error}"
         )
@@ -1171,8 +1171,9 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
             response_text = None
             try:
                 response_text = e.response.text if hasattr(e.response, "text") else ""
-            except (AttributeError, OSError):
+            except (OSError, ValueError):
                 lib_logger.debug("Could not read error response for quota details", exc_info=True)
+                response_text = None
             return _classify_rate_limit(
                 e,
                 error_text=error_body,

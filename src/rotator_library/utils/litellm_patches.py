@@ -131,10 +131,8 @@ def _patch_litellm_choices():
         Choices.__init__ = patched_choices_init
         logger.info("Applied finish_reason patch to litellm.types.utils.Choices")
 
-    except ImportError as e:
+    except (ImportError, AttributeError, ValueError, Exception) as e:
         logger.warning(f"Could not patch litellm.types.utils.Choices: {e}")
-    except Exception as e:
-        logger.error(f"Unexpected error patching LiteLLM Choices: {e}")
 
 
 def patch_litellm_finish_reason():
@@ -168,10 +166,8 @@ def patch_litellm_finish_reason():
         ChatCompletionChunk.model_validate = staticmethod(patched_model_validate)
         logger.info("Applied finish_reason patch to ChatCompletionChunk.model_validate")
 
-    except ImportError as e:
+    except (ImportError, AttributeError, ValueError, Exception) as e:
         logger.warning(f"Could not patch OpenAI ChatCompletionChunk: {e}")
-    except Exception as e:
-        logger.error(f"Unexpected error patching OpenAI: {e}")
 
     # Patch LiteLLM Choices (critical for stream_chunk_builder)
     _patch_litellm_choices()

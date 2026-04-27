@@ -2,7 +2,7 @@
 # Copyright (c) 2026 ShmidtS
 
 import asyncio
-from typing import Optional
+from typing import Optional, Any
 
 import litellm
 from fastapi import APIRouter, Request, Depends
@@ -26,7 +26,7 @@ async def embeddings(
     client: RotatingClient = Depends(get_rotating_client),
     batcher: Optional[EmbeddingBatcher] = Depends(get_embedding_batcher),
     _=Depends(verify_api_key),
-):
+) -> Any:
     """
     OpenAI-compatible endpoint for creating embeddings.
     Supports two modes based on the USE_EMBEDDING_BATCHER flag:

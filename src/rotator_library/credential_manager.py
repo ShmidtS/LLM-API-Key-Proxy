@@ -87,26 +87,27 @@ class CredentialManager:
             # Check for numbered credentials (PROVIDER_N_ACCESS_TOKEN pattern)
             # Pattern: ANTIGRAVITY_1_ACCESS_TOKEN, ANTIGRAVITY_2_ACCESS_TOKEN, etc.
             numbered_pattern = _NUMBERED_OAUTH_PATTERNS[provider]
+            access_key_format = f"{env_prefix}_ACCESS_TOKEN"
+            refresh_key_format = f"{env_prefix}_REFRESH_TOKEN"
+            numbered_refresh_key_format = f"{env_prefix}_{{}}_REFRESH_TOKEN"
 
             for key in self.env_vars.keys():
                 match = numbered_pattern.match(key)
                 if match:
                     index = match.group(1)
                     # Verify refresh token also exists
-                    refresh_key = f"{env_prefix}_{index}_REFRESH_TOKEN"
+                    refresh_key = numbered_refresh_key_format.format(index)
                     if refresh_key in self.env_vars and self.env_vars[refresh_key]:
                         found_indices.add(index)
 
             # Check for legacy single credential (PROVIDER_ACCESS_TOKEN pattern)
             # Only use this if no numbered credentials exist
             if not found_indices:
-                access_key = f"{env_prefix}_ACCESS_TOKEN"
-                refresh_key = f"{env_prefix}_REFRESH_TOKEN"
                 if (
-                    access_key in self.env_vars
-                    and self.env_vars[access_key]
-                    and refresh_key in self.env_vars
-                    and self.env_vars[refresh_key]
+                    access_key_format in self.env_vars
+                    and self.env_vars[access_key_format]
+                    and refresh_key_format in self.env_vars
+                    and self.env_vars[refresh_key_format]
                 ):
                     # Use "0" as the index for legacy single credential
                     found_indices.add("0")
@@ -202,7 +203,7 @@ class CredentialManager:
                     prepared_paths.append(str(local_path.resolve()))
                 except Exception as e:
                     lib_logger.warning(
-                        f"Credential file failed to copy from '{source_path}' to '{local_path}': {e}. "
+                        f"Credential file failed to copy from '{source_path}' to '{local_path}': {type(e).__name__}: {e}. "
                         f"This credential will be skipped."
                     )
 

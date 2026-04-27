@@ -163,7 +163,7 @@ def get_context_window(model: str, registry=None) -> Optional[int]:
             metadata = registry.lookup(model)
             if metadata and metadata.limits.context_window:
                 return metadata.limits.context_window
-        except Exception as e:
+        except (ValueError, KeyError, TypeError, Exception) as e:
             logger.debug(f"Registry lookup failed for {model}: {e}")
 
     # Extract base model name
@@ -216,7 +216,7 @@ def count_input_tokens(
     if messages:
         try:
             total += token_counter(model=model, messages=messages)
-        except Exception as e:
+        except (ValueError, TypeError, KeyError) as e:
             logger.warning(f"Failed to count message tokens: {e}")
             # Fallback: rough estimate
             total += sum(len(str(m).split()) * 4 // 3 for m in messages)
@@ -226,7 +226,7 @@ def count_input_tokens(
         try:
             tools_json = json_dumps_str(tools)
             total += token_counter(model=model, text=tools_json)
-        except Exception as e:
+        except (ValueError, TypeError, KeyError) as e:
             logger.debug(f"Failed to count tool tokens: {e}")
             # Fallback: rough estimate
             total += len(str(tools)) // 4

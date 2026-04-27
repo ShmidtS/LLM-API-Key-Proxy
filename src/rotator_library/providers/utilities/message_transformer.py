@@ -183,7 +183,7 @@ def _transform_user_content_default(content: Any) -> List[Dict[str, Any]]:
                                 "data": data,
                             }
                         })
-                    except Exception as e:
+                    except (ValueError, KeyError, TypeError) as e:
                         lib_logger.warning(f"Failed to parse image data URL: {e}")
                 else:
                     lib_logger.warning(

@@ -26,8 +26,9 @@ class UsageManagerSerializationMixin:
             dt = datetime.fromtimestamp(ts).astimezone()  # Local timezone
             # Use UTC offset for conciseness (works on all platforms)
             return dt.strftime("%Y-%m-%d %H:%M:%S %z")
-        except (OSError, ValueError, OverflowError):
-            return None
+        except (OSError, ValueError, OverflowError) as e:
+                lib_logger.debug(f"Could not format timestamp: {type(e).__name__}: {e}")
+                return None
 
     def _add_readable_timestamps(self, data: Dict) -> Dict:
         """

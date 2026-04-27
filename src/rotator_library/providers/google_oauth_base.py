@@ -367,7 +367,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                 raise IOError(
                     f"{self.ENV_PREFIX} OAuth credential file not found at '{path}'"
                 )
-            except Exception as e:
+            except (OSError, json.JSONDecodeError, ValueError) as e:
                 raise IOError(
                     f"Failed to load {self.ENV_PREFIX} OAuth credentials from '{path}': {e}"
                 )
@@ -387,7 +387,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             success = await asyncio.to_thread(
                 safe_write_json, path, creds, lib_logger, secure_permissions=True, buffer_on_failure=self.BUFFER_ON_FAILURE
             )
-        except Exception as e:
+        except (OSError, IOError) as e:
             lib_logger.debug("Credential save failed for %s: %s", path, e)
             self._credentials_cache.pop(path, None)
             raise
@@ -697,7 +697,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                         f"<html><body><h1>Authentication Failed</h1><p>Error: {error}. Please try again.</p></body></html>".encode()
                     )
                 await writer.drain()
-            except Exception as e:
+            except (OSError, UnicodeDecodeError, IndexError, ValueError, RuntimeError) as e:
                 lib_logger.error(f"Error in OAuth callback handler: {e}")
             finally:
                 writer.close()
@@ -763,7 +763,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                 try:
                     webbrowser.open(auth_url)
                     lib_logger.info("Browser opened successfully for OAuth flow")
-                except Exception as e:
+                except (OSError, webbrowser.Error) as e:
                     lib_logger.warning(
                         f"Failed to open browser automatically: {e}. Please open the URL manually."
                     )
@@ -882,7 +882,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
         if path:
             try:
                 await self._post_auth_discovery(path, new_creds["access_token"])
-            except Exception as e:
+            except (httpx.HTTPError, httpx.TimeoutException, KeyError, ValueError, OSError, IOError) as e:
                 # Don't fail auth if discovery fails - it can be retried on first request
                 lib_logger.warning(
                     f"Post-auth discovery failed for '{display_name}': {e}. "
@@ -905,7 +905,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                 try:
                     creds = await self._refresh_token(credential_path, creds)
                     self._staleness_counter.pop(credential_path, None)
-                except Exception as e:
+                except (httpx.HTTPError, httpx.TimeoutException, KeyError, ValueError, OSError, IOError) as e:
                     cached = self._credentials_cache.get(credential_path)
                     if cached and cached.get(token_key):
                         stale_count = self._staleness_counter.get(credential_path, 0)
@@ -927,7 +927,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                     else:
                         raise
             return {"Authorization": f"Bearer {creds[token_key]}"}
-        except Exception as e:
+        except (KeyError, ValueError, OSError, IOError, json.JSONDecodeError, httpx.HTTPError, httpx.TimeoutException) as e:
             cached = self._credentials_cache.get(credential_path)
             if cached and cached.get(token_key):
                 stale_count = self._staleness_counter.get(credential_path, 0)
@@ -991,7 +991,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             lib_logger.debug(
                 f"Persisted project_id and tier to credential file: {credential_path}"
             )
-        except Exception as e:
+        except (OSError, IOError, json.JSONDecodeError, ValueError) as e:
             lib_logger.warning(
                 f"Failed to persist project metadata to credential file: {e}"
             )
@@ -1229,7 +1229,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                 tier = updated_creds.get("_proxy_metadata", {}).get("tier")
                 project_id = updated_creds.get("_proxy_metadata", {}).get("project_id")
                 new_creds = updated_creds
-            except Exception as e:
+            except (httpx.HTTPError, httpx.TimeoutException, KeyError, ValueError, OSError, IOError, json.JSONDecodeError) as e:
                 lib_logger.warning(
                     f"Post-auth discovery failed: {e}. Tier/project will be discovered on first request."
                 )
@@ -1244,7 +1244,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                 credentials=new_creds,
             )
 
-        except Exception as e:
+        except (httpx.HTTPError, httpx.TimeoutException, KeyError, ValueError, OSError, IOError, json.JSONDecodeError) as e:
             lib_logger.error(f"Credential setup failed: {e}")
             return CredentialSetupResult(success=False, error=str(e))
 
@@ -1357,7 +1357,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             lib_logger.info(f"Exported credential to {env_path}")
             return str(env_path)
 
-        except Exception as e:
+        except (OSError, IOError, json.JSONDecodeError, ValueError, AttributeError) as e:
             lib_logger.error(f"Failed to export credential: {e}")
             return None
 
@@ -1406,7 +1406,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                         "number": number,
                     }
                 )
-            except Exception as e:
+            except (OSError, IOError, json.JSONDecodeError, ValueError) as e:
                 lib_logger.debug(f"Could not read credential file {cred_file}: {e}")
                 continue
 
@@ -1445,6 +1445,6 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             lib_logger.info(f"Deleted credential file: {credential_path}")
             return True
 
-        except Exception as e:
+        except (OSError, IOError, ValueError) as e:
             lib_logger.error(f"Failed to delete credential: {e}")
             return False

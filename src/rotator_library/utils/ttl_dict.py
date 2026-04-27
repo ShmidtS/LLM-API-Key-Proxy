@@ -215,8 +215,8 @@ class TTLDict:
                 await self.acleanup()
             except asyncio.CancelledError:
                 break
-            except Exception:
-                logger.debug("TTL dict cleanup error", exc_info=True)
+            except Exception as e:
+                logger.debug("TTL dict cleanup error: %s", e)
 
     def close(self) -> None:
         if self._cleanup_task is not None:

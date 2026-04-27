@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from typing import Any
+
 import orjson
 import litellm
 from fastapi import APIRouter, Request, Depends
@@ -17,7 +19,7 @@ router = APIRouter(tags=["batches"])
 async def create_batch(
     request: Request,
     _=Depends(verify_api_key),
-):
+) -> Any:
     """
     OpenAI-compatible endpoint for creating a batch job.
 
@@ -39,7 +41,7 @@ async def create_batch(
 async def retrieve_batch(
     batch_id: str,
     _=Depends(verify_api_key),
-):
+) -> Any:
     """
     OpenAI-compatible endpoint for retrieving a batch job status.
     """
@@ -52,7 +54,7 @@ async def retrieve_batch(
 async def cancel_batch(
     batch_id: str,
     _=Depends(verify_api_key),
-):
+) -> Any:
     """
     OpenAI-compatible endpoint for cancelling a batch job.
     """
@@ -64,7 +66,7 @@ async def cancel_batch(
 @handle_route_errors(error_format="openai", log_context="Batch request failed")
 async def list_batches(
     _=Depends(verify_api_key),
-):
+) -> Any:
     """
     OpenAI-compatible endpoint for listing batch jobs.
     """
