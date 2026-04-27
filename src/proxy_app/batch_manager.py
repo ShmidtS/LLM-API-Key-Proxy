@@ -130,7 +130,7 @@ class EmbeddingBatcher:
         try:
             await task
         except asyncio.CancelledError:
-            pass
+            logger.debug('EmbeddingBatcher worker task cancelled during stop')
         finally:
             cancelled_exc = asyncio.CancelledError('EmbeddingBatcher stopped')
             while not self.queue.empty():

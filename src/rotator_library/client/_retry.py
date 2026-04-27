@@ -4,6 +4,8 @@
 """Retry mixin for RotatingClient — prepare context, execute_with_retry,
 streaming_acompletion_with_retry, forced_streaming_acompletion."""
 
+from __future__ import annotations
+
 import asyncio
 import codecs
 import logging
@@ -27,7 +29,7 @@ lib_logger = logging.getLogger("rotator_library")
 import litellm
 from litellm.exceptions import APIConnectionError, BadRequestError, InvalidRequestError
 
-from ..config.defaults import MAX_TOTAL_ATTEMPTS
+from ..config.defaults import MAX_TOTAL_ATTEMPTS, RETRY_SAME_KEY_MAX_WAIT
 from ..error_handler import (
     classify_error,
     get_retry_backoff,
@@ -261,7 +263,7 @@ class RetryMixin(RetryBaseMixin):
             )
 
         wait_time = compute_backoff_with_jitter(
-            attempt, max_wait=30.0, retry_after=classified_error.retry_after,
+            attempt, max_wait=RETRY_SAME_KEY_MAX_WAIT, retry_after=classified_error.retry_after,
         )
         remaining_budget = deadline - time.monotonic()
         if wait_time > remaining_budget:
@@ -348,7 +350,7 @@ class RetryMixin(RetryBaseMixin):
             mask_credential(current_cred),
         )
         wait_time = compute_backoff_with_jitter(
-            attempt, max_wait=30.0, retry_after=classified_error.retry_after,
+            attempt, max_wait=RETRY_SAME_KEY_MAX_WAIT, retry_after=classified_error.retry_after,
         )
         return _ErrorDecision(
             action="retry_same_key", wait_time=wait_time,
@@ -410,7 +412,7 @@ class RetryMixin(RetryBaseMixin):
             and deadline > 0
         ):
             wait_time = compute_backoff_with_jitter(
-                attempt, max_wait=30.0,
+                attempt, max_wait=RETRY_SAME_KEY_MAX_WAIT,
                 retry_after=classified_error.retry_after,
             )
             remaining_budget = deadline - time.monotonic()

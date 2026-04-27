@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 ShmidtS
 
+"""Apply optional SSL compatibility patches for LiteLLM and aiohttp."""
+
 import os
 import ssl as _ssl_module
 import logging
@@ -9,6 +11,33 @@ AZURE_COMPATIBLE_CIPHERS = (
     "ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:"
     "ECDH+3DES:DH+3DES:RSA+AESGCM:RSA+AES:RSA+3DES:!aNULL:!MD5:!DSS"
 )
+
+
+def _env_flag(name):
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _tls_verification_disabled(disable_tls_verify=None):
+    if disable_tls_verify is not None:
+        if isinstance(disable_tls_verify, str):
+            disabled = disable_tls_verify.strip().lower() in {"true", "1", "yes"}
+        else:
+            disabled = disable_tls_verify is True
+        source = "explicit config"
+    elif _env_flag("DISABLE_TLS_VERIFY"):
+        disabled = True
+        source = "DISABLE_TLS_VERIFY"
+    else:
+        disabled = os.environ.get("HTTP_SSL_VERIFY", "true").strip().lower() == "false"
+        source = "HTTP_SSL_VERIFY"
+
+    if disabled:
+        logging.warning(
+            "[SSL-FIX] TLS certificate verification is DISABLED via %s. "
+            "This is insecure and should only be used for testing.",
+            source,
+        )
+    return disabled
 
 
 def _safe_set_ciphers(ctx, cipher_string):
@@ -22,14 +51,14 @@ def _safe_set_ciphers(ctx, cipher_string):
             raise
 
 
-def _patch_aiohttp_connector():
-    """Patch ssl module and aiohttp.TCPConnector to disable SSL verification."""
+def _patch_aiohttp_connector(disable_tls_verify=None):
+    """Patch ssl module and aiohttp.TCPConnector when TLS verification is explicitly disabled."""
     try:
-        _ssl_verify = os.environ.get("HTTP_SSL_VERIFY", "true").lower() != "false"
+        _ssl_verify = not _tls_verification_disabled(disable_tls_verify)
+        _force_tls12 = os.environ.get("SSL_FORCE_TLS12", "false").lower() == "true"
 
         if not _ssl_verify:
             # Global patch: make ssl.create_default_context() return unverified context
-            _force_tls12 = os.environ.get("SSL_FORCE_TLS12", "false").lower() == "true"
 
             def _patched_create_default(*args, **kwargs):
                 ctx = _ssl_module._create_unverified_context()
@@ -78,15 +107,14 @@ def _patch_aiohttp_connector():
         logging.error(f"[SSL-FIX] Failed to patch aiohttp connector: {e}")
 
 
-def _patch_litellm_ssl():
-    """Patch litellm to disable SSL verification when HTTP_SSL_VERIFY=false.
+def _patch_litellm_ssl(disable_tls_verify=None):
+    """Patch litellm to disable SSL verification only when explicitly requested.
 
     Must be called immediately after litellm import, before any API calls.
     Sets litellm.ssl_verify=False, creates httpx clients with verify=False,
     and sets SSL_VERIFY=False env var so litellm internals respect the flag.
     """
-    _ssl_verify_env = os.environ.get("HTTP_SSL_VERIFY", "true").lower()
-    if _ssl_verify_env != "false":
+    if not _tls_verification_disabled(disable_tls_verify):
         return
 
     try:

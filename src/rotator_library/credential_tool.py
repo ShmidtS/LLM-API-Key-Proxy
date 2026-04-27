@@ -48,6 +48,33 @@ def _get_env_file() -> Path:
 
 console = Console()
 
+
+def _read_text_file(path: Path | str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _write_text_file(path: Path | str, content: str) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _read_json_file(path: Path | str) -> dict:
+    return json_loads(_read_text_file(path))
+
+
+def _write_json_file(path: Path | str, data: dict) -> None:
+    _write_text_file(path, orjson.dumps(data, option=orjson.OPT_INDENT_2).decode("utf-8"))
+
+
+def _env_key_exists(key_name: str) -> bool:
+    env_file = _get_env_file()
+    if not env_file.is_file():
+        return False
+    with open(env_file, "r", encoding="utf-8") as f:
+        return any(line.startswith(f"{key_name}=") for line in f)
+
+
 # Global variables for lazily loaded modules
 _provider_auth_map = None
 _provider_plugins = None
@@ -601,7 +628,7 @@ async def _edit_oauth_credential_email(provider_name: str):
     try:
         auth_class = _get_provider_auth_class(provider_name)
         auth_instance = auth_class()
-        credentials = auth_instance.list_credentials(_get_oauth_base_dir())
+        credentials = await asyncio.to_thread(auth_instance.list_credentials, _get_oauth_base_dir())
     except (httpx.HTTPError, ValueError, KeyError, OSError, json.JSONDecodeError) as e:
         console.print(f"[bold red]Error loading credentials: {e}[/bold red]")
         return
@@ -642,8 +669,7 @@ async def _edit_oauth_credential_email(provider_name: str):
             return
 
         # Load and update the credential file
-        with open(cred_path, "r", encoding="utf-8") as f:
-            creds = json_loads(f.read())
+        creds = await asyncio.to_thread(_read_json_file, cred_path)
 
         if "_proxy_metadata" not in creds:
             creds["_proxy_metadata"] = {}
@@ -652,8 +678,7 @@ async def _edit_oauth_credential_email(provider_name: str):
         creds["_proxy_metadata"]["email"] = new_email.strip()
 
         # Save the updated credentials
-        with open(cred_path, "w", encoding="utf-8") as f:
-            f.write(orjson.dumps(creds, option=orjson.OPT_INDENT_2).decode("utf-8"))
+        await asyncio.to_thread(_write_json_file, cred_path, creds)
 
         console.print(
             Panel(
@@ -680,8 +705,8 @@ async def view_credentials_menu():
         _display_credentials_summary()
 
         # Build list of all providers with credentials
-        api_keys = _get_api_keys_from_env()
-        oauth_creds = _get_oauth_credentials_summary()
+        api_keys = await asyncio.to_thread(_get_api_keys_from_env)
+        oauth_creds = await asyncio.to_thread(_get_oauth_credentials_summary)
 
         all_providers = []
 
@@ -753,7 +778,7 @@ async def _view_api_keys_detail(provider_name: str):
     """Display detailed view of API keys for a specific provider."""
     clear_screen(f"View {provider_name} API Keys")
 
-    api_keys = _get_api_keys_from_env()
+    api_keys = await asyncio.to_thread(_get_api_keys_from_env)
     keys = api_keys.get(provider_name, [])
 
     if not keys:
@@ -790,7 +815,7 @@ async def _view_oauth_credentials_detail(provider_name: str):
     try:
         auth_class = _get_provider_auth_class(provider_name)
         auth_instance = auth_class()
-        credentials = auth_instance.list_credentials(_get_oauth_base_dir())
+        credentials = await asyncio.to_thread(auth_instance.list_credentials, _get_oauth_base_dir())
     except (httpx.HTTPError, ValueError, KeyError, OSError, json.JSONDecodeError) as e:  # non-critical: credential listing failed
         logging.debug("Credential listing failed for %s: %s", provider_name, e)
         credentials = []
@@ -890,7 +915,7 @@ async def manage_credentials_submenu():
 async def _delete_api_key_menu():
     """Menu for deleting an API key from the .env file."""
     clear_screen("Delete API Key")
-    api_keys = _get_api_keys_from_env()
+    api_keys = await asyncio.to_thread(_get_api_keys_from_env)
 
     if not api_keys:
         console.print("[bold yellow]No API keys configured.[/bold yellow]")
@@ -941,7 +966,7 @@ async def _delete_api_key_menu():
             console.print("[dim]Deletion cancelled.[/dim]")
             return
 
-        if _delete_api_key_from_env(key_name):
+        if await asyncio.to_thread(_delete_api_key_from_env, key_name):
             console.print(
                 Panel(
                     f"Successfully deleted [yellow]{key_name}[/yellow]",
@@ -967,7 +992,7 @@ async def _delete_api_key_menu():
 async def _delete_oauth_credential_menu():
     """Menu for deleting an OAuth credential file."""
     clear_screen("Delete OAuth Credential")
-    oauth_summary = _get_oauth_credentials_summary()
+    oauth_summary = await asyncio.to_thread(_get_oauth_credentials_summary)
 
     # Check if there are any credentials
     total = sum(len(creds) for creds in oauth_summary.values())
@@ -1032,7 +1057,7 @@ async def _delete_oauth_credential_menu():
         auth_class = _get_provider_auth_class(provider_name)
         auth_instance = auth_class()
 
-        if auth_instance.delete_credential(cred_path):
+        if await asyncio.to_thread(auth_instance.delete_credential, cred_path):
             console.print(
                 Panel(
                     f"Successfully deleted credential for [cyan]{email}[/cyan]",
@@ -1058,7 +1083,7 @@ async def _delete_oauth_credential_menu():
 async def _edit_oauth_credential_menu():
     """Menu for editing an OAuth credential's email field."""
     clear_screen("Edit OAuth Credential")
-    oauth_summary = _get_oauth_credentials_summary()
+    oauth_summary = await asyncio.to_thread(_get_oauth_credentials_summary)
 
     # Check if there are any credentials
     total = sum(len(creds) for creds in oauth_summary.values())
@@ -1463,16 +1488,12 @@ async def setup_api_key():
                 key_index = 1
                 while True:
                     key_name = f"{api_key_var}_{key_index}"
-                    if _get_env_file().is_file():
-                        with open(_get_env_file(), "r", encoding="utf-8") as f:
-                            if not any(line.startswith(f"{key_name}=") for line in f):
-                                break
-                    else:
+                    if not await asyncio.to_thread(_env_key_exists, key_name):
                         break
                     key_index += 1
 
                 key_name = f"{api_key_var}_{key_index}"
-                set_key(str(_get_env_file()), key_name, api_key.strip())
+                await asyncio.to_thread(set_key, str(_get_env_file()), key_name, api_key.strip())
                 saved_vars.append((key_name, api_key.strip()))
 
         # Prompt for extra variables
@@ -1492,7 +1513,7 @@ async def setup_api_key():
                     )
 
                 if value.strip():
-                    set_key(str(_get_env_file()), env_var_name, value.strip())
+                    await asyncio.to_thread(set_key, str(_get_env_file()), env_var_name, value.strip())
                     saved_vars.append((env_var_name, value.strip()))
 
         # Show success message
@@ -1671,19 +1692,18 @@ async def setup_custom_openai_provider():
 
     # Save API Base URL
     api_base_var = f"{provider_name}_API_BASE"
-    set_key(str(env_file), api_base_var, api_base)
+    await asyncio.to_thread(set_key, str(env_file), api_base_var, api_base)
 
     # Save API Key (find next available index)
     api_key_var_base = f"{provider_name}_API_KEY"
     key_index = 1
     if env_file.is_file():
-        with open(env_file, "r", encoding="utf-8") as f:
-            content = f.read()
-            while f"{api_key_var_base}_{key_index}=" in content:
-                key_index += 1
+        content = await asyncio.to_thread(_read_text_file, env_file)
+        while f"{api_key_var_base}_{key_index}=" in content:
+            key_index += 1
 
     api_key_var = f"{api_key_var_base}_{key_index}"
-    set_key(str(env_file), api_key_var, api_key)
+    await asyncio.to_thread(set_key, str(env_file), api_key_var, api_key)
 
     # Mask the API key for display
     if len(api_key) > 8:
@@ -1793,7 +1813,7 @@ async def export_gemini_cli_to_env():
     auth_instance = auth_class()
 
     # List available credentials using auth class
-    credentials = auth_instance.list_credentials(_get_oauth_base_dir())
+    credentials = await asyncio.to_thread(auth_instance.list_credentials, _get_oauth_base_dir())
 
     if not credentials:
         console.print(
@@ -1895,7 +1915,7 @@ async def export_qwen_code_to_env():
     auth_instance = auth_class()
 
     # List available credentials using auth class
-    credentials = auth_instance.list_credentials(_get_oauth_base_dir())
+    credentials = await asyncio.to_thread(auth_instance.list_credentials, _get_oauth_base_dir())
 
     if not credentials:
         console.print(
@@ -1997,7 +2017,7 @@ async def export_iflow_to_env():
     auth_instance = auth_class()
 
     # List available credentials using auth class
-    credentials = auth_instance.list_credentials(_get_oauth_base_dir())
+    credentials = await asyncio.to_thread(auth_instance.list_credentials, _get_oauth_base_dir())
 
     if not credentials:
         console.print(
@@ -2099,7 +2119,7 @@ async def export_antigravity_to_env():
     auth_instance = auth_class()
 
     # List available credentials using auth class
-    credentials = auth_instance.list_credentials(_get_oauth_base_dir())
+    credentials = await asyncio.to_thread(auth_instance.list_credentials, _get_oauth_base_dir())
 
     if not credentials:
         console.print(
@@ -2215,7 +2235,7 @@ async def export_all_provider_credentials(provider_name: str):
     )
 
     # List all credentials using auth class
-    credentials = auth_instance.list_credentials(_get_oauth_base_dir())
+    credentials = await asyncio.to_thread(auth_instance.list_credentials, _get_oauth_base_dir())
 
     if not credentials:
         console.print(
@@ -2293,7 +2313,7 @@ async def combine_provider_credentials(provider_name: str):
     )
 
     # List all credentials using auth class
-    credentials = auth_instance.list_credentials(_get_oauth_base_dir())
+    credentials = await asyncio.to_thread(auth_instance.list_credentials, _get_oauth_base_dir())
 
     if not credentials:
         console.print(
@@ -2318,8 +2338,7 @@ async def combine_provider_credentials(provider_name: str):
     for cred_info in credentials:
         try:
             # Load credential file
-            with open(cred_info["file_path"], "r", encoding="utf-8") as f:
-                creds = json_loads(f.read())
+            creds = await asyncio.to_thread(_read_json_file, cred_info["file_path"])
 
             # Use auth class to build env lines
             env_lines = auth_instance.build_env_lines(creds, cred_info["number"])
@@ -2343,8 +2362,7 @@ async def combine_provider_credentials(provider_name: str):
     combined_filename = f"{provider_name}_all_combined.env"
     combined_filepath = _get_oauth_base_dir() / combined_filename
 
-    with open(combined_filepath, "w", encoding="utf-8") as f:
-        f.write("\n".join(combined_lines))
+    await asyncio.to_thread(_write_text_file, combined_filepath, "\n".join(combined_lines))
 
     console.print(
         Panel(
@@ -2390,7 +2408,7 @@ async def combine_all_credentials():
             logging.debug("Provider auth instantiation skipped for %s: %s", provider_name, e)
             continue  # Skip providers that don't have auth classes
 
-        credentials = auth_instance.list_credentials(_get_oauth_base_dir())
+        credentials = await asyncio.to_thread(auth_instance.list_credentials, _get_oauth_base_dir())
 
         if not credentials:
             continue
@@ -2403,8 +2421,7 @@ async def combine_all_credentials():
         for cred_info in credentials:
             try:
                 # Load credential file
-                with open(cred_info["file_path"], "r", encoding="utf-8") as f:
-                    creds = json_loads(f.read())
+                creds = await asyncio.to_thread(_read_json_file, cred_info["file_path"])
 
                 # Use auth class to build env lines
                 env_lines = auth_instance.build_env_lines(creds, cred_info["number"])
@@ -2441,8 +2458,7 @@ async def combine_all_credentials():
     combined_filename = "all_providers_combined.env"
     combined_filepath = _get_oauth_base_dir() / combined_filename
 
-    with open(combined_filepath, "w", encoding="utf-8") as f:
-        f.write("\n".join(combined_lines))
+    await asyncio.to_thread(_write_text_file, combined_filepath, "\n".join(combined_lines))
 
     # Build summary
     summary_lines = [

@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # Copyright (c) 2026 ShmidtS
 
-from typing import TYPE_CHECKING
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from .client import RotatingClient
 from .utils.json_utils import STREAM_DONE
@@ -23,7 +25,7 @@ _LAZY_IMPORTS = {
 }
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     """Lazy-load heavy modules to speed up initial import."""
     entry = _LAZY_IMPORTS.get(name)
     if entry is not None:

@@ -139,3 +139,4 @@ oauth_creds/
 AGENTS.md
 context_portal/
 tests/
+pytest.ini

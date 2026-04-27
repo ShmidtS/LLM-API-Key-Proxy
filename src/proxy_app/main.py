@@ -23,6 +23,11 @@ import logging.handlers
 import queue
 import re
 
+# Add the 'src' directory to the Python path before importing local modules.
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
+from proxy_app.config import DEFAULT_HOST, DEFAULT_PORT
+
 logger = logging.getLogger(__name__)
 
 # Early startup messages need a basic handler before full config is set up.
@@ -53,10 +58,10 @@ parser = argparse.ArgumentParser(description="API Key Proxy Server")
 parser.add_argument(
     "--host",
     type=str,
-    default="127.0.0.1",
+    default=DEFAULT_HOST,
     help="Host to bind the server to. Use 0.0.0.0 to expose to all interfaces.",
 )
-parser.add_argument("--port", type=int, default=8000, help="Port to run the server on.")
+parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Port to run the server on.")
 parser.add_argument(
     "--enable-request-logging",
     action="store_true",
@@ -73,9 +78,6 @@ parser.add_argument(
     help="Launch the interactive tool to add a new OAuth credential.",
 )
 args, _ = parser.parse_known_args()
-
-# Add the 'src' directory to the Python path
-sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 # Check if we should launch TUI (no arguments = TUI mode)
 if len(sys.argv) == 1:
@@ -377,6 +379,12 @@ max_concurrent_requests_per_key = _parse_env_prefix_map(
 
 # --- Lifespan Management (delegated to _lifecycle module) ---
 from proxy_app._lifecycle import LifespanConfig, create_lifespan
+from proxy_app.config import (
+    DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
+    DEFAULT_MAX_CONCURRENT_REQUESTS,
+    DEFAULT_UVICORN_BACKLOG,
+    env_int,
+)
 
 lifespan = create_lifespan(
     LifespanConfig(
@@ -559,29 +567,15 @@ if __name__ == "__main__":
                     _signal.SIGBREAK, lambda *_: _signal.raise_signal(_signal.SIGINT)
                 )
 
-        try:
-            _limit_concurrency = int(os.getenv("MAX_CONCURRENT_REQUESTS", "1000"))
-        except ValueError:
-            logger.warning(
-                "Invalid integer value for MAX_CONCURRENT_REQUESTS env var, using default"
-            )
-            _limit_concurrency = 1000
-
-        try:
-            _timeout_graceful_shutdown = int(
-                os.getenv("TIMEOUT_GRACEFUL_SHUTDOWN", "15")
-            )
-        except ValueError:
-            logger.warning(
-                "Invalid integer value for TIMEOUT_GRACEFUL_SHUTDOWN env var, using default"
-            )
-            _timeout_graceful_shutdown = 15
-
         uvicorn.run(
             app,
             host=args.host,
             port=args.port,
-            limit_concurrency=_limit_concurrency,
-            backlog=2048,
-            timeout_graceful_shutdown=_timeout_graceful_shutdown,
+            limit_concurrency=env_int(
+                "MAX_CONCURRENT_REQUESTS", DEFAULT_MAX_CONCURRENT_REQUESTS
+            ),
+            backlog=env_int("UVICORN_BACKLOG", DEFAULT_UVICORN_BACKLOG),
+            timeout_graceful_shutdown=env_int(
+                "TIMEOUT_GRACEFUL_SHUTDOWN", DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT
+            ),
         )

@@ -12,6 +12,8 @@ Key optimizations:
 - Optimized limits for LLM API workloads
 """
 
+from __future__ import annotations
+
 import asyncio
 import gzip
 import logging
@@ -23,7 +25,25 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Union
 import httpx
 
-from .config.defaults import HTTP_COMPRESS_MIN_SIZE, HTTP_COMPRESS_REQUESTS
+from .config.defaults import (
+    HTTP_COMPRESS_MIN_SIZE,
+    HTTP_COMPRESS_REQUESTS,
+    HTTP_COMPRESSION_THRESHOLD,
+    HTTP_GZIP_MAX_WORKERS,
+    HTTP_KEEPALIVE_EXPIRY,
+    HTTP_MAX_CONNECTIONS_POSIX,
+    HTTP_MAX_CONNECTIONS_WINDOWS,
+    HTTP_MAX_KEEPALIVE_POSIX,
+    HTTP_MAX_KEEPALIVE_WINDOWS,
+    HTTP_SSL_VERIFY_DEFAULT,
+    HTTP_STREAMING_KEEPALIVE_EXPIRY,
+    HTTP_STREAMING_MAX_CONNECTIONS_POSIX,
+    HTTP_STREAMING_MAX_CONNECTIONS_WINDOWS,
+    HTTP_STREAMING_MAX_KEEPALIVE_POSIX,
+    HTTP_STREAMING_MAX_KEEPALIVE_WINDOWS,
+    HTTP_WARMUP_CONNECTIONS,
+    HTTP_WARMUP_HOST_LIMIT,
+)
 from .utils.singleton import SingletonMeta
 
 from .timeout_config import TimeoutConfig
@@ -43,17 +63,19 @@ def _get_gzip_executor() -> ThreadPoolExecutor:
         with _gzip_executor_lock:
             if _gzip_executor is None:
                 _gzip_executor = ThreadPoolExecutor(
-                    max_workers=4,
+                    max_workers=HTTP_GZIP_MAX_WORKERS,
                     thread_name_prefix='gzip-compress',
                 )
                 lib_logger.debug(
-                    'Created shared gzip executor (max_workers=4, id=%s)',
+                    'Created shared gzip executor (max_workers=%s, id=%s)',
+                    HTTP_GZIP_MAX_WORKERS,
                     id(_gzip_executor),
                 )
     return _gzip_executor
 
 
 def shutdown_gzip_executor() -> None:
+    """Shut down the shared gzip compression executor."""
     global _gzip_executor
     if _gzip_executor is not None:
         with _gzip_executor_lock:
@@ -70,32 +92,31 @@ def shutdown_gzip_executor() -> None:
 # Platform-aware connection pool limits
 # Windows SelectorEventLoop has much lower file descriptor limits than Linux
 _IS_WIN = os.name == "nt"
-DEFAULT_MAX_KEEPALIVE_CONNECTIONS = 32 if _IS_WIN else 128
-DEFAULT_MAX_CONNECTIONS = 128 if _IS_WIN else 384
-DEFAULT_KEEPALIVE_EXPIRY = 120.0  # Seconds to keep idle connections alive (LLM connections are long-lived)
-DEFAULT_WARMUP_CONNECTIONS = 5  # Connections to pre-warm per provider
-DEFAULT_STREAMING_MAX_CONNECTIONS = 64 if _IS_WIN else 192
-DEFAULT_STREAMING_MAX_KEEPALIVE = 32 if _IS_WIN else 64
-DEFAULT_STREAMING_KEEPALIVE_EXPIRY = 180.0  # Long-lived streams need long keepalive
-DEFAULT_SSL_VERIFY = True  # SSL certificate verification enabled by default
-DEFAULT_HTTP2_ENABLED = (
-    not _IS_WIN
-)  # HTTP/2 unreliable with SelectorEventLoop on Windows
-_COMPRESSION_THRESHOLD = 0.9  # Only compress if output is at least 10% smaller
+DEFAULT_MAX_KEEPALIVE_CONNECTIONS = (
+    HTTP_MAX_KEEPALIVE_WINDOWS if _IS_WIN else HTTP_MAX_KEEPALIVE_POSIX
+)
+DEFAULT_MAX_CONNECTIONS = HTTP_MAX_CONNECTIONS_WINDOWS if _IS_WIN else HTTP_MAX_CONNECTIONS_POSIX
+DEFAULT_KEEPALIVE_EXPIRY = HTTP_KEEPALIVE_EXPIRY
+DEFAULT_WARMUP_CONNECTIONS = HTTP_WARMUP_CONNECTIONS
+DEFAULT_STREAMING_MAX_CONNECTIONS = (
+    HTTP_STREAMING_MAX_CONNECTIONS_WINDOWS if _IS_WIN else HTTP_STREAMING_MAX_CONNECTIONS_POSIX
+)
+DEFAULT_STREAMING_MAX_KEEPALIVE = (
+    HTTP_STREAMING_MAX_KEEPALIVE_WINDOWS if _IS_WIN else HTTP_STREAMING_MAX_KEEPALIVE_POSIX
+)
+DEFAULT_STREAMING_KEEPALIVE_EXPIRY = HTTP_STREAMING_KEEPALIVE_EXPIRY
+DEFAULT_SSL_VERIFY = HTTP_SSL_VERIFY_DEFAULT
+DEFAULT_HTTP2_ENABLED = not _IS_WIN
+_COMPRESSION_THRESHOLD = HTTP_COMPRESSION_THRESHOLD
 
 
 from .ssl_patch import AZURE_COMPATIBLE_CIPHERS
 
 
 class GzipRequestTransport(httpx.AsyncHTTPTransport):
-    """
-    Custom HTTP transport that compresses large request bodies with gzip.
+    """Compress large JSON request bodies before sending them."""
 
-    This bypasses WAF payload size limits on providers like zenllm.org
-    that block requests >100KB by compressing the body before sending.
-    """
-
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._compress_min_size = HTTP_COMPRESS_MIN_SIZE
         self._compress_enabled = HTTP_COMPRESS_REQUESTS
@@ -146,9 +167,9 @@ def _env_ssl_verify() -> Union[bool, List[str]]:
     List[str]: List of hosts to skip SSL verification for
     """
     # Check global SSL verification setting
-    if not _env_bool("HTTP_SSL_VERIFY", DEFAULT_SSL_VERIFY):
+    if _env_bool("DISABLE_TLS_VERIFY", False) or not _env_bool("HTTP_SSL_VERIFY", DEFAULT_SSL_VERIFY):
         lib_logger.warning(
-            "SSL certificate verification is DISABLED globally via HTTP_SSL_VERIFY. "
+            "SSL certificate verification is DISABLED globally via DISABLE_TLS_VERIFY or HTTP_SSL_VERIFY. "
             "This is insecure and should only be used for testing."
         )
         return False
@@ -182,25 +203,7 @@ def _env_ssl_verify() -> Union[bool, List[str]]:
 
 
 class HttpClientPool(metaclass=SingletonMeta):
-    """
-    Manages a pool of HTTP clients optimized for LLM API workloads.
-
-    Features:
-    - Separate clients for streaming/non-streaming (different timeout profiles)
-    - Connection pre-warming for reduced latency on first request
-    - Health tracking and automatic recovery
-    - Optimized connection limits for high-throughput scenarios
-
-    Usage:
-    pool = HttpClientPool()
-    await pool.initialize() # Pre-warm connections
-
-    # Get appropriate client
-    client = pool.get_client(streaming=True)
-
-    # On shutdown
-    await pool.close()
-    """
+    """Manage reusable HTTP clients for streaming and non-streaming requests."""
 
     def __init__(
         self,
@@ -209,7 +212,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         keepalive_expiry: Optional[float] = None,
         warmup_connections: Optional[int] = None,
         ssl_verify: Optional[Union[bool, List[str]]] = None,
-    ):
+    ) -> None:
         """
         Initialize the HTTP client pool.
 
@@ -412,13 +415,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         return client
 
     async def initialize(self, warmup_hosts: Optional[list] = None) -> None:
-        """
-        Initialize the client pool and optionally pre-warm connections.
-
-        Args:
-        warmup_hosts: List of URLs to pre-warm connections to
-        (e.g., ["https://api.openai.com", "https://api.anthropic.com"])
-        """
+        """Initialize clients and optionally pre-warm configured connections."""
         async with self._client_lock:
             # Create both clients upfront
             self._streaming_client = await self._create_client(streaming=True)
@@ -457,7 +454,7 @@ class HttpClientPool(metaclass=SingletonMeta):
 
         # Build list of all warmup tasks (parallel execution)
         warmup_tasks = []
-        for host in self._warmup_hosts[:5]:  # Limit to 5 hosts for warmup
+        for host in self._warmup_hosts[:HTTP_WARMUP_HOST_LIMIT]:  # Limit to 5 hosts for warmup
             for _ in range(self._warmup_count):
                 warmup_tasks.append(client.get(host, follow_redirects=True))
 
@@ -466,7 +463,7 @@ class HttpClientPool(metaclass=SingletonMeta):
 
         # Process results and track errors
         task_idx = 0
-        for host in self._warmup_hosts[:5]:
+        for host in self._warmup_hosts[:HTTP_WARMUP_HOST_LIMIT]:
             for _ in range(self._warmup_count):
                 result = results[task_idx]
                 task_idx += 1
@@ -574,21 +571,7 @@ class HttpClientPool(metaclass=SingletonMeta):
                 return self._non_streaming_client
 
     def get_client(self, streaming: bool = False) -> httpx.AsyncClient:
-        """
-        Get the appropriate HTTP client.
-
-        Note: This is a sync method for compatibility. The client is created
-        during initialize(). If not initialized, returns a lazily-created client.
-
-        WARNING: This method does NOT auto-recreate closed clients. Use
-        get_client_async() for automatic recovery from closed clients.
-
-        Args:
-        streaming: Whether the request will be streaming
-
-        Returns:
-        httpx.AsyncClient instance
-        """
+        """Return the HTTP client for the requested streaming mode."""
         # Note: _stats mutations in sync methods are safe in single-threaded asyncio;
         # no yield point exists between read and write of these integers.
         self._stats["requests_total"] += 1
@@ -615,18 +598,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         return client
 
     async def get_client_async(self, streaming: bool = False) -> httpx.AsyncClient:
-        """
-        Get the appropriate HTTP client with automatic recovery.
-
-        This async method checks if the client is closed and recreates it
-        if necessary. Use this for resilience in production code.
-
-        Args:
-        streaming: Whether the request will be streaming
-
-        Returns:
-        Valid httpx.AsyncClient instance
-        """
+        """Return a healthy HTTP client for the requested streaming mode."""
         # _stats mutations are safe without a lock in single-threaded asyncio
         self._stats["requests_total"] += 1
         if streaming:
@@ -742,15 +714,7 @@ class HttpClientPool(metaclass=SingletonMeta):
                 )
 
     def record_error(self, error_type: str, message: str) -> None:
-        """
-        Record an error for health tracking.
-
-        Note: _stats mutations are safe in single-threaded asyncio (no yield point).
-
-        Args:
-        error_type: Type of error (connection, timeout, etc.)
-        message: Error message
-        """
+        """Record an HTTP client error for health tracking."""
         self._last_error = message
         self._last_error_time = time.time()
 
@@ -779,12 +743,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         }
 
     async def health_check(self) -> Dict[str, Any]:
-        """
-        Perform a health check on the client pool.
-
-        Returns:
-        Dict with health status for each client
-        """
+        """Report health status for each managed HTTP client."""
         health = {
             "streaming_client": "unknown",
             "non_streaming_client": "unknown",
@@ -813,19 +772,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         return health
 
     async def recover(self) -> bool:
-        """
-        Attempt to recover closed or unhealthy clients.
-
-        Creates clients outside the lock to avoid blocking concurrent
-        get_client_async() calls during expensive _create_client().
-
-        Reads client state under the lock to avoid TOCTOU race with
-        concurrent _ensure_client() which may recreate clients between
-        the unlocked read and the locked assignment.
-
-        Returns:
-        True if recovery was successful, False otherwise
-        """
+        """Recreate closed or unhealthy HTTP clients."""
         recovered = []
         new_streaming = None
         new_non_streaming = None
@@ -895,12 +842,7 @@ class HttpClientPool(metaclass=SingletonMeta):
 
 # Singleton via SingletonMeta
 async def get_http_pool() -> HttpClientPool:
-    """
-    Get the global HTTP client pool singleton.
-
-    Creates the pool if it doesn't exist. Note: You should still call
-    pool.initialize() to pre-warm connections.
-    """
+    """Return the global HTTP client pool singleton."""
     return HttpClientPool()
 
 

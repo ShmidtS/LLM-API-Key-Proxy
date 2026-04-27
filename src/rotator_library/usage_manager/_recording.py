@@ -305,8 +305,11 @@ class UsageManagerRecordingMixin:
 
                         if cost is not None:
                             usage_data_ref["approx_cost"] += cost
-                except (ValueError, TypeError, AttributeError) as e:
-                    lib_logger.debug(f"Could not calculate cost for model {model}: {e}")
+                except Exception as e:
+                    if "not found in cost map" in str(e).lower():
+                        lib_logger.debug(f"Cost map entry missing for model {model}, skipping cost calculation")
+                    else:
+                        lib_logger.debug(f"Could not calculate cost for model {model}: {e}")
             elif isinstance(completion_response, asyncio.Future) or hasattr(
                 completion_response, "__aiter__"
             ):

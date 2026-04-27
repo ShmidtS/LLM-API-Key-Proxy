@@ -23,6 +23,7 @@ from rich.text import Text
 from dotenv import load_dotenv, set_key
 from rotator_library.utils.paths import get_data_file
 from rotator_library.utils.terminal_utils import clear_screen
+from proxy_app.config import DEFAULT_HOST, DEFAULT_PORT, env_int
 
 console = Console()
 
@@ -38,8 +39,8 @@ class LauncherConfig:
     def __init__(self, config_path: Path = Path("launcher_config.json")):
         self.config_path = config_path
         self.defaults = {
-            "host": "127.0.0.1",
-            "port": 8000,
+            "host": DEFAULT_HOST,
+            "port": DEFAULT_PORT,
             "enable_request_logging": False,
             "enable_raw_logging": False,
         }
@@ -328,16 +329,17 @@ class LauncherTUI:
     def show_main_menu(self):
         """Display main menu and handle selection"""
         clear_screen()
-
-        # Detect basic settings (excludes provider_settings to avoid heavy imports)
         settings = SettingsDetector.get_basic_settings()
-        credentials = settings["credentials"]
-        custom_bases = settings["custom_bases"]
-
-        # Check if setup is needed
         show_warning = self.needs_onboarding()
 
-        # Build title with GitHub link
+        self._show_main_header()
+        self._show_main_warnings(show_warning)
+        self._show_main_config_summary()
+        self._show_main_status_summary(settings)
+        self._show_main_menu_options(show_warning)
+        self._handle_main_menu_choice(self._prompt_main_menu_choice())
+
+    def _show_main_header(self):
         self.console.print(
             Panel.fit(
                 "[bold cyan]🚀 LLM API Key Proxy - Interactive Launcher[/bold cyan]",
@@ -348,51 +350,56 @@ class LauncherTUI:
             "[dim]GitHub: [blue underline]https://github.com/ShmidtS/LLM-API-Key-Proxy[/blue underline][/dim]"
         )
 
-        # Show warning if .env file doesn't exist
+    def _show_main_warnings(self, show_warning: bool):
         if show_warning:
-            self.console.print()
-            self.console.print(
-                Panel(
-                    Text.from_markup(
-                        "⚠️  [bold yellow]INITIAL SETUP REQUIRED[/bold yellow]\n\n"
-                        "The proxy needs initial configuration:\n"
-                        "  ❌ No .env file found\n\n"
-                        "Why this matters:\n"
-                        "  • The .env file stores your credentials and settings\n"
-                        "  • PROXY_API_KEY protects your proxy from unauthorized access\n"
-                        "  • Provider API keys enable LLM access\n\n"
-                        "What to do:\n"
-                        '  1. Select option "3. Manage Credentials" to launch the credential tool\n'
-                        "  2. The tool will create .env and set up PROXY_API_KEY automatically\n"
-                        "  3. You can add provider credentials (API keys or OAuth)\n\n"
-                        "⚠️  Note: The credential tool adds PROXY_API_KEY by default.\n"
-                        "   You can remove it later if you want an unsecured proxy."
-                    ),
-                    border_style="yellow",
-                    expand=False,
-                )
-            )
-        # Show security warning if PROXY_API_KEY is missing (but .env exists)
+            self._show_initial_setup_warning()
         elif not os.getenv("PROXY_API_KEY"):
-            self.console.print()
-            self.console.print(
-                Panel(
-                    Text.from_markup(
-                        "⚠️  [bold red]SECURITY WARNING: PROXY_API_KEY Not Set[/bold red]\n\n"
-                        "Your proxy is currently UNSECURED!\n"
-                        "Anyone can access it without authentication.\n\n"
-                        "This is a serious security risk if your proxy is accessible\n"
-                        "from the internet or untrusted networks.\n\n"
-                        "👉 [bold]Recommended:[/bold] Set PROXY_API_KEY in .env file\n"
-                        '   Use option "2. Configure Proxy Settings" → "3. Set Proxy API Key"\n'
-                        '   or option "3. Manage Credentials"'
-                    ),
-                    border_style="red",
-                    expand=False,
-                )
-            )
+            self._show_proxy_key_security_warning()
 
-        # Show config
+    def _show_initial_setup_warning(self):
+        self.console.print()
+        self.console.print(
+            Panel(
+                Text.from_markup(
+                    "⚠️  [bold yellow]INITIAL SETUP REQUIRED[/bold yellow]\n\n"
+                    "The proxy needs initial configuration:\n"
+                    "  ❌ No .env file found\n\n"
+                    "Why this matters:\n"
+                    "  • The .env file stores your credentials and settings\n"
+                    "  • PROXY_API_KEY protects your proxy from unauthorized access\n"
+                    "  • Provider API keys enable LLM access\n\n"
+                    "What to do:\n"
+                    '  1. Select option "3. Manage Credentials" to launch the credential tool\n'
+                    "  2. The tool will create .env and set up PROXY_API_KEY automatically\n"
+                    "  3. You can add provider credentials (API keys or OAuth)\n\n"
+                    "⚠️  Note: The credential tool adds PROXY_API_KEY by default.\n"
+                    "   You can remove it later if you want an unsecured proxy."
+                ),
+                border_style="yellow",
+                expand=False,
+            )
+        )
+
+    def _show_proxy_key_security_warning(self):
+        self.console.print()
+        self.console.print(
+            Panel(
+                Text.from_markup(
+                    "⚠️  [bold red]SECURITY WARNING: PROXY_API_KEY Not Set[/bold red]\n\n"
+                    "Your proxy is currently UNSECURED!\n"
+                    "Anyone can access it without authentication.\n\n"
+                    "This is a serious security risk if your proxy is accessible\n"
+                    "from the internet or untrusted networks.\n\n"
+                    "👉 [bold]Recommended:[/bold] Set PROXY_API_KEY in .env file\n"
+                    '   Use option "2. Configure Proxy Settings" → "3. Set Proxy API Key"\n'
+                    '   or option "3. Manage Credentials"'
+                ),
+                border_style="red",
+                expand=False,
+            )
+        )
+
+    def _show_main_config_summary(self):
         self.console.print()
         self.console.print("[bold]📋 Proxy Configuration[/bold]")
         self.console.print("━" * 70)
@@ -404,8 +411,6 @@ class LauncherTUI:
         self.console.print(
             f"   Raw I/O Logging:     {'✅ Enabled' if self.config.config.get('enable_raw_logging', False) else '❌ Disabled'}"
         )
-
-        # Show actual API key value
         proxy_key = os.getenv("PROXY_API_KEY")
         if proxy_key:
             _masked = proxy_key[:4] + "..." + proxy_key[-4:] if len(proxy_key) > 8 else "***"
@@ -413,7 +418,10 @@ class LauncherTUI:
         else:
             self.console.print("   Proxy API Key:       [red]Not Set (INSECURE!)[/red]")
 
-        # Show status summary
+    def _show_main_status_summary(self, settings: dict):
+        credentials = settings["credentials"]
+        custom_bases = settings["custom_bases"]
+
         self.console.print()
         self.console.print("[bold]📊 Status Summary[/bold]")
         self.console.print("━" * 70)
@@ -432,7 +440,7 @@ class LauncherTUI:
             f"   Advanced Settings:   {'Active (view in menu 4)' if has_advanced else 'None (view menu 4 for details)'}"
         )
 
-        # Show menu
+    def _show_main_menu_options(self, show_warning: bool):
         self.console.print()
         self.console.print("━" * 70)
         self.console.print()
@@ -459,31 +467,52 @@ class LauncherTUI:
         self.console.print("━" * 70)
         self.console.print()
 
-        choice = Prompt.ask(
+    def _prompt_main_menu_choice(self) -> str:
+        return Prompt.ask(
             "Select option",
             choices=["1", "2", "3", "4", "5", "6", "7", "8"],
             show_choices=False,
         )
 
-        if choice == "1":
-            self.run_proxy()
-        elif choice == "2":
-            self.show_config_menu()
-        elif choice == "3":
-            self.launch_credential_tool()
-        elif choice == "4":
-            self.show_provider_settings_menu()
-        elif choice == "5":
-            self.launch_quota_viewer()
-        elif choice == "6":
-            load_dotenv(dotenv_path=get_data_file(".env"), override=True)
-            self.config = LauncherConfig()  # Reload config
-            self.console.print("\n[green]✅ Configuration reloaded![/green]")
-        elif choice == "7":
-            self.show_about()
-        elif choice == "8":
-            self.running = False
-            sys.exit(0)
+    def _handle_main_menu_choice(self, choice: str):
+        handlers = {
+            "1": self._handle_start_server,
+            "2": self._handle_configure_proxy,
+            "3": self._handle_manage_credentials,
+            "4": self._handle_view_provider_settings,
+            "5": self._handle_view_quota_stats,
+            "6": self._handle_reload_configuration,
+            "7": self._handle_about,
+            "8": self._handle_exit,
+        }
+        handlers[choice]()
+
+    def _handle_start_server(self):
+        self.run_proxy()
+
+    def _handle_configure_proxy(self):
+        self.show_config_menu()
+
+    def _handle_manage_credentials(self):
+        self.launch_credential_tool()
+
+    def _handle_view_provider_settings(self):
+        self.show_provider_settings_menu()
+
+    def _handle_view_quota_stats(self):
+        self.launch_quota_viewer()
+
+    def _handle_reload_configuration(self):
+        load_dotenv(dotenv_path=get_data_file(".env"), override=True)
+        self.config = LauncherConfig()  # Reload config
+        self.console.print("\n[green]✅ Configuration reloaded![/green]")
+
+    def _handle_about(self):
+        self.show_about()
+
+    def _handle_exit(self):
+        self.running = False
+        sys.exit(0)
 
     def confirm_setting_change(self, setting_name: str, warning_lines: list) -> bool:
         """
@@ -523,216 +552,233 @@ class LauncherTUI:
         """Display configuration sub-menu"""
         while True:
             clear_screen()
-
-            self.console.print(
-                Panel.fit(
-                    "[bold cyan]⚙️  Proxy Configuration[/bold cyan]", border_style="cyan"
-                )
-            )
-
-            self.console.print()
-            self.console.print("[bold]📋 Current Settings[/bold]")
-            self.console.print("━" * 70)
-            self.console.print(f"   Host:                {self.config.config['host']}")
-            self.console.print(f"   Port:                {self.config.config['port']}")
-            self.console.print(
-                f"   Transaction Logging: {'✅ Enabled' if self.config.config['enable_request_logging'] else '❌ Disabled'}"
-            )
-            self.console.print(
-                f"   Raw I/O Logging:     {'✅ Enabled' if self.config.config.get('enable_raw_logging', False) else '❌ Disabled'}"
-            )
-            self.console.print(
-                f"   Proxy API Key:       {'✅ Set' if os.getenv('PROXY_API_KEY') else '❌ Not Set'}"
-            )
-
-            self.console.print()
-            self.console.print("━" * 70)
-            self.console.print()
-            self.console.print("[bold]⚙️  Configuration Options[/bold]")
-            self.console.print()
-            self.console.print("   1. 🌐 Set Host IP")
-            self.console.print("   2. 🔌 Set Port")
-            self.console.print("   3. 🔑 Set Proxy API Key")
-            self.console.print("   4. 📝 Toggle Transaction Logging")
-            self.console.print("   5. 📋 Toggle Raw I/O Logging")
-            self.console.print("   6. 🔄 Reset to Default Settings")
-            self.console.print("   7. ↩️  Back to Main Menu")
-
-            self.console.print()
-            self.console.print("━" * 70)
-            self.console.print()
-
-            choice = Prompt.ask(
-                "Select option",
-                choices=["1", "2", "3", "4", "5", "6", "7"],
-                show_choices=False,
-            )
-
-            if choice == "1":
-                # Show warning and require confirmation
-                confirmed = self.confirm_setting_change(
-                    "Host IP",
-                    [
-                        "Changing the host IP affects which network interfaces the proxy listens on:",
-                        "  • [cyan]127.0.0.1[/cyan] = Local access only (recommended for development)",
-                        "  • [cyan]0.0.0.0[/cyan] = Accessible from all network interfaces",
-                        "",
-                        "Applications configured to connect to the old host may fail to connect.",
-                    ],
-                )
-                if not confirmed:
-                    continue
-
-                new_host = Prompt.ask(
-                    "Enter new host IP", default=self.config.config["host"]
-                )
-                self.config.update(host=new_host)
-                self.console.print(f"\n[green]✅ Host updated to: {new_host}[/green]")
-            elif choice == "2":
-                # Show warning and require confirmation
-                confirmed = self.confirm_setting_change(
-                    "Port",
-                    [
-                        "Changing the port will affect all applications currently configured",
-                        "to connect to your proxy on the existing port.",
-                        "",
-                        "Applications using the old port will fail to connect.",
-                    ],
-                )
-                if not confirmed:
-                    continue
-
-                new_port = IntPrompt.ask(
-                    "Enter new port", default=self.config.config["port"]
-                )
-                if 1 <= new_port <= 65535:
-                    self.config.update(port=new_port)
-                    self.console.print(
-                        f"\n[green]✅ Port updated to: {new_port}[/green]"
-                    )
-                else:
-                    self.console.print("\n[red]❌ Port must be between 1-65535[/red]")
-            elif choice == "3":
-                # Show warning and require confirmation
-                confirmed = self.confirm_setting_change(
-                    "Proxy API Key",
-                    [
-                        "This is the authentication key that applications use to access your proxy.",
-                        "",
-                        "[bold red]⚠️  Changing this will BREAK all applications currently configured",
-                        "   with the existing API key![/bold red]",
-                        "",
-                        "[bold cyan]💡 If you want to add provider API keys (OpenAI, Gemini, etc.),",
-                        '   go to "3. 🔑 Manage Credentials" in the main menu instead.[/bold cyan]',
-                    ],
-                )
-                if not confirmed:
-                    continue
-
-                current = os.getenv("PROXY_API_KEY") or ""
-                new_key = Prompt.ask(
-                    "Enter new Proxy API Key (leave empty to disable authentication)",
-                    default=current,
-                )
-
-                if new_key != current:
-                    # If setting to empty, show additional warning
-                    if not new_key:
-                        self.console.print(
-                            "\n[bold red]⚠️  Authentication will be DISABLED - anyone can access your proxy![/bold red]"
-                        )
-                        Prompt.ask("Press Enter to continue", default="")
-
-                    LauncherConfig.update_proxy_api_key(new_key)
-
-                    if new_key:
-                        self.console.print(
-                            "\n[green]✅ Proxy API Key updated successfully![/green]"
-                        )
-                        self.console.print("   Updated in .env file")
-                    else:
-                        self.console.print(
-                            "\n[yellow]⚠️  Proxy API Key cleared - authentication disabled![/yellow]"
-                        )
-                        self.console.print("   Updated in .env file")
-                else:
-                    self.console.print("\n[yellow]No changes made[/yellow]")
-            elif choice == "4":
-                current = self.config.config["enable_request_logging"]
-                self.config.update(enable_request_logging=not current)
-                self.console.print(
-                    f"\n[green]✅ Transaction Logging {'enabled' if not current else 'disabled'}![/green]"
-                )
-            elif choice == "5":
-                current = self.config.config.get("enable_raw_logging", False)
-                self.config.update(enable_raw_logging=not current)
-                self.console.print(
-                    f"\n[green]✅ Raw I/O Logging {'enabled' if not current else 'disabled'}![/green]"
-                )
-            elif choice == "6":
-                # Reset to Default Settings
-                # Define defaults
-                default_host = os.environ.get("PROXY_HOST", "127.0.0.1")
-                default_port = int(os.environ.get("PROXY_PORT", 8000))
-                default_logging = os.environ.get("PROXY_ENABLE_REQUEST_LOGGING", "false").lower() == "true"
-                default_raw_logging = os.environ.get("PROXY_ENABLE_RAW_LOGGING", "false").lower() == "true"
-                # Use secrets.token_urlsafe(32) only if PROXY_API_KEY is not already set in environment
-                default_api_key = os.environ.get("PROXY_API_KEY") or secrets.token_urlsafe(32)
-
-                # Get current values
-                current_host = self.config.config["host"]
-                current_port = self.config.config["port"]
-                current_logging = self.config.config["enable_request_logging"]
-                current_raw_logging = self.config.config.get(
-                    "enable_raw_logging", False
-                )
-                current_api_key = os.getenv("PROXY_API_KEY") or ""
-
-                # Build comparison table
-                warning_lines = [
-                    "This will reset ALL proxy settings to their defaults:",
-                    "",
-                    "[bold]   Setting              Current Value         →  Default Value[/bold]",
-                    "   " + "─" * 62,
-                    f"   Host IP              {current_host:20} →  {default_host}",
-                    f"   Port                 {str(current_port):20} →  {default_port}",
-                    f"   Transaction Logging  {'Enabled':20} →  Disabled"
-                    if current_logging
-                    else f"   Transaction Logging  {'Disabled':20} →  Disabled",
-                    f"   Raw I/O Logging      {'Enabled':20} →  Disabled"
-                    if current_raw_logging
-                    else f"   Raw I/O Logging      {'Disabled':20} →  Disabled",
-                    f"   Proxy API Key        {current_api_key[:20]:20} →  {default_api_key}",
-                    "",
-                    "[bold red]⚠️  This may break applications configured with current settings![/bold red]",
-                ]
-
-                confirmed = self.confirm_setting_change(
-                    "Settings (Reset to Defaults)", warning_lines
-                )
-                if not confirmed:
-                    continue
-
-                # Apply defaults
-                self.config.update(
-                    host=default_host,
-                    port=default_port,
-                    enable_request_logging=default_logging,
-                    enable_raw_logging=default_raw_logging,
-                )
-                LauncherConfig.update_proxy_api_key(default_api_key)
-
-                self.console.print(
-                    "\n[green]✅ All settings have been reset to defaults![/green]"
-                )
-                self.console.print(f"   Host:               {default_host}")
-                self.console.print(f"   Port:               {default_port}")
-                self.console.print("   Transaction Logging: Disabled")
-                self.console.print("   Raw I/O Logging:    Disabled")
-                _default_masked = default_api_key[:4] + "..." + default_api_key[-4:] if len(default_api_key) > 8 else "***"
-                self.console.print(f"   Proxy API Key:      {_default_masked}")
-            elif choice == "7":
+            self._show_config_header()
+            self._show_config_current_settings()
+            self._show_config_options()
+            choice = self._prompt_config_menu_choice()
+            if choice == "7":
                 break
+            self._handle_config_menu_choice(choice)
+
+    def _show_config_header(self):
+        self.console.print(
+            Panel.fit(
+                "[bold cyan]⚙️  Proxy Configuration[/bold cyan]", border_style="cyan"
+            )
+        )
+
+    def _show_config_current_settings(self):
+        self.console.print()
+        self.console.print("[bold]📋 Current Settings[/bold]")
+        self.console.print("━" * 70)
+        self.console.print(f"   Host:                {self.config.config['host']}")
+        self.console.print(f"   Port:                {self.config.config['port']}")
+        self.console.print(
+            f"   Transaction Logging: {'✅ Enabled' if self.config.config['enable_request_logging'] else '❌ Disabled'}"
+        )
+        self.console.print(
+            f"   Raw I/O Logging:     {'✅ Enabled' if self.config.config.get('enable_raw_logging', False) else '❌ Disabled'}"
+        )
+        self.console.print(
+            f"   Proxy API Key:       {'✅ Set' if os.getenv('PROXY_API_KEY') else '❌ Not Set'}"
+        )
+
+    def _show_config_options(self):
+        self.console.print()
+        self.console.print("━" * 70)
+        self.console.print()
+        self.console.print("[bold]⚙️  Configuration Options[/bold]")
+        self.console.print()
+        self.console.print("   1. 🌐 Set Host IP")
+        self.console.print("   2. 🔌 Set Port")
+        self.console.print("   3. 🔑 Set Proxy API Key")
+        self.console.print("   4. 📝 Toggle Transaction Logging")
+        self.console.print("   5. 📋 Toggle Raw I/O Logging")
+        self.console.print("   6. 🔄 Reset to Default Settings")
+        self.console.print("   7. ↩️  Back to Main Menu")
+
+        self.console.print()
+        self.console.print("━" * 70)
+        self.console.print()
+
+    def _prompt_config_menu_choice(self) -> str:
+        return Prompt.ask(
+            "Select option",
+            choices=["1", "2", "3", "4", "5", "6", "7"],
+            show_choices=False,
+        )
+
+    def _handle_config_menu_choice(self, choice: str):
+        handlers = {
+            "1": self._handle_set_host,
+            "2": self._handle_set_port,
+            "3": self._handle_set_proxy_api_key,
+            "4": self._handle_toggle_transaction_logging,
+            "5": self._handle_toggle_raw_logging,
+            "6": self._handle_reset_defaults,
+        }
+        handlers[choice]()
+
+    def _handle_set_host(self):
+        confirmed = self.confirm_setting_change(
+            "Host IP",
+            [
+                "Changing the host IP affects which network interfaces the proxy listens on:",
+                "  • [cyan]127.0.0.1[/cyan] = Local access only (recommended for development)",
+                "  • [cyan]0.0.0.0[/cyan] = Accessible from all network interfaces",
+                "",
+                "Applications configured to connect to the old host may fail to connect.",
+            ],
+        )
+        if not confirmed:
+            return
+
+        new_host = Prompt.ask(
+            "Enter new host IP", default=self.config.config["host"]
+        )
+        self.config.update(host=new_host)
+        self.console.print(f"\n[green]✅ Host updated to: {new_host}[/green]")
+
+    def _handle_set_port(self):
+        confirmed = self.confirm_setting_change(
+            "Port",
+            [
+                "Changing the port will affect all applications currently configured",
+                "to connect to your proxy on the existing port.",
+                "",
+                "Applications using the old port will fail to connect.",
+            ],
+        )
+        if not confirmed:
+            return
+
+        new_port = IntPrompt.ask(
+            "Enter new port", default=self.config.config["port"]
+        )
+        if 1 <= new_port <= 65535:
+            self.config.update(port=new_port)
+            self.console.print(
+                f"\n[green]✅ Port updated to: {new_port}[/green]"
+            )
+        else:
+            self.console.print("\n[red]❌ Port must be between 1-65535[/red]")
+
+    def _handle_set_proxy_api_key(self):
+        confirmed = self.confirm_setting_change(
+            "Proxy API Key",
+            [
+                "This is the authentication key that applications use to access your proxy.",
+                "",
+                "[bold red]⚠️  Changing this will BREAK all applications currently configured",
+                "   with the existing API key![/bold red]",
+                "",
+                "[bold cyan]💡 If you want to add provider API keys (OpenAI, Gemini, etc.),",
+                '   go to "3. 🔑 Manage Credentials" in the main menu instead.[/bold cyan]',
+            ],
+        )
+        if not confirmed:
+            return
+
+        current = os.getenv("PROXY_API_KEY") or ""
+        new_key = Prompt.ask(
+            "Enter new Proxy API Key (leave empty to disable authentication)",
+            default=current,
+        )
+
+        if new_key != current:
+            # If setting to empty, show additional warning
+            if not new_key:
+                self.console.print(
+                    "\n[bold red]⚠️  Authentication will be DISABLED - anyone can access your proxy![/bold red]"
+                )
+                Prompt.ask("Press Enter to continue", default="")
+
+            LauncherConfig.update_proxy_api_key(new_key)
+
+            if new_key:
+                self.console.print(
+                    "\n[green]✅ Proxy API Key updated successfully![/green]"
+                )
+                self.console.print("   Updated in .env file")
+            else:
+                self.console.print(
+                    "\n[yellow]⚠️  Proxy API Key cleared - authentication disabled![/yellow]"
+                )
+                self.console.print("   Updated in .env file")
+        else:
+            self.console.print("\n[yellow]No changes made[/yellow]")
+
+    def _handle_toggle_transaction_logging(self):
+        current = self.config.config["enable_request_logging"]
+        self.config.update(enable_request_logging=not current)
+        self.console.print(
+            f"\n[green]✅ Transaction Logging {'enabled' if not current else 'disabled'}![/green]"
+        )
+
+    def _handle_toggle_raw_logging(self):
+        current = self.config.config.get("enable_raw_logging", False)
+        self.config.update(enable_raw_logging=not current)
+        self.console.print(
+            f"\n[green]✅ Raw I/O Logging {'enabled' if not current else 'disabled'}![/green]"
+        )
+
+    def _handle_reset_defaults(self):
+        default_host = os.environ.get("PROXY_HOST", DEFAULT_HOST)
+        default_port = env_int("PROXY_PORT", DEFAULT_PORT)
+        default_logging = os.environ.get("PROXY_ENABLE_REQUEST_LOGGING", "false").lower() == "true"
+        default_raw_logging = os.environ.get("PROXY_ENABLE_RAW_LOGGING", "false").lower() == "true"
+        # Use secrets.token_urlsafe(32) only if PROXY_API_KEY is not already set in environment
+        default_api_key = os.environ.get("PROXY_API_KEY") or secrets.token_urlsafe(32)
+
+        current_host = self.config.config["host"]
+        current_port = self.config.config["port"]
+        current_logging = self.config.config["enable_request_logging"]
+        current_raw_logging = self.config.config.get(
+            "enable_raw_logging", False
+        )
+        current_api_key = os.getenv("PROXY_API_KEY") or ""
+
+        warning_lines = [
+            "This will reset ALL proxy settings to their defaults:",
+            "",
+            "[bold]   Setting              Current Value         →  Default Value[/bold]",
+            "   " + "─" * 62,
+            f"   Host IP              {current_host:20} →  {default_host}",
+            f"   Port                 {str(current_port):20} →  {default_port}",
+            f"   Transaction Logging  {'Enabled':20} →  Disabled"
+            if current_logging
+            else f"   Transaction Logging  {'Disabled':20} →  Disabled",
+            f"   Raw I/O Logging      {'Enabled':20} →  Disabled"
+            if current_raw_logging
+            else f"   Raw I/O Logging      {'Disabled':20} →  Disabled",
+            f"   Proxy API Key        {current_api_key[:20]:20} →  {default_api_key}",
+            "",
+            "[bold red]⚠️  This may break applications configured with current settings![/bold red]",
+        ]
+
+        confirmed = self.confirm_setting_change(
+            "Settings (Reset to Defaults)", warning_lines
+        )
+        if not confirmed:
+            return
+
+        self.config.update(
+            host=default_host,
+            port=default_port,
+            enable_request_logging=default_logging,
+            enable_raw_logging=default_raw_logging,
+        )
+        LauncherConfig.update_proxy_api_key(default_api_key)
+
+        self.console.print(
+            "\n[green]✅ All settings have been reset to defaults![/green]"
+        )
+        self.console.print(f"   Host:               {default_host}")
+        self.console.print(f"   Port:               {default_port}")
+        self.console.print("   Transaction Logging: Disabled")
+        self.console.print("   Raw I/O Logging:    Disabled")
+        _default_masked = default_api_key[:4] + "..." + default_api_key[-4:] if len(default_api_key) > 8 else "***"
+        self.console.print(f"   Proxy API Key:      {_default_masked}")
 
     def show_provider_settings_menu(self):
         """Display provider/advanced settings (read-only + launch tool)"""

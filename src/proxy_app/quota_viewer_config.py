@@ -75,6 +75,7 @@ class QuotaViewerConfig:
                 json.dump(self.config, f, indent=2)
             return True
         except IOError:
+            logger.warning("Failed to save config file: %s", self.config_path, exc_info=True)
             return False
 
     def get_remotes(self) -> List[Dict[str, Any]]:

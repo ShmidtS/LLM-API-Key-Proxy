@@ -187,6 +187,7 @@ class ModelDefinitionManager:
             try:
                 return orjson.loads(value)
             except (json.JSONDecodeError, ValueError):
+                logger.debug("get_current_provider_models: invalid JSON for provider %s", provider, exc_info=True)
                 return None
         return None
 

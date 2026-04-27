@@ -17,6 +17,8 @@ Usage examples:
 - General: Any transient data that benefits from persistence across requests
 """
 
+from __future__ import annotations
+
 import asyncio
 from orjson import JSONDecodeError
 import logging
@@ -88,7 +90,7 @@ class ProviderCache:
         cleanup_interval: Optional[int] = None,
         env_prefix: str = "PROVIDER_CACHE",
         max_entries: int = 10000,
-    ):
+    ) -> None:
         # In-memory cache (OrderedDict for O(1) LRU eviction): {cache_key: {"value", "timestamp", "accessed"}}
         self._cache: OrderedDict[str, Dict[str, float | str]] = OrderedDict()
         self._memory_ttl = memory_ttl_seconds
@@ -244,8 +246,12 @@ class ProviderCache:
                     raw = await asyncio.to_thread(_read_file_sync, self._cache_file)
                     data = json_loads(raw)
                     existing_entries = data.get("entries", {})
-                except (JSONDecodeError, IOError, OSError):
-                    pass  # Start fresh if corrupted or unreadable
+                except (JSONDecodeError, IOError, OSError) as e:
+                    lib_logger.warning(
+                        f"ProviderCache[{self._cache_name}]: Existing cache unreadable during save, starting fresh: {e}",
+                        exc_info=True,
+                    )
+                    # Preserve availability by writing a fresh cache when old disk state is corrupted.
 
             # Step 2: Filter existing disk entries by disk_ttl (not memory_ttl)
             # This preserves entries that expired from memory but are still valid on disk
@@ -555,7 +561,11 @@ class ProviderCache:
                 }
                 self._trim_disk_entry_cache()
                 self._disk_cache_valid = True
-        except (JSONDecodeError, IOError, OSError):
+        except (JSONDecodeError, IOError, OSError) as e:
+            lib_logger.warning(
+                f"ProviderCache[{self._cache_name}]: Disk index unreadable, starting fresh: {e}",
+                exc_info=True,
+            )
             self._disk_entry_cache = {}
             self._disk_cache_valid = True
         except (AttributeError, ValueError) as e:
@@ -669,7 +679,12 @@ class ProviderCache:
 
         # Wait for pending tasks to complete
         if self._pending_tasks:
-            await asyncio.gather(*self._pending_tasks, return_exceptions=True)
+            results = await asyncio.gather(*self._pending_tasks, return_exceptions=True)
+            for result in results:
+                if result is not None:
+                    lib_logger.warning(
+                        f"ProviderCache[{self._cache_name}]: Pending task completed during shutdown with result: {result}"
+                    )
             self._pending_tasks.clear()
 
         # Final save

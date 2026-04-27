@@ -239,6 +239,36 @@ HTTP_COMPRESS_MIN_SIZE: int = env_int("HTTP_COMPRESS_MIN_SIZE", 10240)
 # Override: HTTP_COMPRESS_REQUESTS=true/false
 HTTP_COMPRESS_REQUESTS: bool = env_bool("HTTP_COMPRESS_REQUESTS", True)
 
+# Shared gzip request compression worker count
+# Override: HTTP_GZIP_MAX_WORKERS=<count>
+HTTP_GZIP_MAX_WORKERS: int = env_int("HTTP_GZIP_MAX_WORKERS", 4)
+
+# Minimum compression efficiency for compressed request payloads
+# Override: HTTP_COMPRESSION_THRESHOLD=<ratio>
+HTTP_COMPRESSION_THRESHOLD: float = env_float("HTTP_COMPRESSION_THRESHOLD", 0.9)
+
+# =============================================================================
+# HTTP CLIENT POOL DEFAULTS
+# =============================================================================
+
+HTTP_MAX_KEEPALIVE_WINDOWS: int = 32
+HTTP_MAX_KEEPALIVE_POSIX: int = 128
+HTTP_MAX_CONNECTIONS_WINDOWS: int = 128
+HTTP_MAX_CONNECTIONS_POSIX: int = 384
+HTTP_KEEPALIVE_EXPIRY: float = env_float("HTTP_KEEPALIVE_EXPIRY", 120.0)
+HTTP_WARMUP_CONNECTIONS: int = env_int("HTTP_WARMUP_CONNECTIONS", 5)
+HTTP_STREAMING_MAX_CONNECTIONS_WINDOWS: int = 64
+HTTP_STREAMING_MAX_CONNECTIONS_POSIX: int = 192
+HTTP_STREAMING_MAX_KEEPALIVE_WINDOWS: int = 32
+HTTP_STREAMING_MAX_KEEPALIVE_POSIX: int = 64
+HTTP_STREAMING_KEEPALIVE_EXPIRY: float = env_float("HTTP_STREAMING_KEEPALIVE_EXPIRY", 180.0)
+HTTP_SSL_VERIFY_DEFAULT: bool = True
+HTTP_WARMUP_HOST_LIMIT: int = env_int("HTTP_WARMUP_HOST_LIMIT", 5)
+
+# Maximum delay cap for same-key retries in seconds
+# Override: RETRY_SAME_KEY_MAX_WAIT=<seconds>
+RETRY_SAME_KEY_MAX_WAIT: float = env_float("RETRY_SAME_KEY_MAX_WAIT", 30.0)
+
 # =============================================================================
 # OAUTH USER FLOW TIMEOUT DEFAULTS
 # =============================================================================
