@@ -38,6 +38,8 @@ import litellm
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional, Union, TYPE_CHECKING
 
+from ..env_cache import get_provider_env_cache
+
 if TYPE_CHECKING:
     from ..anthropic_compat.models import (
         AnthropicMessagesRequest,
@@ -55,7 +57,7 @@ lib_logger = logging.getLogger("rotator_library")
 
 try:
     DEFAULT_API_KEY_MAX_CONCURRENT_REQUESTS = int(
-        os.environ.get("API_KEY_MAX_CONCURRENT_REQUESTS", 40)
+        get_provider_env_cache().get("API_KEY_MAX_CONCURRENT_REQUESTS", 40)
     )
 except ValueError:
     lib_logger.warning(
@@ -93,9 +95,12 @@ from ..model_definitions import ModelDefinitions
 from ..utils.paths import get_default_root, get_logs_dir, get_oauth_dir
 from ..utils.litellm_patches import suppress_litellm_serialization_warnings
 from ..utils.model_utils import (
+    clear_model_match_cache,
+    compile_model_patterns,
     extract_provider_from_model,
     get_or_create_provider_instance,
     normalize_model_string,
+    register_model_patterns,
 )
 from ..utils.provider_locks import ProviderLockManager
 from ..utils.provider_registry import get_provider_registry
@@ -305,8 +310,11 @@ class RotatingClient(
         self.circuit_breaker = self._resilience.circuit_breaker
         self.rate_limiter = self._resilience.rate_limiter
         self.litellm_provider_params = litellm_provider_params or {}
-        self.ignore_models = ignore_models or {}
-        self.whitelist_models = whitelist_models or {}
+        self.ignore_models = compile_model_patterns(ignore_models or {})
+        self.whitelist_models = compile_model_patterns(whitelist_models or {})
+        register_model_patterns(self.ignore_models)
+        register_model_patterns(self.whitelist_models)
+        clear_model_match_cache()
         self.enable_request_logging = enable_request_logging
         self.model_definitions = ModelDefinitions()
 
@@ -339,7 +347,9 @@ class RotatingClient(
         _default_max_concurrent = 128 if sys.platform == "win32" else 256
         try:
             _max_concurrent = int(
-                os.getenv("MAX_CONCURRENT_REQUESTS", str(_default_max_concurrent))
+                get_provider_env_cache().get(
+                    "MAX_CONCURRENT_REQUESTS", str(_default_max_concurrent)
+                )
             )
         except ValueError:
             lib_logger.warning(

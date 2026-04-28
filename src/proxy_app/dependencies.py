@@ -117,7 +117,7 @@ async def verify_api_key(request: Request, auth: str = Depends(api_key_header)):
     bearer_key = getattr(request.app.state, "bearer_proxy_api_key", None)
     # If PROXY_API_KEY is not set or empty, skip verification (open access)
     if not proxy_api_key:
-        logger.warning("PROXY_API_KEY not set - authentication disabled")
+        logger.debug("PROXY_API_KEY not set - authentication disabled")
         return auth
     if not auth or not bearer_key or not hmac.compare_digest(auth, bearer_key):
         raise HTTPException(status_code=401, detail="Invalid or missing API Key")
@@ -137,7 +137,7 @@ async def verify_anthropic_api_key(
     bearer_key = getattr(request.app.state, "bearer_proxy_api_key", None)
     # If PROXY_API_KEY is not set or empty, skip verification (open access)
     if not proxy_api_key:
-        logger.warning("PROXY_API_KEY not set - authentication disabled")
+        logger.debug("PROXY_API_KEY not set - authentication disabled")
         return x_api_key or auth
     # Check x-api-key first (Anthropic style)
     if x_api_key and hmac.compare_digest(x_api_key, proxy_api_key):

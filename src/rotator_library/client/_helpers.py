@@ -60,10 +60,10 @@ class HelpersMixin:
                 sanitized[k] = v
         return sanitized
 
-    async def _sleep_within_budget(
+    def _sleep_within_budget(
         self, attempt: int, deadline: float, classified_error: "ClassifiedError"
     ) -> bool:
-        """Sleep using shared retry policy when remaining budget allows it."""
+        """Check shared retry policy wait time against remaining budget."""
         base_wait = compute_backoff_with_jitter(attempt, retry_after=classified_error.retry_after)
         wait_time = base_wait
 
@@ -71,7 +71,6 @@ class HelpersMixin:
         if wait_time > remaining_budget:
             return False
 
-        await asyncio.sleep(wait_time)
         return True
 
     async def _process_rate_limit(

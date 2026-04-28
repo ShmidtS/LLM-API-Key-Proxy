@@ -2,10 +2,10 @@
 # Copyright (c) 2026 ShmidtS
 
 import logging
+import threading
 import time
+from collections import defaultdict
 from typing import Dict
-
-from .utils.provider_locks import ProviderLockManager
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -24,7 +24,9 @@ class CooldownManager:
 
     def __init__(self):
         self._cooldowns: Dict[str, float] = {}
-        self._provider_lock_manager = ProviderLockManager()
+        self._cooldowns_lock = threading.RLock()
+        self._provider_locks: Dict[str, threading.RLock] = {}
+        self._provider_locks_lock = threading.Lock()
         self._last_cleanup = 0.0
 
     def _extract_provider(self, credential: str) -> str:
@@ -42,24 +44,43 @@ class CooldownManager:
             return parts[0]
         return credential
 
+    def _get_provider_lock(self, provider: str) -> threading.RLock:
+        if provider in self._provider_locks:
+            return self._provider_locks[provider]
+
+        with self._provider_locks_lock:
+            if provider not in self._provider_locks:
+                self._provider_locks[provider] = threading.RLock()
+            return self._provider_locks[provider]
+
     async def _cleanup_expired(self) -> None:
         now = time.monotonic()
-        expired = [k for k, v in self._cooldowns.items() if now >= v]
-        if expired:
-            provider = self._extract_provider(expired[0])
-            lock = await self._provider_lock_manager.get_lock(provider)
-            async with lock:
-                for k in expired:
-                    if k in self._cooldowns and now >= self._cooldowns[k]:
-                        del self._cooldowns[k]
-        if len(self._cooldowns) > self._MAX_COOLDOWNS:
-            sorted_keys = sorted(self._cooldowns, key=self._cooldowns.get)
-            oversize = sorted_keys[:len(self._cooldowns) - self._MAX_COOLDOWNS]
-            if oversize:
-                provider = self._extract_provider(oversize[0])
-                lock = await self._provider_lock_manager.get_lock(provider)
-                async with lock:
-                    for k in oversize:
+        with self._cooldowns_lock:
+            expired = [k for k, v in self._cooldowns.items() if now >= v]
+        by_provider: dict[str, list[str]] = defaultdict(list)
+        for k in expired:
+            by_provider[self._extract_provider(k)].append(k)
+        for provider, keys in by_provider.items():
+            with self._get_provider_lock(provider):
+                with self._cooldowns_lock:
+                    for k in keys:
+                        if k in self._cooldowns and now >= self._cooldowns[k]:
+                            del self._cooldowns[k]
+        with self._cooldowns_lock:
+            overflow = len(self._cooldowns) - self._MAX_COOLDOWNS
+            if overflow > 0:
+                sorted_items = [(v, k) for k, v in self._cooldowns.items()]
+                sorted_items.sort()
+                oversize = [k for _, k in sorted_items[:overflow]]
+            else:
+                oversize = []
+        oversize_by_provider: dict[str, list[str]] = defaultdict(list)
+        for k in oversize:
+            oversize_by_provider[self._extract_provider(k)].append(k)
+        for provider, keys in oversize_by_provider.items():
+            with self._get_provider_lock(provider):
+                with self._cooldowns_lock:
+                    for k in keys:
                         if k in self._cooldowns:
                             del self._cooldowns[k]
         self._last_cleanup = now
@@ -72,14 +93,21 @@ class CooldownManager:
     def get_available_credentials(self, credentials: list[str]) -> list[str]:
         """Return credentials not currently in cooldown. Single-pass O(N)."""
         now = time.monotonic()
-        return [c for c in credentials if self._cooldowns.get(c, 0.0) <= now]
+        with self._cooldowns_lock:
+            return [c for c in credentials if self._cooldowns.get(c, 0.0) <= now]
 
     def is_cooling_down_sync(self, credential: str) -> bool:
         """Synchronous check if a credential is cooling down. Safe in asyncio single-thread."""
-        expiry = self._cooldowns.get(credential)
-        if expiry is None:
-            return False
-        return time.monotonic() < expiry
+        provider = self._extract_provider(credential)
+        with self._get_provider_lock(provider):
+            with self._cooldowns_lock:
+                expiry = self._cooldowns.get(credential)
+                if expiry is None:
+                    return False
+                if time.monotonic() < expiry:
+                    return True
+                self._cooldowns.pop(credential, None)
+                return False
 
     async def is_cooling_down(self, credential: str) -> bool:
         """Checks if a credential is currently in a cooldown period."""
@@ -92,11 +120,11 @@ class CooldownManager:
         with different durations always keep the longest cooldown.
         """
         provider = self._extract_provider(credential)
-        lock = await self._provider_lock_manager.get_lock(provider)
-        async with lock:
-            new_expiry = time.monotonic() + duration
-            existing = self._cooldowns.get(credential, 0)
-            self._cooldowns[credential] = max(existing, new_expiry)
+        with self._get_provider_lock(provider):
+            with self._cooldowns_lock:
+                new_expiry = time.monotonic() + duration
+                existing = self._cooldowns.get(credential, 0)
+                self._cooldowns[credential] = max(existing, new_expiry)
 
     async def get_cooldown_remaining(self, credential: str) -> float:
         """
@@ -104,9 +132,13 @@ class CooldownManager:
         Returns 0 if the credential is not in a cooldown period.
         """
         provider = self._extract_provider(credential)
-        lock = await self._provider_lock_manager.get_lock(provider)
-        async with lock:
-            expiry = self._cooldowns.get(credential)
-            if expiry is None:
+        with self._get_provider_lock(provider):
+            with self._cooldowns_lock:
+                expiry = self._cooldowns.get(credential)
+                if expiry is None:
+                    return 0
+                remaining = expiry - time.monotonic()
+                if remaining > 0:
+                    return remaining
+                self._cooldowns.pop(credential, None)
                 return 0
-            return max(0.0, expiry - time.monotonic())

@@ -3,7 +3,7 @@
 
 import asyncio
 import random
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 
 class UsageManagerSelectionMixin:
@@ -59,28 +59,25 @@ class UsageManagerSelectionMixin:
 
         return selected_credential
 
-    async def _get_key_cooldown_async(
-        self, key: str, normalized_model: str
-    ) -> Tuple[str, Tuple[float, float]]:
-        """Helper for parallel cooldown lookup.
-
-        Checks cooldown for the requested model AND for the virtual
-        quota-baseline model (e.g. zai/_quota) when the model belongs
-        to a quota group.  This ensures that cooldowns placed by the
-        background quota refresh on the virtual model are respected
-        even before real models are discovered and added to the group.
-        """
+    async def _get_cooldown_snapshot(
+        self, keys: List[str], normalized_model: str
+    ) -> Dict[str, Tuple[float, float]]:
+        """Snapshot cooldowns for all keys with a single read lock."""
         async with self._data_lock.read():
-            key_data = self._usage_data.get(key, {})
-            key_cd = key_data.get("key_cooldown_until") or 0
-            model_cooldowns = key_data.get("model_cooldowns", {})
-            model_cd = model_cooldowns.get(normalized_model) or 0
+            snapshot = {}
+            for key in keys:
+                key_data = self._usage_data.get(key, {})
+                key_cd = key_data.get("key_cooldown_until") or 0
+                model_cooldowns = key_data.get("model_cooldowns", {})
+                model_cd = model_cooldowns.get(normalized_model) or 0
 
-            if model_cd == 0:
-                quota_cd = self._check_quota_group_cooldown(
-                    key, model_cooldowns, normalized_model
-                )
-                if quota_cd > model_cd:
-                    model_cd = quota_cd
+                if model_cd == 0:
+                    quota_cd = self._check_quota_group_cooldown(
+                        key, model_cooldowns, normalized_model
+                    )
+                    if quota_cd > model_cd:
+                        model_cd = quota_cd
 
-            return key, (key_cd, model_cd)
+                snapshot[key] = (key_cd, model_cd)
+
+            return snapshot

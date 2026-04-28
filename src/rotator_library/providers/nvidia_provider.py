@@ -2,10 +2,10 @@
 # Copyright (c) 2026 ShmidtS
 
 import httpx
-import json
 import logging
 from typing import List, Dict, Any
-from .provider_interface import ProviderInterface  # strip_provider_prefix intentionally not used — nvidia preserves org prefix
+from .provider_interface import ProviderInterface, build_bearer_headers  # strip_provider_prefix intentionally not used — nvidia preserves org prefix
+from .utilities import fetch_provider_models
 from .utilities.nvidia_quota_tracker import NvidiaQuotaTracker
 
 lib_logger = logging.getLogger('rotator_library')
@@ -50,30 +50,16 @@ class NvidiaProvider(ProviderInterface):
         """
         Fetches the list of available models from the NVIDIA NIM API.
         """
-        try:
-            response = await client.get(
-                "https://integrate.api.nvidia.com/v1/models",
-                headers={"Authorization": f"Bearer {api_key}"}
-            )
-            response.raise_for_status()
-            try:
-                data = response.json()
-            except (json.JSONDecodeError, ValueError) as e:
-                lib_logger.warning(f"Invalid JSON from NVIDIA models: {e}, body={response.text[:200]}")
-                return []
-            models = [f"nvidia/{model['id']}" for model in data.get("data", []) if isinstance(model, dict) and "id" in model]
-            return models
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code in (401, 403):
-                lib_logger.warning(f"Auth error fetching NVIDIA models: {e.response.status_code}")
-            elif e.response.status_code >= 500:
-                lib_logger.warning(f"Server error fetching NVIDIA models: {e.response.status_code}")
-            else:
-                lib_logger.error(f"HTTP error fetching NVIDIA models: {e}")
-            return []
-        except httpx.RequestError as e:
-            lib_logger.error(f"Failed to fetch NVIDIA models: {e}")
-            return []
+        return await fetch_provider_models(
+            client,
+            "https://integrate.api.nvidia.com/v1/models",
+            build_bearer_headers(api_key, content_type=None),
+            "NVIDIA",
+            lambda data: [
+                f"nvidia/{model['id']}" for model in data.get("data", [])
+                if isinstance(model, dict) and "id" in model
+            ],
+        )
 
     def _strip_cache_control_from_content(self, content: Any) -> Any:
         """

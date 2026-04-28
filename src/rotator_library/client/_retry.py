@@ -335,7 +335,7 @@ class RetryMixin(RetryBaseMixin):
                 error_message=error_message,
             )
 
-        if not await self._sleep_within_budget(attempt, deadline, classified_error):
+        if not self._sleep_within_budget(attempt, deadline, classified_error):
             error_accumulator.record_error(
                 current_cred, classified_error, error_message
             )

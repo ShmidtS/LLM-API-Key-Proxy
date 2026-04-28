@@ -95,9 +95,14 @@ def _ensure_providers_loaded():
 def _get_provider_auth_class(provider_name: str):
     """Get auth class for provider, raising ValueError if unknown."""
     auth_map, _ = _ensure_providers_loaded()
-    provider_class = auth_map.get(provider_name.lower())
+    provider_key = provider_name.lower()
+    provider_class = auth_map.get(provider_key)
     if not provider_class:
         raise ValueError(f"Unknown provider: {provider_name}")
+    if isinstance(provider_class, tuple):
+        from .providers import _resolve_auth_class
+
+        provider_class = _resolve_auth_class(provider_key)
     return provider_class
 
 

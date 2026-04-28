@@ -5,38 +5,12 @@ from ._constants import lib_logger
 import asyncio
 import logging
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from ..error_types import NoAvailableKeysError, mask_credential
 from ..utils.model_utils import extract_provider_from_model
 
 
 class UsageManagerAcquireMixin:
-    async def _get_key_cooldown_async(
-        self, key: str, normalized_model: str
-    ) -> Tuple[str, Tuple[float, float]]:
-        """Helper for parallel cooldown lookup.
-
-        Checks cooldown for the requested model AND for the virtual
-        quota-baseline model (e.g. zai/_quota) when the model belongs
-        to a quota group.  This ensures that cooldowns placed by the
-        background quota refresh on the virtual model are respected
-        even before real models are discovered and added to the group.
-        """
-        async with self._data_lock.read():
-            key_data = self._usage_data.get(key, {})
-            key_cd = key_data.get("key_cooldown_until") or 0
-            model_cooldowns = key_data.get("model_cooldowns", {})
-            model_cd = model_cooldowns.get(normalized_model) or 0
-
-            if model_cd == 0:
-                quota_cd = self._check_quota_group_cooldown(
-                    key, model_cooldowns, normalized_model
-                )
-                if quota_cd > model_cd:
-                    model_cd = quota_cd
-
-            return key, (key_cd, model_cd)
-
     async def acquire_key(
         self,
         available_keys: List[str],
@@ -110,16 +84,12 @@ class UsageManagerAcquireMixin:
 
             # Group credentials by priority level (if priorities provided)
             if credential_priorities:
-                # Snapshot cooldown data in parallel, then release immediately
-                cooldown_snapshot = dict(
-                await asyncio.gather(
-                *[
-                self._get_key_cooldown_async(key, normalized_model)
-                for key in available_keys
-                ]
+                # Snapshot cooldown data once, then release immediately
+                cooldown_snapshot = await self._get_cooldown_snapshot(
+                    available_keys, normalized_model
                 )
-                )
-                                # Group keys by priority level — OUTSIDE the read lock
+
+                # Group keys by priority level — OUTSIDE the read lock
                 priority_groups = {}
                 for key in available_keys:
                     key_cd, model_cd = cooldown_snapshot.get(key, (0, 0))
@@ -363,14 +333,9 @@ class UsageManagerAcquireMixin:
 
                 tier1_keys, tier2_keys = [], []
 
-                # Snapshot cooldown data in parallel, then release immediately
-                cooldown_snapshot = dict(
-                await asyncio.gather(
-                *[
-                self._get_key_cooldown_async(key, normalized_model)
-                for key in available_keys
-                ]
-                )
+                # Snapshot cooldown data once, then release immediately
+                cooldown_snapshot = await self._get_cooldown_snapshot(
+                    available_keys, normalized_model
                 )
 
                 # Filter and tier keys — OUTSIDE the read lock

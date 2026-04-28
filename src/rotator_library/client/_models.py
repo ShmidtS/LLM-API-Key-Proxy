@@ -1,5 +1,4 @@
 import asyncio
-import fnmatch
 import logging
 import time
 from typing import Dict, List, Optional, Union
@@ -8,7 +7,7 @@ from litellm.litellm_core_utils.token_counter import token_counter
 
 from ..error_handler import classify_error
 from ..error_types import mask_credential
-from ..utils.model_utils import extract_provider_from_model
+from ..utils.model_utils import extract_provider_from_model, match_model_pattern
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -36,25 +35,7 @@ class ModelsMixin:
         - "*-preview" - suffix wildcard
         - "*" - match all
         """
-        model_provider = model_id.split("/")[0]
-        if model_provider not in pattern_dict:
-            return False
-
-        pattern_list = pattern_dict[model_provider]
-        if pattern_list == ["*"]:
-            return wildcard_return
-
-        try:
-            provider_model_name = model_id.split("/", 1)[1]
-        except IndexError:
-            provider_model_name = model_id
-
-        for pattern in pattern_list:
-            if fnmatch.fnmatch(provider_model_name, pattern) or fnmatch.fnmatch(
-                model_id, pattern
-            ):
-                return True
-        return False
+        return match_model_pattern(provider, model_id, pattern_dict, wildcard_return)
 
     def _is_model_ignored(self, provider: str, model_id: str) -> bool:
         """Checks if a model should be ignored based on the ignore list."""

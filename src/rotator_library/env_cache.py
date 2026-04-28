@@ -9,6 +9,7 @@ from typing import Dict, Optional
 
 
 _PROVIDER_ENV_PREFIXES = (
+    "API_KEY_MAX_CONCURRENT_REQUESTS",
     "CONCURRENCY_MULTIPLIER_",
     "CUSTOM_CAP_",
     "CUSTOM_CAP_COOLDOWN_",
@@ -17,6 +18,7 @@ _PROVIDER_ENV_PREFIXES = (
     "FAIR_CYCLE_CROSS_TIER_",
     "FAIR_CYCLE_DURATION_",
     "EXHAUSTION_COOLDOWN_THRESHOLD_",
+    "MAX_CONCURRENT_REQUESTS",
     "_API_HEADERS",
 )
 """Environment variable prefixes that are cached for provider configuration lookups."""
@@ -55,3 +57,13 @@ def get_provider_env_cache() -> Dict[str, str]:
         if _provider_env_cache is None:
             _provider_env_cache = _build_env_cache()
         return _provider_env_cache
+
+
+def invalidate_provider_env_cache() -> None:
+    """Invalidate the provider env cache so it is rebuilt on next access."""
+    global _provider_env_cache
+    with _env_cache_lock:
+        _provider_env_cache = None
+
+
+__all__ = ["get_provider_env_cache", "invalidate_provider_env_cache"]

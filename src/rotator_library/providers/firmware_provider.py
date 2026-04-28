@@ -11,18 +11,13 @@ Environment variables:
 """
 
 import httpx
-import json
 import os
 from typing import Any, Dict, List, Optional
 
-from .provider_interface import ProviderInterface
+from .provider_interface import ProviderInterface, build_bearer_headers
+from .utilities import fetch_provider_models
 from .utilities.firmware_quota_tracker import FirmwareQuotaTracker
 from ..config.defaults import env_int
-
-
-import logging
-
-lib_logger = logging.getLogger("rotator_library")
 
 
 class FirmwareProvider(FirmwareQuotaTracker, ProviderInterface):
@@ -117,32 +112,16 @@ class FirmwareProvider(FirmwareQuotaTracker, ProviderInterface):
         Returns:
             List of model names prefixed with 'firmware/'
         """
-        try:
-            response = await client.get(
-                f"{self.api_base.rstrip('/')}/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-            response.raise_for_status()
-            try:
-                data = response.json()
-            except (json.JSONDecodeError, ValueError) as e:
-                lib_logger.warning(f"Invalid JSON from Firmware.ai models: {e}, body={response.text[:200]}")
-                return []
-            return [
+        return await fetch_provider_models(
+            client,
+            f"{self.api_base.rstrip('/')}/models",
+            build_bearer_headers(api_key, content_type=None),
+            "Firmware.ai",
+            lambda data: [
                 f"firmware/{model['id']}" for model in data.get("data", [])
                 if isinstance(model, dict) and "id" in model
-            ]
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code in (401, 403):
-                lib_logger.warning(f"Auth error fetching Firmware.ai models: {e.response.status_code}")
-            elif e.response.status_code >= 500:
-                lib_logger.warning(f"Server error fetching Firmware.ai models: {e.response.status_code}")
-            else:
-                lib_logger.error(f"HTTP error fetching Firmware.ai models: {e}")
-            return []
-        except httpx.RequestError as e:
-            lib_logger.error(f"Failed to fetch Firmware.ai models: {e}")
-            return []
+            ],
+        )
 
     # =========================================================================
     # BACKGROUND JOB CONFIGURATION

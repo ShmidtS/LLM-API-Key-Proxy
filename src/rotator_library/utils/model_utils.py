@@ -9,8 +9,100 @@ Eliminates duplication of provider/model string extraction across
 client.py, usage_manager.py, and provider modules.
 """
 
+import fnmatch
 import functools
+import os
+import re
 from typing import Any, Optional
+
+
+CompiledModelPatterns = dict[str, tuple[set[str], tuple[re.Pattern[str], ...], bool]]
+
+
+@functools.lru_cache(maxsize=4096)
+def _cached_match_model_pattern(
+    _provider: str,
+    model_id: str,
+    patterns_id: int,
+    wildcard_return: bool,
+    provider_model_name: str,
+    model_provider: str,
+) -> bool:
+    patterns = _MODEL_PATTERN_REGISTRY.get(patterns_id)
+    if patterns is None:
+        return False
+
+    compiled = patterns.get(model_provider)
+    if compiled is None:
+        return False
+
+    exact_patterns, wildcard_patterns, match_all = compiled
+    if match_all:
+        return wildcard_return
+    normalized_model_name = os.path.normcase(provider_model_name)
+    normalized_model_id = os.path.normcase(model_id)
+    if normalized_model_name in exact_patterns or normalized_model_id in exact_patterns:
+        return True
+    return any(
+        pattern.match(normalized_model_name) is not None
+        or pattern.match(normalized_model_id) is not None
+        for pattern in wildcard_patterns
+    )
+
+
+_MODEL_PATTERN_REGISTRY: dict[int, CompiledModelPatterns] = {}
+
+
+def compile_model_patterns(pattern_dict: dict[str, list[str]]) -> CompiledModelPatterns:
+    compiled: CompiledModelPatterns = {}
+    for provider, patterns in pattern_dict.items():
+        exact_patterns: set[str] = set()
+        wildcard_patterns: list[re.Pattern[str]] = []
+        for pattern in patterns:
+            normalized_pattern = os.path.normcase(pattern)
+            if normalized_pattern == "*" and patterns == ["*"]:
+                continue
+            if any(char in normalized_pattern for char in "*?["):
+                wildcard_patterns.append(re.compile(fnmatch.translate(normalized_pattern)))
+            else:
+                exact_patterns.add(normalized_pattern)
+        compiled[provider] = (
+            exact_patterns,
+            tuple(wildcard_patterns),
+            patterns == ["*"],
+        )
+    return compiled
+
+
+def register_model_patterns(patterns: CompiledModelPatterns) -> None:
+    _MODEL_PATTERN_REGISTRY[id(patterns)] = patterns
+
+
+def clear_model_match_cache() -> None:
+    _cached_match_model_pattern.cache_clear()
+
+
+def match_model_pattern(
+    provider: str,
+    model_id: str,
+    patterns: CompiledModelPatterns,
+    wildcard_return: bool = False,
+) -> bool:
+    model_provider = model_id.split("/")[0]
+    if model_provider not in patterns:
+        return False
+    try:
+        provider_model_name = model_id.split("/", 1)[1]
+    except IndexError:
+        provider_model_name = model_id
+    return _cached_match_model_pattern(
+        provider,
+        model_id,
+        id(patterns),
+        wildcard_return,
+        provider_model_name,
+        model_provider,
+    )
 
 
 @functools.lru_cache(maxsize=256)

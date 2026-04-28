@@ -9,6 +9,7 @@ import orjson
 from fastapi import APIRouter, Request, Depends
 
 logger = logging.getLogger(__name__)
+rotator_logger = logging.getLogger("rotator_library")
 
 from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key
@@ -78,8 +79,10 @@ async def chat_completions(
             "reasoning_effort"
         )
 
-        logging.getLogger("rotator_library").debug(
-            f"Handling reasoning parameters: model={model}, reasoning_effort={reasoning_effort}"
+        rotator_logger.debug(
+            "Handling reasoning parameters: model=%s, reasoning_effort=%s",
+            model,
+            reasoning_effort,
         )
 
         # Log basic request info to console (this is a separate, simpler logger).

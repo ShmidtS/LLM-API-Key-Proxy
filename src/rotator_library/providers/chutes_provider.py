@@ -2,17 +2,11 @@
 # Copyright (c) 2026 ShmidtS
 
 import httpx
-import json
 from typing import Any, Dict, List, Optional
-from .provider_interface import ProviderInterface, UsageResetConfigDef
+from .provider_interface import ProviderInterface, UsageResetConfigDef, build_bearer_headers
+from .utilities import fetch_provider_models
 from .utilities.chutes_quota_tracker import ChutesQuotaTracker
 from ..config.defaults import env_int
-
-# Create a local logger for this module
-import logging
-
-lib_logger = logging.getLogger("rotator_library")
-
 
 class ChutesProvider(ChutesQuotaTracker, ProviderInterface):
     """
@@ -78,30 +72,14 @@ class ChutesProvider(ChutesQuotaTracker, ProviderInterface):
         Returns:
             List of model names prefixed with 'chutes/'
         """
-        try:
-            response = await client.get(
-                "https://llm.chutes.ai/v1/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-            response.raise_for_status()
-            try:
-                data = response.json()
-            except (json.JSONDecodeError, ValueError) as e:
-                lib_logger.warning(f"Invalid JSON from chutes.ai models: {e}, body={response.text[:200]}")
-                return []
-            return [
+        return await fetch_provider_models(
+            client,
+            "https://llm.chutes.ai/v1/models",
+            build_bearer_headers(api_key, content_type=None),
+            "chutes.ai",
+            lambda data: [
                 f"chutes/{model['id']}" for model in data.get("data", [])
                 if isinstance(model, dict) and "id" in model
-            ]
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code in (401, 403):
-                lib_logger.warning(f"Auth error fetching chutes.ai models: {e.response.status_code}")
-            elif e.response.status_code >= 500:
-                lib_logger.warning(f"Server error fetching chutes.ai models: {e.response.status_code}")
-            else:
-                lib_logger.error(f"HTTP error fetching chutes.ai models: {e}")
-            return []
-        except httpx.RequestError as e:
-            lib_logger.error(f"Failed to fetch chutes.ai models: {e}")
-            return []
+            ],
+        )
 

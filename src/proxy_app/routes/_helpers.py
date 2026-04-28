@@ -139,6 +139,9 @@ def log_request_to_console(url: str, client_info: tuple, request_data: dict):
     """
     Logs a concise, single-line summary of an incoming request to the console.
     """
+    if not logging.getLogger().isEnabledFor(logging.INFO):
+        return
+
     time_str = datetime.now().strftime("%H:%M")
     model_full = request_data.get("model", "N/A")
 
@@ -152,8 +155,15 @@ def log_request_to_console(url: str, client_info: tuple, request_data: dict):
         model_name = parts[1]
         endpoint_url = get_provider_endpoint(provider, model_name, url) or "N/A"
 
-    log_message = f"{time_str} - {client_info[0]}:{client_info[1]} - provider: {provider}, model: {model_name} - {endpoint_url}"
-    logging.info(log_message)
+    logging.info(
+        "%s - %s:%s - provider: %s, model: %s - %s",
+        time_str,
+        client_info[0],
+        client_info[1],
+        provider,
+        model_name,
+        endpoint_url,
+    )
 
 
 async def _parse_and_log(request: Request, endpoint_type: str | None = None) -> dict:

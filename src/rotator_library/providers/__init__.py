@@ -5,20 +5,16 @@ import importlib
 import logging
 import pkgutil
 import os
-from typing import Dict, Type
+from typing import Dict, Type, Union
+
+from .provider_interface import ProviderInterface as _ProviderInterface
+
+ProviderInterface = _ProviderInterface
 
 lib_logger = logging.getLogger("rotator_library")
 
-from .provider_interface import ProviderInterface as _ProviderInterface
-from .gemini_auth_base import GeminiAuthBase as _GeminiAuthBase
-from .qwen_auth_base import QwenAuthBase as _QwenAuthBase
-from .iflow_auth_base import IFlowAuthBase as _IFlowAuthBase
-from .antigravity_auth_base import AntigravityAuthBase as _AntigravityAuthBase
-from .colin_provider import ColinProvider as _ColinProvider
-from .elysiver_provider import ElysiverProvider as _ElysiverProvider
-from .openai_compatible_provider import OpenAICompatibleProvider
-
 __all__ = [
+    "ProviderInterface",
     "PROVIDER_PLUGINS",
     "PROVIDER_AUTH_MAP",
     "OpenAICompatibleProvider",
@@ -29,28 +25,85 @@ __all__ = [
 
 # --- Provider Plugin System ---
 
+_LazyEntry = tuple[str, str]
+_ProviderEntry = Union[Type[_ProviderInterface], _LazyEntry]
+
+
+class _LazyProviderPlugins(dict):
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        if isinstance(value, tuple):
+            value = _resolve_lazy_entry(value)
+            super().__setitem__(key, value)
+        return value
+
+    def get(self, key, default=None):
+        if key not in self:
+            return default
+        return self[key]
+
+    def items(self):
+        for key in list(super().keys()):
+            yield key, self[key]
+
+    def values(self):
+        for key in list(super().keys()):
+            yield self[key]
+
+
 # Dictionary to hold discovered provider classes, mapping provider name to class
-PROVIDER_PLUGINS: Dict[str, Type[_ProviderInterface]] = {}
+PROVIDER_PLUGINS: Dict[str, _ProviderEntry] = _LazyProviderPlugins()
 
 # Compatibility registry for auth/credential tooling imports.
-PROVIDER_AUTH_MAP: Dict[str, type] = {
-    "gemini_cli": _GeminiAuthBase,
-    "qwen_code": _QwenAuthBase,
-    "iflow": _IFlowAuthBase,
-    "antigravity": _AntigravityAuthBase,
-    "colin": _ColinProvider,
-    "elysiver": _ElysiverProvider,
+PROVIDER_AUTH_MAP: Dict[str, Union[_ProviderEntry, type]] = {
+    "gemini_cli": (".gemini_auth_base", "GeminiAuthBase"),
+    "qwen_code": (".qwen_auth_base", "QwenAuthBase"),
+    "iflow": (".iflow_auth_base", "IFlowAuthBase"),
+    "antigravity": (".antigravity_auth_base", "AntigravityAuthBase"),
+    "colin": (".colin_provider", "ColinProvider"),
+    "elysiver": (".elysiver_provider", "ElysiverProvider"),
+}
+
+_LAZY_IMPORTS = {
+    "OpenAICompatibleProvider": (".openai_compatible_provider", "OpenAICompatibleProvider"),
+    "ColinProvider": (".colin_provider", "ColinProvider"),
+    "ElysiverProvider": (".elysiver_provider", "ElysiverProvider"),
 }
 
 
 # --- Pre-register providers with custom logic ---
 # These providers implement has_custom_logic() = True and need early registration
 # to bypass the standard litellm flow
-PROVIDER_PLUGINS["colin"] = _ColinProvider
-PROVIDER_PLUGINS["elysiver"] = _ElysiverProvider
+PROVIDER_PLUGINS["colin"] = PROVIDER_AUTH_MAP["colin"]
+PROVIDER_PLUGINS["elysiver"] = PROVIDER_AUTH_MAP["elysiver"]
 
 
 # --- Lazy Provider Loading ---
+
+
+def _resolve_lazy_entry(entry: _LazyEntry):
+    module_path, class_name = entry
+    module = importlib.import_module(module_path, __name__)
+    return getattr(module, class_name)
+
+
+def _resolve_auth_class(name: str):
+    entry = PROVIDER_AUTH_MAP[name]
+    if isinstance(entry, tuple):
+        provider_class = _resolve_lazy_entry(entry)
+        PROVIDER_AUTH_MAP[name] = provider_class
+        if name in PROVIDER_PLUGINS and PROVIDER_PLUGINS[name] == entry:
+            PROVIDER_PLUGINS[name] = provider_class
+        return provider_class
+    return entry
+
+
+def __getattr__(name: str):
+    if name in _LAZY_IMPORTS:
+        value = _resolve_lazy_entry(_LAZY_IMPORTS[name])
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _get_provider_module_name(provider_name: str) -> str:
@@ -169,7 +222,7 @@ def _ensure_dynamic_providers():
 
             # Create a dynamic plugin class
             def create_plugin_class(name):
-                class DynamicPlugin(OpenAICompatibleProvider):
+                class DynamicPlugin(__getattr__("OpenAICompatibleProvider")):
                     def __init__(self):
                         super().__init__(name)
 
@@ -183,7 +236,7 @@ def _ensure_dynamic_providers():
             )
 
 
-def get_all_providers() -> Dict[str, Type[_ProviderInterface]]:
+def get_all_providers() -> Dict[str, _ProviderEntry]:
     """
     Get all available providers, loading them lazily as needed.
     Maintains backward compatibility with code expecting PROVIDER_PLUGINS.

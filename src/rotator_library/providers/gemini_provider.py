@@ -2,13 +2,13 @@
 # Copyright (c) 2026 ShmidtS
 
 import httpx
-import json
-import logging
 from typing import List, Dict, Any
 from .provider_interface import ProviderInterface
-from .utilities import DEFAULT_GEMINI_SAFETY_SETTINGS_MAP, DEFAULT_SAFETY_SETTINGS
-
-lib_logger = logging.getLogger('rotator_library')
+from .utilities import (
+    DEFAULT_GEMINI_SAFETY_SETTINGS_MAP,
+    DEFAULT_SAFETY_SETTINGS,
+    fetch_provider_models,
+)
 
 class GeminiProvider(ProviderInterface):
     """
@@ -18,29 +18,17 @@ class GeminiProvider(ProviderInterface):
         """
         Fetches the list of available models from the Google Gemini API.
         """
-        try:
-            response = await client.get(
-                "https://generativelanguage.googleapis.com/v1beta/models",
-                headers={"x-goog-api-key": api_key}
-            )
-            response.raise_for_status()
-            try:
-                data = response.json()
-            except (json.JSONDecodeError, ValueError) as e:
-                lib_logger.warning(f"Invalid JSON from Gemini models: {e}, body={response.text[:200]}")
-                return []
-            return [f"gemini/{model['name'].replace('models/', '')}" for model in data.get("models", []) if isinstance(model, dict) and "name" in model]
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code in (401, 403):
-                lib_logger.warning(f"Auth error fetching Gemini models: {e.response.status_code}")
-            elif e.response.status_code >= 500:
-                lib_logger.warning(f"Server error fetching Gemini models: {e.response.status_code}")
-            else:
-                lib_logger.error(f"HTTP error fetching Gemini models: {e}")
-            return []
-        except httpx.RequestError as e:
-            lib_logger.error(f"Failed to fetch Gemini models: {e}")
-            return []
+        return await fetch_provider_models(
+            client,
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            {"x-goog-api-key": api_key},
+            "Gemini",
+            lambda data: [
+                f"gemini/{model['name'].replace('models/', '')}"
+                for model in data.get("models", [])
+                if isinstance(model, dict) and "name" in model
+            ],
+        )
 
     def convert_safety_settings(self, settings: Dict[str, str]) -> List[Dict[str, Any]]:
         """

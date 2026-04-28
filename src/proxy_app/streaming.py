@@ -68,22 +68,22 @@ async def streaming_response_wrapper(
     aggregator = ChunkAggregator() if logger is not None else None
     final_status_code = 200
     final_error_log_context = None
-    log_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
-    log_done = asyncio.Event()
     log_task: Optional[asyncio.Task] = None
 
-    async def _log_drain():
-        while not log_done.is_set() or not log_queue.empty():
-            try:
-                chunk = await asyncio.wait_for(log_queue.get(), timeout=0.1)
-                if logger is not None:
-                    await logger.log_stream_chunk(chunk)
-            except asyncio.TimeoutError:
-                continue
-            except Exception:
-                break
-
     if logger is not None:
+        log_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+        log_done = asyncio.Event()
+
+        async def _log_drain():
+            while not log_done.is_set() or not log_queue.empty():
+                try:
+                    chunk = await asyncio.wait_for(log_queue.get(), timeout=0.1)
+                    await logger.log_stream_chunk(chunk)
+                except asyncio.TimeoutError:
+                    continue
+                except Exception:
+                    break
+
         log_task = asyncio.create_task(_log_drain())
 
     # Track active streaming connections for graceful shutdown
@@ -118,7 +118,7 @@ async def streaming_response_wrapper(
                 return
 
             if not isinstance(chunk, dict):
-                logger.warning("Unexpected chunk type %s in stream, skipping", type(chunk).__name__)
+                logging.warning("Unexpected chunk type %s in stream, skipping", type(chunk).__name__)
                 continue
 
             # chunk is a dict — serialize to SSE only here (single serialize point)
@@ -195,8 +195,8 @@ async def streaming_response_wrapper(
         yield b"data: [DONE]\n\n"
         return  # Stop further processing
     finally:
-        log_done.set()
         if log_task is not None:
+            log_done.set()
             try:
                 await log_task
             except Exception:

@@ -46,9 +46,12 @@ def strip_provider_prefix(model: str) -> str:
     return model.split("/")[-1] if "/" in model else model
 
 
-def build_bearer_headers(token: str, content_type: str = "application/json") -> dict:
-    """Build {"Authorization": "Bearer {token}", "Content-Type": content_type}."""
-    return {"Authorization": f"Bearer {token}", "Content-Type": content_type}
+def build_bearer_headers(token: str, content_type: Optional[str] = "application/json") -> dict:
+    """Build auth headers dict. Set content_type=None to omit Content-Type (e.g. for GET requests)."""
+    headers = {"Authorization": f"Bearer {token}"}
+    if content_type is not None:
+        headers["Content-Type"] = content_type
+    return headers
 
 
 # =============================================================================

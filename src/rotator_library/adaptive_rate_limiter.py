@@ -45,6 +45,7 @@ class _ProviderRateState:
     last_increase: Optional[float] = None
     total_requests: int = 0
     total_429s: int = 0
+    next_available_at: float = 0.0
 
 
 class AdaptiveRateLimiter:
@@ -104,14 +105,19 @@ class AdaptiveRateLimiter:
             )
             state.last_refill = now
 
-            if state.tokens >= tokens:
-                state.tokens -= tokens
-                state.total_requests += 1
-                return 0.0
+            if state.next_available_at < now:
+                state.next_available_at = now
 
-            deficit = tokens - state.tokens
-            wait = deficit / state.current_rps
-            state.tokens = 0
+            wait = 0.0
+            if state.next_available_at > now:
+                wait = state.next_available_at - now
+
+            interval = tokens / max(state.current_rps, 0.001)
+            state.next_available_at = max(state.next_available_at, now) + interval
+
+            state.tokens -= tokens
+            if state.tokens < 0:
+                state.tokens = 0
             state.total_requests += 1
             return wait
 

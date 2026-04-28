@@ -35,20 +35,23 @@ _logger = logging.getLogger("rotator_library.resilient_io")
 # =============================================================================
 
 
-def _resilient_os_replace(src: str, dst: str) -> None:
+def _resilient_os_replace(src: Union[str, Path], dst: Union[str, Path]) -> None:
     """Atomic file replace with retry on Windows for antivirus lock contention.
 
     On Windows NTFS, os.replace() is not truly atomic and antivirus real-time
     scanners can lock the target file, causing PermissionError. Retry up to
     3 times with 0.1s backoff.
     """
+    src_path = os.fspath(src)
+    dst_path = os.fspath(dst)
+
     if os.name != "nt":
-        os.replace(src, dst)
+        os.replace(src_path, dst_path)
         return
 
     for attempt in range(4):
         try:
-            os.replace(src, dst)
+            os.replace(src_path, dst_path)
             return
         except PermissionError:
             if attempt == 3:
@@ -56,18 +59,21 @@ def _resilient_os_replace(src: str, dst: str) -> None:
             time.sleep(0.1 * (attempt + 1))
 
 
-async def _async_resilient_os_replace(src: str, dst: str) -> None:
+async def _async_resilient_os_replace(src: Union[str, Path], dst: Union[str, Path]) -> None:
     """Async variant of _resilient_os_replace for use in async hot paths.
 
     Uses asyncio.sleep instead of time.sleep to avoid blocking the event loop.
     """
+    src_path = os.fspath(src)
+    dst_path = os.fspath(dst)
+
     if os.name != "nt":
-        os.replace(src, dst)
+        os.replace(src_path, dst_path)
         return
 
     for attempt in range(4):
         try:
-            os.replace(src, dst)
+            os.replace(src_path, dst_path)
             return
         except PermissionError:
             if attempt == 3:
@@ -671,8 +677,7 @@ async def async_safe_write_json(
     """
     Async variant of safe_write_json for use in async hot paths.
 
-    Uses _async_resilient_os_replace instead of _resilient_os_replace to avoid
-    blocking the event loop during Windows os.replace retries (time.sleep -> asyncio.sleep).
+    Runs serialization and file I/O in a worker thread to avoid blocking the event loop.
 
     Args:
         path: File path to write to
@@ -690,7 +695,7 @@ async def async_safe_write_json(
     def serializer(d: Any) -> str:
         return orjson.dumps(d, option=orjson.OPT_INDENT_2).decode()
 
-    try:
+    def write_json_sync() -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         content = serializer(data)
 
@@ -711,7 +716,7 @@ async def async_safe_write_json(
                     except (OSError, AttributeError) as e:
                         _logger.debug("Failed to set secure permissions: %s", e)
 
-                await _async_resilient_os_replace(tmp_path, path)
+                _resilient_os_replace(tmp_path, path)
                 tmp_path = None
             finally:
                 if tmp_fd is not None:
@@ -733,6 +738,9 @@ async def async_safe_write_json(
                     os.chmod(path, 0o600)
                 except (OSError, AttributeError) as e:
                     logger.debug("Failed to set secure permissions: %s", e)
+
+    try:
+        await asyncio.to_thread(write_json_sync)
 
         if buffer_on_failure:
             BufferedWriteRegistry.get_instance().unregister(path)

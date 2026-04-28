@@ -6,6 +6,7 @@ from typing import Dict, Any
 from ..utils.json_utils import json_loads
 from ..batched_persistence import UsagePersistenceManager
 import aiofiles
+import copy
 import json
 import os
 
@@ -76,12 +77,14 @@ class UsageManagerPersistenceMixin:
                 # Clean up empty cycle data
                 del self._usage_data["__fair_cycle__"]
 
-            # Use batch persistence if enabled (high-throughput mode)
-            if self._use_batch_persistence and self._batch_persistence:
-                self._batch_persistence.update_usage(self._usage_data)
-            else:
-                # Hand off to resilient writer - handles retries and disk failures
-                await self._state_writer.write(self._usage_data)
+            snapshot = copy.deepcopy(self._usage_data)
+
+        # Use batch persistence if enabled (high-throughput mode)
+        if self._use_batch_persistence and self._batch_persistence:
+            self._batch_persistence.update_usage(snapshot)
+        else:
+            # Hand off to resilient writer - handles retries and disk failures
+            await self._state_writer.write(snapshot)
 
     async def _get_usage_data_snapshot(self) -> Dict[str, Any]:
         """

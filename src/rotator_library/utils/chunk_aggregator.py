@@ -9,6 +9,7 @@ aggregation logic.
 """
 
 import time
+from itertools import chain
 from typing import Any
 
 import litellm
@@ -27,7 +28,8 @@ class ChunkAggregator:
 
     def __init__(self) -> None:
         self._content_parts: list[str] = []
-        self._flushed_content: str = ""
+        self._flushed_content: list[str] = []
+        self._joined_content: str | None = None
         self._generic_str_parts: dict[str, list[str]] = {}
         self._aggregated_tool_calls: dict[int, dict] = {}
         self._final_message: dict[str, Any] = {"role": "assistant"}
@@ -60,8 +62,9 @@ class ChunkAggregator:
                 if key == "content":
                     if value:
                         self._content_parts.append(value)
+                        self._joined_content = None
                         if len(self._content_parts) >= self._MAX_CONTENT_PARTS:
-                            self._flushed_content += "".join(self._content_parts)
+                            self._flushed_content.append("".join(self._content_parts))
                             self._content_parts.clear()
                 elif key == "tool_calls":
                     self._accumulate_tool_calls(value)
@@ -120,7 +123,7 @@ class ChunkAggregator:
         msg = dict(self._final_message)
 
         if self._flushed_content or self._content_parts:
-            msg["content"] = self._flushed_content + "".join(self._content_parts)
+            msg["content"] = self._get_joined_content()
 
         for key, parts in self._generic_str_parts.items():
             msg[key] = "".join(parts)
@@ -196,7 +199,7 @@ class ChunkAggregator:
         absent).  *stream_id* is used as part of the response id fallback.
         """
         meta = self._first_chunk_meta or {}
-        content = (self._flushed_content + "".join(self._content_parts)) if (self._flushed_content or self._content_parts) else None
+        content = self._get_joined_content() if (self._flushed_content or self._content_parts) else None
 
         tool_calls_list = None
         if self._aggregated_tool_calls:
@@ -253,6 +256,13 @@ class ChunkAggregator:
         )
 
     # -- internal helpers ----------------------------------------------------
+
+    def _get_joined_content(self) -> str:
+        if self._joined_content is None:
+            self._joined_content = "".join(
+                chain(self._flushed_content, self._content_parts)
+            )
+        return self._joined_content
 
     def _accumulate_tool_calls(self, value: list[dict]) -> None:
         for tc_chunk in value:
