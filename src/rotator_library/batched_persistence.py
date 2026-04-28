@@ -13,6 +13,7 @@ generalized for any state data.
 import asyncio
 import json
 import logging
+import threading
 from .utils.json_utils import json_loads
 import orjson
 import time
@@ -105,6 +106,7 @@ class BatchedPersistence:
         self._writer_task: Optional[asyncio.Task] = None
         self._pending_update_task: Optional[asyncio.Task] = None
         self._pending_state: Any = _PENDING_STATE_EMPTY
+        self._update_lock = threading.Lock()
         self._running = False
 
         # Statistics
@@ -222,7 +224,8 @@ class BatchedPersistence:
         """
         try:
             loop = asyncio.get_running_loop()
-            self._pending_state = state
+            with self._update_lock:
+                self._pending_state = state
             loop.call_soon_threadsafe(self._schedule_flush, loop)
         except RuntimeError:
             self._apply_update(state)
@@ -245,13 +248,15 @@ class BatchedPersistence:
     async def _flush_pending_update(self) -> None:
         while True:
             async with self._lock:
-                state = self._pending_state
-                self._pending_state = _PENDING_STATE_EMPTY
+                with self._update_lock:
+                    state = self._pending_state
+                    self._pending_state = _PENDING_STATE_EMPTY
                 if state is not _PENDING_STATE_EMPTY:
                     self._apply_update(state)
 
-            if self._pending_state is _PENDING_STATE_EMPTY:
-                return
+            with self._update_lock:
+                if self._pending_state is _PENDING_STATE_EMPTY:
+                    return
 
     def get_state(self) -> Any:
         """Get current state (from memory)."""

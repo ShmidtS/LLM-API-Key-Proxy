@@ -14,6 +14,7 @@ class UsageManagerSelectionMixin:
                 "lock": asyncio.Lock(),
                 "condition": asyncio.Condition(),
                 "models_in_use": {},  # Dict[model_name, concurrent_count]
+                "total_in_use": 0,
             })
 
     def _select_weighted_random(self, candidates: List[tuple], tolerance: float) -> str:
@@ -83,4 +84,3 @@ class UsageManagerSelectionMixin:
                     model_cd = quota_cd
 
             return key, (key_cd, model_cd)
-

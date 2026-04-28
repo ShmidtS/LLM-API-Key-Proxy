@@ -102,7 +102,7 @@ async def track_stream(request: Request, stream: AsyncGenerator[Any, None]) -> A
         logger.error(f"Error during streaming: {e}")
         if hasattr(stream, "aclose"):
             await stream.aclose()
-        raise e
+        raise
     finally:
         _unregister_stream_gen(request, stream)
         try:

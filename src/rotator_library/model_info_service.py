@@ -935,6 +935,9 @@ class ModelRegistry(metaclass=SingletonMeta):
         # Lookup infrastructure
         self._index = ModelIndex()
         self._result_cache: Dict[str, ModelMetadata] = {}
+        self._negative_cache: Dict[str, float] = {}
+        self._negative_cache_ttl = 300.0
+        self._raw_models_cache: Optional[Dict[str, Dict]] = None
 
         # Async coordination
         self._ready = asyncio.Event()
@@ -1024,6 +1027,8 @@ class ModelRegistry(metaclass=SingletonMeta):
         """Reconstruct lookup index from current stores."""
         self._index.clear()
         self._result_cache.clear()
+        self._negative_cache.clear()
+        self._raw_models_cache = None
 
         for model_id in self._openrouter_store:
             self._index.add(model_id)
@@ -1045,9 +1050,16 @@ class ModelRegistry(metaclass=SingletonMeta):
         if model_id in self._result_cache:
             return self._result_cache[model_id]
 
+        now = time.time()
+        cached_miss = self._negative_cache.get(model_id)
+        if cached_miss is not None and (now - cached_miss) < self._negative_cache_ttl:
+            return None
+
         metadata = self._resolve_model(model_id)
         if metadata:
             self._result_cache[model_id] = metadata
+        else:
+            self._negative_cache[model_id] = time.time()
         return metadata
 
     def _resolve_model(self, model_id: str) -> Optional[ModelMetadata]:
@@ -1221,10 +1233,11 @@ class ModelRegistry(metaclass=SingletonMeta):
 
     def all_raw_models(self) -> Dict[str, Dict]:
         """Return all raw source data (for debugging)."""
-        combined = {}
-        combined.update(self._openrouter_store)
-        combined.update(self._modelsdev_store)
-        return combined
+        if self._raw_models_cache is not None:
+            return self._raw_models_cache
+        result = {**self._openrouter_store, **self._modelsdev_store}
+        self._raw_models_cache = result
+        return result
 
     def diagnostics(self) -> Dict[str, Any]:
         """Return service health/stats."""

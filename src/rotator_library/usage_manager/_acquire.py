@@ -3,6 +3,7 @@
 
 from ._constants import lib_logger
 import asyncio
+import logging
 import time
 from typing import Dict, List, Optional, Tuple
 from ..error_types import NoAvailableKeysError, mask_credential
@@ -79,15 +80,17 @@ class UsageManagerAcquireMixin:
             key = available_keys[0]
             state = self.key_states[key]
             async with state["lock"]:
-                total_in_use = sum(state["models_in_use"].values())
+                total_in_use = state.get("total_in_use", 0)
                 if total_in_use < max_concurrent:
                     state["models_in_use"][model] = (
                         state["models_in_use"].get(model, 0) + 1
                     )
-                    lib_logger.info(
-                        f"Acquired key {mask_credential(key)} for model {model} "
-                        f"(fast path: concurrent {total_in_use + 1}/{max_concurrent})"
-                    )
+                    state["total_in_use"] = total_in_use + 1
+                    if lib_logger.isEnabledFor(logging.INFO):
+                        lib_logger.info(
+                            f"Acquired key {mask_credential(key)} for model {model} "
+                            f"(fast path: concurrent {total_in_use + 1}/{max_concurrent})"
+                        )
                     return key
             # If we get here, the single key is at capacity - fall through to waiting logic
 
@@ -262,17 +265,19 @@ class UsageManagerAcquireMixin:
                                 # Track whether this is a reused-active or idle key
                                 is_active = bool(state["models_in_use"])
                                 state["models_in_use"][model] = current_count + 1
-                                tier_name = (
-                                    credential_tier_names.get(key, "unknown")
-                                    if credential_tier_names
-                                    else "unknown"
-                                )
-                                quota_display = self._get_quota_display(key, model)
-                                selection_source = "reused-active" if is_active else "idle"
-                                lib_logger.info(
-                                    f"Acquired key {mask_credential(key)} for model {model} "
-                                    f"(tier: {tier_name}, priority: {priority_level}, selection: {selection_method}, selection_source: {selection_source}, concurrent: {state['models_in_use'][model]}/{effective_max_concurrent}, {quota_display})"
-                                )
+                                state["total_in_use"] = state.get("total_in_use", 0) + 1
+                                if lib_logger.isEnabledFor(logging.INFO):
+                                    tier_name = (
+                                        credential_tier_names.get(key, "unknown")
+                                        if credential_tier_names
+                                        else "unknown"
+                                    )
+                                    quota_display = self._get_quota_display(key, model)
+                                    selection_source = "reused-active" if is_active else "idle"
+                                    lib_logger.info(
+                                        f"Acquired key {mask_credential(key)} for model {model} "
+                                        f"(tier: {tier_name}, priority: {priority_level}, selection: {selection_method}, selection_source: {selection_source}, concurrent: {state['models_in_use'][model]}/{effective_max_concurrent}, {quota_display})"
+                                    )
                                 return key
 
                 # If we get here, all priority groups were exhausted but keys might become available
@@ -495,18 +500,20 @@ class UsageManagerAcquireMixin:
                                 continue
                         else:
                             state["models_in_use"][model] = 1
-                        tier_name = (
-                            credential_tier_names.get(key)
-                            if credential_tier_names
-                            else None
-                        )
-                        tier_info = f"tier: {tier_name}, " if tier_name else ""
-                        quota_display = self._get_quota_display(key, model)
-                        selection_source = "reused-active" if is_currently_active else "idle"
-                        lib_logger.info(
-                            f"Acquired key {mask_credential(key)} for model {model} "
-                            f"({tier_info}selection: {selection_method}, selection_source: {selection_source}, concurrent: {state['models_in_use'][model]}/{effective_max_concurrent}, {quota_display})"
-                        )
+                        state["total_in_use"] = state.get("total_in_use", 0) + 1
+                        if lib_logger.isEnabledFor(logging.INFO):
+                            tier_name = (
+                                credential_tier_names.get(key)
+                                if credential_tier_names
+                                else None
+                            )
+                            tier_info = f"tier: {tier_name}, " if tier_name else ""
+                            quota_display = self._get_quota_display(key, model)
+                            selection_source = "reused-active" if is_currently_active else "idle"
+                            lib_logger.info(
+                                f"Acquired key {mask_credential(key)} for model {model} "
+                                f"({tier_info}selection: {selection_method}, selection_source: {selection_source}, concurrent: {state['models_in_use'][model]}/{effective_max_concurrent}, {quota_display})"
+                            )
                         return key
 
                 # If all eligible keys are locked, wait for a key to be released.
@@ -597,6 +604,7 @@ class UsageManagerAcquireMixin:
         async with state["lock"]:
             if model in state["models_in_use"]:
                 state["models_in_use"][model] -= 1
+                state["total_in_use"] = max(0, state.get("total_in_use", 1) - 1)
                 remaining = state["models_in_use"][model]
                 if remaining <= 0:
                     del state["models_in_use"][model]  # Clean up when count reaches 0

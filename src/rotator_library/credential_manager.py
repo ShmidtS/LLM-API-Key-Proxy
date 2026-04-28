@@ -201,7 +201,7 @@ class CredentialManager:
                         f"Copied '{source_path.name}' to local pool at '{local_path}'."
                     )
                     prepared_paths.append(str(local_path.resolve()))
-                except Exception as e:
+                except (OSError, shutil.Error) as e:
                     lib_logger.warning(
                         f"Credential file failed to copy from '{source_path}' to '{local_path}': {type(e).__name__}: {e}. "
                         f"This credential will be skipped."

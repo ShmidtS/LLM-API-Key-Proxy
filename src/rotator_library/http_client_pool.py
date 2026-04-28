@@ -540,7 +540,10 @@ class HttpClientPool(metaclass=SingletonMeta):
         Returns:
         Valid httpx.AsyncClient instance
         """
-        # Fast path: check under lock if client is already valid
+        client = self._streaming_client if streaming else self._non_streaming_client
+        if not self._is_client_closed(client):
+            return client
+
         async with self._client_lock:
             client = self._streaming_client if streaming else self._non_streaming_client
             if not self._is_client_closed(client):

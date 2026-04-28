@@ -1046,6 +1046,8 @@ class RetryMixin(RetryBaseMixin):
                                     break
                             else:
                                 break
+                        except (TypeError, AttributeError, KeyError):
+                            raise
                         except Exception as e:
                             lib_logger.error(f"Unexpected error in retry loop: {type(e).__name__}: {e}")
                             last_exception = e
@@ -1308,6 +1310,8 @@ class RetryMixin(RetryBaseMixin):
                                     break
 
                             except asyncio.CancelledError:
+                                raise
+                            except (TypeError, AttributeError, KeyError):
                                 raise
                             except Exception as e:
                                 last_exception = e
@@ -1618,6 +1622,8 @@ class RetryMixin(RetryBaseMixin):
 
                         except asyncio.CancelledError:
                             raise
+                        except (TypeError, AttributeError, KeyError):
+                            raise
                         except Exception as e:
                             consecutive_quota_failures.pop(current_cred, None)
                             last_exception = e
@@ -1675,6 +1681,8 @@ class RetryMixin(RetryBaseMixin):
             error_data = {"error": {"message": str(e), "type": "proxy_busy"}}
             yield error_data
             yield STREAM_DONE
+        except (TypeError, AttributeError, KeyError):
+            raise
         except Exception as e:
             # This will now only catch fatal errors that should be raised, like invalid requests.
             lib_logger.error(

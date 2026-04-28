@@ -566,7 +566,7 @@ class RotatingClient(
         if kwargs.get("stream"):
             # Only add stream_options for providers that support it
             if provider not in STREAM_OPTIONS_UNSUPPORTED_PROVIDERS:
-                if "stream_options" not in kwargs:
+                if not isinstance(kwargs.get("stream_options"), dict):
                     kwargs["stream_options"] = {}
                 if "include_usage" not in kwargs["stream_options"]:
                     kwargs["stream_options"]["include_usage"] = True
