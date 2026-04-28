@@ -20,6 +20,24 @@ from ..utils.litellm_patches import suppress_litellm_prints
 from ..utils.model_utils import extract_provider_from_model
 
 
+def _new_model_data(**overrides):
+    """Create a fresh per-model usage tracking dict."""
+    return {
+        "window_start_ts": None,
+        "quota_reset_ts": None,
+        "success_count": 0,
+        "failure_count": 0,
+        "request_count": 0,
+        "prompt_tokens": 0,
+        "prompt_tokens_cached": 0,
+        "prompt_tokens_cache_creation": 0,
+        "completion_tokens": 0,
+        "thinking_tokens": 0,
+        "approx_cost": 0.0,
+        **overrides,
+    }
+
+
 class UsageManagerRecordingMixin:
     async def record_success(
         self,
@@ -67,20 +85,7 @@ class UsageManagerRecordingMixin:
 
                 # Get or create per-model data with window tracking
                 model_data = key_data["models"].setdefault(
-                    model,
-                    {
-                        "window_start_ts": None,
-                        "quota_reset_ts": None,
-                        "success_count": 0,
-                        "failure_count": 0,
-                        "request_count": 0,
-                        "prompt_tokens": 0,
-                        "prompt_tokens_cached": 0,
-                        "prompt_tokens_cache_creation": 0,
-                        "completion_tokens": 0,
-                        "thinking_tokens": 0,
-                        "approx_cost": 0.0,
-                    },
+                    model, _new_model_data(),
                 )
 
                 # Start window on first request for this model
@@ -117,19 +122,7 @@ class UsageManagerRecordingMixin:
                         if grouped_model == model:
                             continue
                         other_model_data = key_data["models"].setdefault(
-                            grouped_model,
-                            {
-                                "window_start_ts": None,
-                                "quota_reset_ts": None,
-                                "success_count": 0,
-                                "failure_count": 0,
-                                "request_count": 0,
-                                "prompt_tokens": 0,
-                                "prompt_tokens_cached": 0,
-                                "completion_tokens": 0,
-                                "thinking_tokens": 0,
-                                "approx_cost": 0.0,
-                            },
+                            grouped_model, _new_model_data(),
                         )
                         # Skip write if value already matches
                         if other_model_data.get("request_count") == new_request_count:
@@ -424,19 +417,7 @@ class UsageManagerRecordingMixin:
                     # Set quota_reset_ts on model - this becomes authoritative stats reset time
                     models_data = key_data.setdefault("models", {})
                     model_data = models_data.setdefault(
-                        model,
-                        {
-                            "window_start_ts": None,
-                            "quota_reset_ts": None,
-                            "success_count": 0,
-                            "failure_count": 0,
-                            "request_count": 0,
-                            "prompt_tokens": 0,
-                            "prompt_tokens_cached": 0,
-                            "completion_tokens": 0,
-                            "thinking_tokens": 0,
-                            "approx_cost": 0.0,
-                        },
+                        model, _new_model_data(),
                     )
                     model_data["quota_reset_ts"] = quota_reset_ts
                     # Track failure for quota estimation (request still consumes quota)
@@ -464,19 +445,7 @@ class UsageManagerRecordingMixin:
                         grouped_models = self._get_grouped_models(key, group)
                         for grouped_model in grouped_models:
                             group_model_data = models_data.setdefault(
-                                grouped_model,
-                                {
-                                    "window_start_ts": None,
-                                    "quota_reset_ts": None,
-                                    "success_count": 0,
-                                    "failure_count": 0,
-                                    "request_count": 0,
-                                    "prompt_tokens": 0,
-                                    "prompt_tokens_cached": 0,
-                                    "completion_tokens": 0,
-                                    "thinking_tokens": 0,
-                                    "approx_cost": 0.0,
-                                },
+                                grouped_model, _new_model_data(),
                             )
                             group_model_data["quota_reset_ts"] = quota_reset_ts
                             # Sync request_count across quota group
@@ -600,20 +569,7 @@ class UsageManagerRecordingMixin:
             if reset_mode == "per_model":
                 models_data = key_data.setdefault("models", {})
                 model_data = models_data.setdefault(
-                    model,
-                    {
-                        "window_start_ts": None,
-                        "quota_reset_ts": None,
-                        "success_count": 0,
-                        "failure_count": 0,
-                        "request_count": 0,
-                        "prompt_tokens": 0,
-                        "prompt_tokens_cached": 0,
-                        "prompt_tokens_cache_creation": 0,
-                        "completion_tokens": 0,
-                        "thinking_tokens": 0,
-                        "approx_cost": 0.0,
-                    },
+                    model, _new_model_data(),
                 )
                 # Only increment if not already incremented in quota_exceeded branch
                 if classified_error.error_type != "quota_exceeded":
@@ -628,19 +584,7 @@ class UsageManagerRecordingMixin:
                         for grouped_model in grouped_models:
                             if grouped_model != model:
                                 other_model_data = models_data.setdefault(
-                                    grouped_model,
-                                    {
-                                        "window_start_ts": None,
-                                        "quota_reset_ts": None,
-                                        "success_count": 0,
-                                        "failure_count": 0,
-                                        "request_count": 0,
-                                        "prompt_tokens": 0,
-                                        "prompt_tokens_cached": 0,
-                                        "completion_tokens": 0,
-                                        "thinking_tokens": 0,
-                                        "approx_cost": 0.0,
-                                    },
+                                    grouped_model, _new_model_data(),
                                 )
                                 other_model_data["request_count"] = new_request_count
                                 # Also sync quota_max_requests if set
@@ -713,22 +657,11 @@ class UsageManagerRecordingMixin:
 
             # Get or create per-model data
             model_data = key_data["models"].setdefault(
-                model,
-                {
-                    "window_start_ts": None,
-                    "quota_reset_ts": None,
-                    "success_count": 0,
-                    "failure_count": 0,
-                    "request_count": 0,
-                    "prompt_tokens": 0,
-                    "prompt_tokens_cached": 0,
-                    "completion_tokens": 0,
-                    "thinking_tokens": 0,
-                    "approx_cost": 0.0,
-                    "baseline_remaining_fraction": None,
-                    "baseline_fetched_at": None,
-                    "requests_at_baseline": None,
-                },
+                model, _new_model_data(
+                    baseline_remaining_fraction=None,
+                    baseline_fetched_at=None,
+                    requests_at_baseline=None,
+                ),
             )
 
             # Calculate actual used requests from API's remaining fraction
@@ -860,19 +793,7 @@ class UsageManagerRecordingMixin:
                 for grouped_model in grouped_models:
                     if grouped_model != model:
                         other_model_data = key_data["models"].setdefault(
-                            grouped_model,
-                            {
-                                "window_start_ts": None,
-                                "quota_reset_ts": None,
-                                "success_count": 0,
-                                "failure_count": 0,
-                                "request_count": 0,
-                                "prompt_tokens": 0,
-                                "prompt_tokens_cached": 0,
-                                "completion_tokens": 0,
-                                "thinking_tokens": 0,
-                                "approx_cost": 0.0,
-                            },
+                            grouped_model, _new_model_data(),
                         )
                         # Sync request tracking (use synced_count to prevent reset bug)
                         other_model_data["request_count"] = synced_count

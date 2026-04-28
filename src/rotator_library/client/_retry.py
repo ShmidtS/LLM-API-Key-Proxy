@@ -55,6 +55,13 @@ from ..utils.model_utils import (
     normalize_model_string,
 )
 
+_COMPLETION_ONLY_PARAMS = (
+    "temperature", "max_tokens", "max_output_tokens",
+    "top_p", "frequency_penalty", "presence_penalty",
+    "stream", "stream_options", "n",
+    "reasoning_effort", "thinking",
+)
+
 
 class RetryMixin(RetryBaseMixin):
     """Mixin with retry logic methods for RotatingClient."""
@@ -112,10 +119,7 @@ class RetryMixin(RetryBaseMixin):
 
         # Strip completion-only params from embedding/media requests
         if is_non_completion:
-            for key in ("temperature", "max_tokens", "max_output_tokens",
-                        "top_p", "frequency_penalty", "presence_penalty",
-                        "stream", "stream_options", "n",
-                        "reasoning_effort", "thinking"):
+            for key in _COMPLETION_ONLY_PARAMS:
                 litellm_kwargs.pop(key, None)
             # NVIDIA rejects encoding_format=None — default to "float"
             if provider == "nvidia":
@@ -155,10 +159,7 @@ class RetryMixin(RetryBaseMixin):
         # Re-strip completion-only params after sanitization (sanitize may re-add max_tokens)
         # and add drop_params so litellm strips its own internally-injected params
         if is_non_completion:
-            for key in ("temperature", "max_tokens", "max_output_tokens",
-                        "top_p", "frequency_penalty", "presence_penalty",
-                        "stream", "stream_options", "n",
-                        "reasoning_effort", "thinking"):
+            for key in _COMPLETION_ONLY_PARAMS:
                 litellm_kwargs.pop(key, None)
             if provider == "nvidia":
                 if litellm_kwargs.get("encoding_format") is None:

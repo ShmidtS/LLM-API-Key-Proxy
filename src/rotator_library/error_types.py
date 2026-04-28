@@ -11,6 +11,18 @@ from .ip_throttle_detector import ThrottleAssessment
 class ClassifiedError:
     """A structured representation of a classified error."""
 
+    __slots__ = (
+        "error_type",
+        "original_exception",
+        "status_code",
+        "retry_after",
+        "quota_reset_timestamp",
+        "throttle_assessment",
+        "quota_value",
+        "quota_id",
+        "reason",
+    )
+
     def __init__(
         self,
         error_type: str,

@@ -192,6 +192,20 @@ _RETRYABLE_SAME_KEY_ERRORS = frozenset(
     }
 )
 
+# Pre-compiled patterns for validate_response_quality
+_WORD_SPLIT_RE = re.compile(r'[\s\\/"\']+')
+_CODE_FENCE_RE = re.compile(r'```[\s\S]*?```')
+_CODE_PATTERN_RES = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r'\bimport\s+\w+', r'\bfrom\s+\w+\s+import\b',
+    r'\bclass\s+\w+',
+    r'\bdef\s+\w+', r'\breturn\s+',
+))
+_PATH_PATTERN_RES = tuple(re.compile(p) for p in (
+    r'[A-Z]:\\[\w\s\\]+\.\w{2,4}',
+    r'/home/\w', r'/usr/\w', r'/var/\w', r'/tmp/\w',
+    r'C:\\Users\\',
+))
+
 
 def _detect_ip_throttle(
     error_body: Optional[str], provider: Optional[str] = None
@@ -1108,7 +1122,7 @@ def validate_response_quality(response, provider: str = "", model: str = ""):
     full_text = " ".join(text_parts)
 
     # === Heuristic 1: Word repetition ratio ===
-    words = re.split(r'[\s\\/"\']+', full_text)
+    words = _WORD_SPLIT_RE.split(full_text)
     words = [w for w in words if len(w) > 2]
     if len(words) >= 20:
         unique_words = set(w.lower() for w in words)
@@ -1124,13 +1138,8 @@ def validate_response_quality(response, provider: str = "", model: str = ""):
     # Only triggers for unusually high code-keyword density outside code fences.
     # Threshold is high (10) to avoid false positives on legitimate code-assistance responses.
     # Strip content inside markdown code fences before counting.
-    text_outside_fences = re.sub(r'```[\s\S]*?```', '', full_text)
-    code_patterns = [
-        r'\bimport\s+\w+', r'\bfrom\s+\w+\s+import\b',
-        r'\bclass\s+\w+',
-        r'\bdef\s+\w+', r'\breturn\s+',
-    ]
-    code_hits = sum(len(re.findall(p, text_outside_fences, re.IGNORECASE)) for p in code_patterns)
+    text_outside_fences = _CODE_FENCE_RE.sub('', full_text)
+    code_hits = sum(len(p.findall(text_outside_fences)) for p in _CODE_PATTERN_RES)
     if code_hits >= 10:
         raise GarbageResponseError(
             provider=provider, model=model,
@@ -1138,12 +1147,7 @@ def validate_response_quality(response, provider: str = "", model: str = ""):
         )
 
     # === Heuristic 3: File path leakage ===
-    path_patterns = [
-        r'[A-Z]:\\[\w\s\\]+\.\w{2,4}',
-        r'/home/\w', r'/usr/\w', r'/var/\w', r'/tmp/\w',
-        r'C:\\Users\\',
-    ]
-    path_hits = sum(len(re.findall(p, full_text)) for p in path_patterns)
+    path_hits = sum(len(p.findall(full_text)) for p in _PATH_PATTERN_RES)
     if path_hits >= 2:
         raise GarbageResponseError(
             provider=provider, model=model,
