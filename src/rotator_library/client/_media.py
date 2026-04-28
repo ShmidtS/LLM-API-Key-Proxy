@@ -7,6 +7,7 @@ import litellm
 from litellm.llms.openai.common_utils import OpenAIError
 
 from ..error_types import NoAvailableKeysError
+from ..config.defaults import MEDIA_GLOBAL_TIMEOUT
 from ..utils.model_utils import extract_provider_from_model, normalize_model_string
 
 lib_logger = logging.getLogger("rotator_library")
@@ -167,6 +168,7 @@ class MediaMixin:
                 self._native_image_generation,
                 request=request,
                 pre_request_callback=pre_request_callback,
+                _global_timeout=MEDIA_GLOBAL_TIMEOUT,
                 **kwargs,
             )
 
@@ -186,6 +188,7 @@ class MediaMixin:
                 litellm.aimage_generation,
                 request=request,
                 pre_request_callback=pre_request_callback,
+                _global_timeout=MEDIA_GLOBAL_TIMEOUT,
                 **kwargs,
             )
             if self._is_image_endpoint_mismatch_response(response):

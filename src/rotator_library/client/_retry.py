@@ -755,7 +755,8 @@ class RetryMixin(RetryBaseMixin):
             )
 
         parent_log_dir = kwargs.pop("_parent_log_dir", None)
-        deadline = time.monotonic() + self.global_timeout
+        _override_timeout = kwargs.pop("_global_timeout", None)
+        deadline = time.monotonic() + (_override_timeout or self.global_timeout)
 
         transaction_logger = None
         if self.enable_request_logging:

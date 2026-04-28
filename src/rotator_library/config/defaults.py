@@ -77,6 +77,11 @@ MAX_TOTAL_ATTEMPTS: int = env_int("MAX_TOTAL_ATTEMPTS", 10)
 # Override via environment variable: GLOBAL_TIMEOUT=<seconds>
 DEFAULT_GLOBAL_TIMEOUT: int = env_int("GLOBAL_TIMEOUT", 120)
 
+# Global timeout for media/image generation endpoints.
+# Media endpoints need more budget: provider polling, longer cooldowns from 429s.
+# Override via environment variable: MEDIA_GLOBAL_TIMEOUT=<seconds>
+MEDIA_GLOBAL_TIMEOUT: int = env_int("MEDIA_GLOBAL_TIMEOUT", 300)
+
 # =============================================================================
 # TIER & PRIORITY DEFAULTS
 # =============================================================================
