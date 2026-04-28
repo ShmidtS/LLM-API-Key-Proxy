@@ -30,6 +30,8 @@ FIREWORKS_UNSUPPORTED_PARAMS: Set[str] = {
     "reasoning_budget",
 }
 
+_GEMINI_THINKING_MODELS = frozenset({"gemini/gemini-2.5-pro", "gemini/gemini-2.5-flash"})
+
 
 def sanitize_request_payload(
     payload: Dict[str, Any],
@@ -54,7 +56,12 @@ def sanitize_request_payload(
         Tuple of (sanitized payload dictionary, should_reject flag).
         should_reject is True if the request should be rejected (input exceeds context window).
     """
-    normalized_model = model.strip().lower() if isinstance(model, str) else ""
+    if isinstance(model, str):
+        normalized_model = model
+        if model != model.strip().lower():
+            normalized_model = model.strip().lower()
+    else:
+        normalized_model = ""
 
     if "dimensions" in payload and not normalized_model.startswith(
         "openai/text-embedding-3"
@@ -62,7 +69,7 @@ def sanitize_request_payload(
         del payload["dimensions"]
 
     if payload.get("thinking") == {"type": "enabled", "budget_tokens": -1}:
-        if normalized_model not in ["gemini/gemini-2.5-pro", "gemini/gemini-2.5-flash"]:
+        if normalized_model not in _GEMINI_THINKING_MODELS:
             del payload["thinking"]
 
     # Kilocode provider - remove unsupported parameters for free models
@@ -84,7 +91,11 @@ def sanitize_request_payload(
 
     # Auto-adjust max_tokens to prevent context window overflow
     should_reject = False
-    if auto_adjust_max_tokens:
+    if auto_adjust_max_tokens and (
+        "max_tokens" in payload
+        or "max_completion_tokens" in payload
+        or "messages" in payload
+    ):
         payload, should_reject = adjust_max_tokens_in_payload(payload, model, registry)
 
     return payload, should_reject

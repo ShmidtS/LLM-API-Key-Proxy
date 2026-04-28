@@ -120,23 +120,13 @@ class RetryBaseMixin:
         - "continue": circuit breaker open, continue the outer while loop
         - "break": no credentials remaining, break the outer while loop
         """
-        creds_to_try = [c for c in credentials_for_provider if c not in tried_creds]
+        tried_creds_frozen = frozenset(tried_creds)
+        creds_to_try = [c for c in credentials_for_provider if c not in tried_creds_frozen]
         if not creds_to_try:
             return _KeySelectionResult(loop_action="break")
 
-        # Rate limiter backoff
-        rate_wait = await self._resilience.acquire_rate(provider)
-        if rate_wait > 0:
-            wait = min(rate_wait, 5.0)
-            lib_logger.debug(
-                "AdaptiveRateLimiter: %s rate-limited, waiting %1.1fs",
-                provider, wait,
-            )
-            if time.monotonic() + wait < deadline:
-                await asyncio.sleep(wait)
-
-        # Circuit breaker check -- back off briefly if OPEN, then retry
-        if not await self._resilience.can_attempt(provider):
+        can_attempt = await self._resilience.can_attempt(provider)
+        if not can_attempt:
             remaining = await self._resilience.get_cooldown_remaining(provider)
             backoff = min(remaining, 5.0)
             if not (suppress_cb_logging and _should_suppress_cb_open(provider)):
@@ -148,6 +138,17 @@ class RetryBaseMixin:
             if time.monotonic() + backoff < deadline:
                 await asyncio.sleep(backoff)
             return _KeySelectionResult(loop_action="continue")
+
+        # Rate limiter backoff
+        rate_wait = await self._resilience.acquire_rate(provider)
+        if rate_wait > 0:
+            wait = min(rate_wait, 5.0)
+            lib_logger.debug(
+                "AdaptiveRateLimiter: %s rate-limited, waiting %1.1fs",
+                provider, wait,
+            )
+            if time.monotonic() + wait < deadline:
+                await asyncio.sleep(wait)
 
         # can_attempt() succeeded -- we now hold a half-open slot
         try:
@@ -170,10 +171,11 @@ class RetryBaseMixin:
                 f",{','.join(exclusion_parts)}" if exclusion_parts else ""
             )
 
-            lib_logger.info(
-                "Acquiring credential for model %s. Tried: %s/%s(%s%s)",
-                model, len(tried_creds), available_count, total_count, exclusion_str,
-            )
+            if lib_logger.isEnabledFor(logging.INFO):
+                lib_logger.info(
+                    "Acquiring credential for model %s. Tried: %s/%s(%s%s)",
+                    model, len(tried_creds), available_count, total_count, exclusion_str,
+                )
             max_concurrent = self.max_concurrent_requests_per_key.get(provider, 1)
 
             current_cred = await self.usage_manager.acquire_key(

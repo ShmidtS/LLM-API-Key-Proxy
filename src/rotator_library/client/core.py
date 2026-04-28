@@ -72,6 +72,10 @@ _STREAM_REQUIRED_PROVIDERS = {
     "fireworks": 4096,
 }
 
+# Providers that don't support stream_options parameter
+# These providers return 400/406 errors when stream_options is sent
+_STREAM_OPTIONS_UNSUPPORTED_PROVIDERS = frozenset({"iflow", "kilocode"})
+
 from ..usage_manager import UsageManager
 from ..failure_logger import configure_failure_logger
 from litellm.llms.openai.common_utils import OpenAIError
@@ -316,10 +320,10 @@ class RotatingClient(
         register_model_patterns(self.whitelist_models)
         clear_model_match_cache()
         self.enable_request_logging = enable_request_logging
-        self.model_definitions = ModelDefinitions()
+        self._model_definitions = None  # lazy-init
 
-        # Initialize ModelRegistry for context window lookups (used by token calculator)
-        self._model_registry = get_model_info_service()
+        # Lazy-init ModelRegistry for context window lookups (used by token calculator)
+        self._model_registry = None
 
         # Store and validate max concurrent requests per key
         self.max_concurrent_requests_per_key = dict(
@@ -359,6 +363,22 @@ class RotatingClient(
         self._global_semaphore = asyncio.Semaphore(_max_concurrent)
 
     # --- Core methods that remain in this module ---
+
+    @property
+    def model_definitions(self):
+        if self._model_definitions is None:
+            self._model_definitions = ModelDefinitions()
+        return self._model_definitions
+
+    @property
+    def _model_registry(self):
+        if self._lazy_model_registry is None:
+            self._lazy_model_registry = get_model_info_service()
+        return self._lazy_model_registry
+
+    @_model_registry.setter
+    def _model_registry(self, value):
+        self._lazy_model_registry = value
 
     async def _prepare_request_kwargs(
         self,
@@ -521,10 +541,6 @@ class RotatingClient(
         Returns:
             The completion response object, or an async generator for streaming responses, or None if all retries fail.
         """
-        # Providers that don't support stream_options parameter
-        # These providers return 400/406 errors when stream_options is sent
-        STREAM_OPTIONS_UNSUPPORTED_PROVIDERS = {"iflow", "kilocode"}
-
         model = normalize_model_string(kwargs.get("model", ""))
         kwargs["model"] = model
         provider = extract_provider_from_model(model)
@@ -549,7 +565,7 @@ class RotatingClient(
 
         # Remove stream_options for providers that don't support it
         if (
-            provider in STREAM_OPTIONS_UNSUPPORTED_PROVIDERS
+            provider in _STREAM_OPTIONS_UNSUPPORTED_PROVIDERS
             and "stream_options" in kwargs
         ):
             lib_logger.debug(
@@ -575,7 +591,7 @@ class RotatingClient(
 
         if kwargs.get("stream"):
             # Only add stream_options for providers that support it
-            if provider not in STREAM_OPTIONS_UNSUPPORTED_PROVIDERS:
+            if provider not in _STREAM_OPTIONS_UNSUPPORTED_PROVIDERS:
                 if not isinstance(kwargs.get("stream_options"), dict):
                     kwargs["stream_options"] = {}
                 if "include_usage" not in kwargs["stream_options"]:

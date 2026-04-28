@@ -165,20 +165,22 @@ class RetryMixin(RetryBaseMixin):
                     litellm_kwargs["encoding_format"] = "float"
             litellm_kwargs.setdefault("drop_params", True)
 
+        model_suffix = model.split("/", 1)[1] if provider in ("qwen_code", "nvidia", "fireworks") else None
+
         if provider == "qwen_code":
             litellm_kwargs["custom_llm_provider"] = "qwen"
-            litellm_kwargs["model"] = model.split("/", 1)[1]
+            litellm_kwargs["model"] = model_suffix
 
         if provider == "nvidia":
             litellm_kwargs["custom_llm_provider"] = "nvidia_nim"
-            litellm_kwargs["model"] = model.split("/", 1)[1]
+            litellm_kwargs["model"] = model_suffix
 
         if provider == "inception":
             litellm_kwargs["model"] = model.rsplit("/", 1)[1]
 
         if provider == "fireworks":
             litellm_kwargs["custom_llm_provider"] = "fireworks_ai"
-            litellm_kwargs["model"] = f"fireworks_ai/{model.split('/', 1)[1]}"
+            litellm_kwargs["model"] = f"fireworks_ai/{model_suffix}"
 
     async def _invoke_pre_request_callback(self, pre_request_callback, request, litellm_kwargs, provider: str):
         """Invoke pre_request_callback with abort_on_callback_error handling."""
@@ -204,7 +206,7 @@ class RetryMixin(RetryBaseMixin):
     ):
         """Classify error, extract message, and log failure. Returns (ClassifiedError, str)."""
         classified = classify_error(e, provider=provider)
-        error_message = str(e).split("\n")[0]
+        error_message = str(e).partition("\n")[0]
         log_failure(
             api_key=current_cred, model=model,
             attempt=attempt, error=e,
@@ -406,7 +408,7 @@ class RetryMixin(RetryBaseMixin):
         """
         original_exc = getattr(e, "data", e)
         classified_error = classify_error(original_exc, provider=provider)
-        error_message = str(original_exc).split("\n")[0]
+        error_message = str(original_exc).partition("\n")[0]
 
         self._reset_cache_on_auth_error(
             classified_error, original_exc,
@@ -818,11 +820,15 @@ class RetryMixin(RetryBaseMixin):
         credential_priorities = rc.credential_priorities
         credential_tier_names = rc.credential_tier_names
         error_accumulator = rc.error_accumulator
+        max_retries = self.max_retries
+        global_semaphore = self._global_semaphore
+        _cached_request_headers = self._build_request_headers(request)
         total_api_attempts = 0
+        remaining_budget = deadline - time.monotonic()
 
-        while (
-            len(tried_creds) < len(credentials_for_provider) and time.monotonic() < deadline
-        ):
+        while len(tried_creds) < len(credentials_for_provider) and remaining_budget > 0:
+            now = time.monotonic()
+            remaining_budget = deadline - now
             current_cred = None
             key_acquired = False
             _cb_slot_held = False
@@ -855,7 +861,7 @@ class RetryMixin(RetryBaseMixin):
                     )
 
                     # Retry loop for custom providers - mirrors streaming path error handling
-                    for attempt in range(self.max_retries):
+                    for attempt in range(max_retries):
                         total_api_attempts += 1
                         if total_api_attempts > MAX_TOTAL_ATTEMPTS:
                             lib_logger.warning(
@@ -866,10 +872,11 @@ class RetryMixin(RetryBaseMixin):
                                 f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
                             )
                         try:
-                            lib_logger.info(
-                                "Attempting call with credential %s (Attempt %s/%s)",
-                                mask_credential(current_cred), attempt + 1, self.max_retries,
-                            )
+                            if lib_logger.isEnabledFor(logging.DEBUG):
+                                lib_logger.debug(
+                                    "Attempting call with credential %s (Attempt %s/%s)",
+                                    mask_credential(current_cred), attempt + 1, max_retries,
+                                )
 
                             if pre_request_callback:
                                 await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
@@ -877,7 +884,7 @@ class RetryMixin(RetryBaseMixin):
                             http_client = await self._get_http_client_async(
                                 streaming=False
                             )
-                            async with self._global_semaphore:
+                            async with global_semaphore:
                                 response = await provider_plugin.acompletion(
                                     http_client, **litellm_kwargs
                                 )
@@ -897,7 +904,7 @@ class RetryMixin(RetryBaseMixin):
                             dec = await self._handle_rate_limit_error(
                                 e, provider, current_cred, model,
                                 error_accumulator,
-                                self._build_request_headers(request),
+                                _cached_request_headers,
                                 attempt=attempt,
                             )
                             if dec.action == "fail":
@@ -916,7 +923,7 @@ class RetryMixin(RetryBaseMixin):
                             dec = await self._handle_server_error(
                                 e, provider, current_cred, model,
                                 attempt, deadline,
-                                self._build_request_headers(request),
+                                _cached_request_headers,
                                 error_accumulator,
                             )
                             if dec.action == "retry_same_key":
@@ -960,7 +967,7 @@ class RetryMixin(RetryBaseMixin):
                         api_call=api_call,
                     )
 
-                    for attempt in range(self.max_retries):
+                    for attempt in range(max_retries):
                         total_api_attempts += 1
                         if total_api_attempts > MAX_TOTAL_ATTEMPTS:
                             lib_logger.warning(
@@ -974,10 +981,11 @@ class RetryMixin(RetryBaseMixin):
                         # This replaces redundant per-error-handler calls below
                         await self._get_http_client_async(streaming=False)
                         try:
-                            lib_logger.info(
-                                "Attempting call with credential %s (Attempt %s/%s)",
-                                mask_credential(current_cred), attempt + 1, self.max_retries,
-                            )
+                            if lib_logger.isEnabledFor(logging.DEBUG):
+                                lib_logger.debug(
+                                    "Attempting call with credential %s (Attempt %s/%s)",
+                                    mask_credential(current_cred), attempt + 1, max_retries,
+                                )
 
                             if pre_request_callback:
                                 await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
@@ -989,7 +997,7 @@ class RetryMixin(RetryBaseMixin):
                                     **litellm_kwargs
                                 )
 
-                            async with self._global_semaphore:
+                            async with global_semaphore:
                                 response = await api_call(
                                     **final_kwargs,
                                     logger_fn=self._litellm_logger_callback,
@@ -1007,7 +1015,7 @@ class RetryMixin(RetryBaseMixin):
                             dec = await self._handle_rate_limit_error(
                                 e, provider, current_cred, model,
                                 error_accumulator,
-                                self._build_request_headers(request),
+                                _cached_request_headers,
                                 attempt=attempt,
                             )
                             if dec.action == "fail":
@@ -1026,7 +1034,7 @@ class RetryMixin(RetryBaseMixin):
                             dec = await self._handle_server_error(
                                 e, provider, current_cred, model,
                                 attempt, deadline,
-                                self._build_request_headers(request),
+                                _cached_request_headers,
                                 error_accumulator,
                                 reset_quota=True,
                             )
@@ -1041,7 +1049,7 @@ class RetryMixin(RetryBaseMixin):
                             dec = await self._handle_rate_limit_error(
                                 e, provider, current_cred, model,
                                 error_accumulator,
-                                self._build_request_headers(request),
+                                _cached_request_headers,
                                 attempt=attempt,
                                 deadline=deadline,
                             )
@@ -1087,7 +1095,7 @@ class RetryMixin(RetryBaseMixin):
                             dec = await self._handle_generic_error(
                                 e, provider, current_cred, model,
                                 error_accumulator,
-                                self._build_request_headers(request),
+                                _cached_request_headers,
                                 request=request,
                             )
                             if dec.action == "fail":
@@ -1101,8 +1109,7 @@ class RetryMixin(RetryBaseMixin):
                 await self._release_cred(current_cred, model, key_acquired, provider, _cb_slot_held)
 
         # Check if we exhausted all credentials or timed out
-        if time.monotonic() >= deadline:
-            error_accumulator.timeout_occurred = True
+        error_accumulator.timeout_occurred = time.monotonic() >= deadline
 
         if error_accumulator.has_errors():
             # Log concise summary for server logs
@@ -1144,15 +1151,35 @@ class RetryMixin(RetryBaseMixin):
 
         # Cache request headers once to avoid repeated dict() conversion in error handlers
         _cached_request_headers = dict(request.headers) if request else {}
+        max_retries = self.max_retries
+        global_semaphore = self._global_semaphore
+        provider_params = self.litellm_provider_params.get(provider)
+        has_provider_params = provider in self.litellm_provider_params
+
+        shared_litellm_kwargs = kwargs.copy()
+        shared_litellm_kwargs["num_retries"] = 0
+
+        # [FIX] Remove client-provided headers/api_key that could override provider credentials
+        self._strip_client_headers(shared_litellm_kwargs)
+
+        if "reasoning_effort" in kwargs:
+            shared_litellm_kwargs["reasoning_effort"] = kwargs["reasoning_effort"]
+
+        # [NEW] Merge provider-specific params
+        if has_provider_params:
+            shared_litellm_kwargs["litellm_params"] = {
+                **provider_params,
+                **shared_litellm_kwargs.get("litellm_params", {}),
+            }
 
         consecutive_quota_failures: dict[str, int] = {}
         total_api_attempts = 0
+        remaining_budget = deadline - time.monotonic()
 
         try:
-            while (
-                len(tried_creds) < len(credentials_for_provider)
-                and time.monotonic() < deadline
-            ):
+            while len(tried_creds) < len(credentials_for_provider) and remaining_budget > 0:
+                now = time.monotonic()
+                remaining_budget = deadline - now
                 current_cred = None
                 key_acquired = False
                 _cb_slot_held = False
@@ -1175,21 +1202,9 @@ class RetryMixin(RetryBaseMixin):
                     _cb_slot_held = sel.cb_slot_held
                     key_acquired = True
 
-                    litellm_kwargs = kwargs.copy()
-                    litellm_kwargs["num_retries"] = 0
-
-                    # [FIX] Remove client-provided headers/api_key that could override provider credentials
-                    self._strip_client_headers(litellm_kwargs)
-
-                    if "reasoning_effort" in kwargs:
-                        litellm_kwargs["reasoning_effort"] = kwargs["reasoning_effort"]
-
-                    # [NEW] Merge provider-specific params
-                    if provider in self.litellm_provider_params:
-                        litellm_kwargs["litellm_params"] = {
-                            **self.litellm_provider_params[provider],
-                            **litellm_kwargs.get("litellm_params", {}),
-                        }
+                    litellm_kwargs = shared_litellm_kwargs.copy()
+                    if has_provider_params:
+                        litellm_kwargs["litellm_params"] = litellm_kwargs["litellm_params"].copy()
 
                     # Model ID is already resolved before the loop, and kwargs['model'] is updated.
                     # No further resolution needed here.
@@ -1218,7 +1233,7 @@ class RetryMixin(RetryBaseMixin):
                             else None
                         )
 
-                        for attempt in range(self.max_retries):
+                        for attempt in range(max_retries):
                             total_api_attempts += 1
                             if total_api_attempts > MAX_TOTAL_ATTEMPTS:
                                 lib_logger.warning(
@@ -1229,10 +1244,11 @@ class RetryMixin(RetryBaseMixin):
                                     f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
                                 )
                             try:
-                                lib_logger.info(
-                                    "Attempting stream with credential %s (Attempt %s/%s)",
-                                    mask_credential(current_cred), attempt + 1, self.max_retries,
-                                )
+                                if lib_logger.isEnabledFor(logging.DEBUG):
+                                    lib_logger.debug(
+                                        "Attempting stream with credential %s (Attempt %s/%s)",
+                                        mask_credential(current_cred), attempt + 1, max_retries,
+                                    )
 
                                 if pre_request_callback:
                                     await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
@@ -1240,15 +1256,16 @@ class RetryMixin(RetryBaseMixin):
                                 http_client = await self._get_http_client_async(
                                     streaming=True
                                 )
-                                async with self._global_semaphore:
+                                async with global_semaphore:
                                     response = await provider_plugin.acompletion(
                                         http_client, **litellm_kwargs
                                     )
 
-                                    lib_logger.info(
-                                        "Stream connection established for credential %s. Processing response.",
-                                        mask_credential(current_cred),
-                                    )
+                                    if lib_logger.isEnabledFor(logging.INFO):
+                                        lib_logger.info(
+                                            "Stream connection established for credential %s. Processing response.",
+                                            mask_credential(current_cred),
+                                        )
 
                                     stream_generator = self._safe_streaming_wrapper(
                                         response,
@@ -1381,7 +1398,7 @@ class RetryMixin(RetryBaseMixin):
                         api_call=litellm.acompletion,
                     )
 
-                    for attempt in range(self.max_retries):
+                    for attempt in range(max_retries):
                         total_api_attempts += 1
                         if total_api_attempts > MAX_TOTAL_ATTEMPTS:
                             lib_logger.warning(
@@ -1395,10 +1412,11 @@ class RetryMixin(RetryBaseMixin):
                         # This replaces redundant per-error-handler calls below
                         await self._get_http_client_async(streaming=True)
                         try:
-                            lib_logger.info(
-                                "Attempting stream with credential %s (Attempt %d/%d)",
-                                mask_credential(current_cred), attempt + 1, self.max_retries,
-                            )
+                            if lib_logger.isEnabledFor(logging.DEBUG):
+                                lib_logger.debug(
+                                    "Attempting stream with credential %s (Attempt %d/%d)",
+                                    mask_credential(current_cred), attempt + 1, max_retries,
+                                )
 
                             if pre_request_callback:
                                 await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
@@ -1410,7 +1428,7 @@ class RetryMixin(RetryBaseMixin):
                                     **litellm_kwargs
                                 )
 
-                            async with self._global_semaphore:
+                            async with global_semaphore:
                                 response = await litellm.acompletion(
                                     **final_kwargs,
                                     logger_fn=self._litellm_logger_callback,
@@ -1426,10 +1444,11 @@ class RetryMixin(RetryBaseMixin):
                                     )
                                     continue
 
-                                lib_logger.info(
-                                    "Stream connection established for credential %s. Processing response.",
-                                    mask_credential(current_cred),
-                                )
+                                if lib_logger.isEnabledFor(logging.INFO):
+                                    lib_logger.info(
+                                        "Stream connection established for credential %s. Processing response.",
+                                        mask_credential(current_cred),
+                                    )
 
                                 stream_generator = self._safe_streaming_wrapper(
                                     response,
@@ -1528,14 +1547,14 @@ class RetryMixin(RetryBaseMixin):
                                 model=model,
                                 attempt=attempt + 1,
                                 error=e,
-                                request_headers=self._build_request_headers(request),
+                                request_headers=_cached_request_headers,
                                 raw_response_text=cleaned_str,
                             )
 
                             error_details = error_payload.get("error", {})
                             error_status = error_details.get("status", "")
                             error_message_text = error_details.get(
-                                "message", str(original_exc).split("\n")[0]
+                                "message", str(original_exc).partition("\n")[0]
                             )
 
                             # Record in accumulator for client reporting
@@ -1590,19 +1609,18 @@ class RetryMixin(RetryBaseMixin):
                                 # For transient server errors (mid-stream), retry same key with backoff before rotating
                                 if (
                                     should_retry_same_key(classified_error)
-                                    and attempt < self.max_retries - 1
+                                    and attempt < max_retries - 1
                                 ):
                                     backoff = get_retry_backoff(
                                         classified_error, attempt, provider
                                     )
-                                    remaining_budget = deadline - time.monotonic()
                                     if backoff <= remaining_budget:
                                         lib_logger.warning(
                                             "Mid-stream %s for %s "
                                             "(attempt %s/%s). Retrying same key in %2.2fs.",
                                             classified_error.error_type,
                                             mask_credential(current_cred),
-                                            attempt + 1, self.max_retries, backoff,
+                                            attempt + 1, max_retries, backoff,
                                         )
                                         await asyncio.sleep(backoff)
                                         # HTTP client pool refreshed at start of next attempt
@@ -1635,7 +1653,7 @@ class RetryMixin(RetryBaseMixin):
                             dec = await self._handle_server_error(
                                 e, provider, current_cred, model,
                                 attempt, deadline,
-                                self._build_request_headers(request),
+                                _cached_request_headers,
                                 error_accumulator,
                             )
                             if dec.action == "retry_same_key":
@@ -1655,7 +1673,7 @@ class RetryMixin(RetryBaseMixin):
                             dec = await self._handle_transport_error(
                                 e, provider, current_cred, model,
                                 attempt, deadline,
-                                self._build_request_headers(request),
+                                _cached_request_headers,
                                 error_accumulator,
                             )
                             if dec.action == "retry_same_key":
@@ -1674,7 +1692,7 @@ class RetryMixin(RetryBaseMixin):
                             dec = await self._handle_generic_error(
                                 e, provider, current_cred, model,
                                 error_accumulator,
-                                self._build_request_headers(request),
+                                _cached_request_headers,
                                 request=request,
                             )
                             if dec.action == "fail":

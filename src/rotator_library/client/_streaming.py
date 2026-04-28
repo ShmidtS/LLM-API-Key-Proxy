@@ -56,16 +56,21 @@ class StreamingMixin:
         has_tool_calls = False  # Track if ANY tool calls were seen in stream
         chunk_index = 0  # Track chunk count for better error logging
         has_usage_data = False  # Track if we ever saw usage data
+        disconnect_check_countdown = 0
+        _chunk_is_pydantic = None
 
         try:
             while True:
                 # Check disconnection every 200 chunks to avoid per-chunk syscall overhead
-                if chunk_index % 200 == 0 and request and await request.is_disconnected():
-                    lib_logger.info(
-                        "Client disconnected. Aborting stream for credential %s.",
-                        mask_credential(key),
-                    )
-                    break
+                if disconnect_check_countdown <= 0:
+                    if request and await request.is_disconnected():
+                        lib_logger.info(
+                            "Client disconnected. Aborting stream for credential %s.",
+                            mask_credential(key),
+                        )
+                        break
+                    disconnect_check_countdown = 200
+                disconnect_check_countdown -= 1
 
                 try:
                     chunk = await stream_iterator.__anext__()
@@ -74,7 +79,9 @@ class StreamingMixin:
                     # Convert chunk to dict, handling both litellm.ModelResponse and raw dicts
                     # Per-chunk error isolation: malformed chunks are skipped, not fatal
                     try:
-                        if hasattr(chunk, "model_dump"):
+                        if _chunk_is_pydantic is None:
+                            _chunk_is_pydantic = hasattr(chunk, "model_dump")
+                        if _chunk_is_pydantic:
                             chunk_dict = chunk.model_dump()
                         else:
                             chunk_dict = chunk
@@ -85,13 +92,22 @@ class StreamingMixin:
                         )
                         continue
 
+                    if not isinstance(chunk_dict, dict):
+                        yield chunk_dict
+                        continue
+                    choices = chunk_dict.get("choices")
+                    usage = chunk_dict.get("usage")
+                    if choices is None and usage is None:
+                        yield chunk_dict
+                        continue
+
                     # === FINISH_REASON LOGIC ===
                     # Providers send raw chunks without finish_reason logic.
                     # This wrapper determines finish_reason based on accumulated state.
-                    if "choices" in chunk_dict and chunk_dict["choices"]:
-                        choice = chunk_dict["choices"][0]
+                    if choices:
+                        choice = choices[0]
                         delta = choice.get("delta", {})
-                        usage = chunk_dict.get("usage", {})
+                        tool_calls = delta.get("tool_calls")
 
                         # Check if we have usage data
                         if (
@@ -102,7 +118,7 @@ class StreamingMixin:
                             has_usage_data = True
 
                         # Track tool_calls across ALL chunks - if we ever see one, finish_reason must be tool_calls
-                        if delta.get("tool_calls"):
+                        if tool_calls:
                             has_tool_calls = True
                             accumulated_finish_reason = "tool_calls"
 
@@ -147,7 +163,7 @@ class StreamingMixin:
                             choice["finish_reason"] = accumulated_finish_reason
 
                         # Handle tool_calls in delta for proper finish_reason
-                        if delta.get("tool_calls"):
+                        if tool_calls:
                             has_tool_calls = True
                             accumulated_finish_reason = "tool_calls"
 

@@ -69,23 +69,35 @@ class UsageManagerCycleMixin:
         Returns:
             Cycle data dict or None if not exists
         """
-        return (
-            self._cycle_exhausted.get(provider, {}).get(tier_key, {}).get(tracking_key)
-        )
+        provider_dict = self._cycle_exhausted.get(provider)
+        if provider_dict is None:
+            return None
+        tier_dict = provider_dict.get(tier_key)
+        if tier_dict is None:
+            return None
+        return tier_dict.get(tracking_key)
 
     def _ensure_cycle_structure(
         self, provider: str, tier_key: str, tracking_key: str
     ) -> Dict[str, Any]:
         """
         Ensure the nested cycle structure exists and return the cycle data dict.
-        Uses setdefault for atomic check-and-create (avoids check-then-act race).
         """
-        provider_dict = self._cycle_exhausted.setdefault(provider, {})
-        tier_dict = provider_dict.setdefault(tier_key, {})
-        cycle = tier_dict.setdefault(tracking_key, {
-            "cycle_started_at": None,
-            "exhausted": set(),
-        })
+        provider_dict = self._cycle_exhausted.get(provider)
+        if provider_dict is None:
+            provider_dict = {}
+            self._cycle_exhausted[provider] = provider_dict
+        tier_dict = provider_dict.get(tier_key)
+        if tier_dict is None:
+            tier_dict = {}
+            provider_dict[tier_key] = tier_dict
+        cycle = tier_dict.get(tracking_key)
+        if cycle is None:
+            cycle = {
+                "cycle_started_at": None,
+                "exhausted": set(),
+            }
+            tier_dict[tracking_key] = cycle
         return cycle
 
     def _mark_credential_exhausted(
@@ -173,19 +185,17 @@ class UsageManagerCycleMixin:
         cycle_data = self._get_cycle_data(provider, tier_key, tracking_key)
         if cycle_data is None:
             return False
+        exhausted = cycle_data.get("exhausted", set())
 
         # If available credentials are provided, reset when none remain usable
         if available_not_on_cooldown is not None:
             has_available = any(
-                not self._is_credential_exhausted_in_cycle(
-                    cred, provider, tier_key, tracking_key
-                )
+                cred not in exhausted
                 for cred in available_not_on_cooldown
             )
             if not has_available and len(all_credentials_in_tier) > 0:
                 return True
 
-        exhausted = cycle_data.get("exhausted", set())
         # All must be exhausted (and there must be at least one credential)
         return (
             len(exhausted) >= len(all_credentials_in_tier)
@@ -258,13 +268,11 @@ class UsageManagerCycleMixin:
         Returns:
             Number of candidates excluded by fair cycle
         """
-        count = 0
-        for cred in candidates:
-            if self._is_credential_exhausted_in_cycle(
-                cred, provider, tier_key, tracking_key
-            ):
-                count += 1
-        return count
+        cycle_data = self._get_cycle_data(provider, tier_key, tracking_key)
+        if cycle_data is None:
+            return 0
+        exhausted = cycle_data.get("exhausted", set())
+        return sum(1 for cred in candidates if cred in exhausted)
 
     def _get_priority_multiplier(
         self, provider: str, priority: int, rotation_mode: str
@@ -307,4 +315,3 @@ class UsageManagerCycleMixin:
 
         # 4. Global default
         return 1
-

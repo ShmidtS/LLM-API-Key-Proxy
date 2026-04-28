@@ -123,6 +123,13 @@ class LightweightQuotaMixin:
 
             response.raise_for_status()
 
+            body = response.text
+            if not body or not body.strip():
+                lib_logger.debug(
+                    f"{provider} quota API returned empty response (status {response.status_code})"
+                )
+                return None
+
             try:
                 return response.json()
             except (json.JSONDecodeError, ValueError) as exc:
@@ -224,7 +231,7 @@ class LightweightQuotaMixin:
 
                     elif usage_data.get("status") == "transient_error" or usage_data.get("remaining_fraction") is None:
                         counters["transient"] += 1
-                        lib_logger.warning(
+                        lib_logger.debug(
                             f"Transient error refreshing {self.provider_name} quota for credential ...{api_key[-4:]} "
                             f"(error: {usage_data.get('error')}), preserving previous baseline"
                         )

@@ -122,6 +122,76 @@ PROXY_PROVIDERS = (
     else _PROXY_PROVIDERS_DEFAULT
 )
 
+_RETRY_AFTER_BODY_PATTERNS = (
+    re.compile(r"quota will reset after\s*([\dhmso.]+)", re.IGNORECASE),
+    re.compile(r"reset after\s*([\dhmso.]+)", re.IGNORECASE),
+    re.compile(r"retry after\s*([\dhmso.]+)", re.IGNORECASE),
+    re.compile(r"try again in\s*(\d+)\s*seconds?", re.IGNORECASE),
+)
+
+_CONTEXT_WINDOW_ERROR_PATTERNS = (
+    "context_length",
+    "max_tokens",
+    "token limit",
+    "context window",
+    "too many tokens",
+    "too long",
+)
+
+_POLICY_ERROR_PATTERNS = (
+    "policy",
+    "safety",
+    "content blocked",
+    "prompt blocked",
+)
+
+_UPSTREAM_ERROR_PATTERNS = (
+    "provider returned error",
+    "upstream error",
+    "upstream temporarily unavailable",
+    "upstream service unavailable",
+)
+
+_ACCOUNT_BILLING_ERROR_PATTERNS = (
+    "arrearage",
+    "overdue payment",
+    "account in good standing",
+    "insufficient balance",
+    "please recharge",
+    "out of credit",
+    "payment required",
+    "add credits to continue",
+    "credits required",
+    "usage_limit_exceeded",
+)
+
+_LITELLM_API_CREDIT_PATTERNS = (
+    "add credits to continue",
+    "credits required",
+    "usage_limit_exceeded",
+    "insufficient balance",
+    "out of credit",
+    "payment required",
+    "quota",
+)
+
+_NON_ROTATABLE_ERRORS = frozenset(
+    {
+        "invalid_request",
+        "context_window_exceeded",
+        "pre_request_callback_error",
+        "ip_rate_limit",
+    }
+)
+
+_RETRYABLE_SAME_KEY_ERRORS = frozenset(
+    {
+        "server_error",
+        "api_connection",
+        "ip_rate_limit",
+    }
+)
+
 
 def _detect_ip_throttle(
     error_body: Optional[str], provider: Optional[str] = None
@@ -206,16 +276,8 @@ def extract_retry_after_from_body(error_body: Optional[str]) -> Optional[int]:
     if not error_body:
         return None
 
-    # Pattern to match various "reset after" formats - capture the full duration string
-    patterns = [
-        r"quota will reset after\s*([\dhmso.]+)",  # Matches compound: 156h14m36s or 120s
-        r"reset after\s*([\dhmso.]+)",
-        r"retry after\s*([\dhmso.]+)",
-        r"try again in\s*(\d+)\s*seconds?",
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, error_body, re.IGNORECASE)
+    for pattern in _RETRY_AFTER_BODY_PATTERNS:
+        match = pattern.search(error_body)
         if match:
             duration_str = match.group(1)
             result = parse_duration(duration_str)
@@ -228,7 +290,7 @@ def extract_retry_after_from_body(error_body: Optional[str]) -> Optional[int]:
 
 
 # Pre-compiled retry-after patterns for get_retry_after() (module-level, not per-call)
-_RETRY_AFTER_PATTERNS = [
+_RETRY_AFTER_PATTERNS = (
     re.compile(r"retry[-_\s]after:?\s*(\d+)"),
     re.compile(r"retry in\s*(\d+)\s*seconds?"),
     re.compile(r"wait for\s*(\d+)\s*seconds?"),
@@ -237,7 +299,7 @@ _RETRY_AFTER_PATTERNS = [
     re.compile(r"quota will reset after\s*([\dhms.]+)"),
     re.compile(r"reset after\s*([\dhms.]+)"),
     re.compile(r'"quotaresetdelay":\s*"([\dhms.]+)"'),
-]
+)
 
 
 def _classify_rate_limit(
@@ -313,7 +375,10 @@ def _extract_retry_from_json_body(json_text: str) -> Optional[int]:
             return None
 
         error_json = json_loads(json_str)
-        details = error_json.get("error", {}).get("details", [])
+        error_obj = error_json.get("error")
+        if not isinstance(error_obj, dict):
+            return None
+        details = error_obj.get("details", [])
 
         # Iterate through ALL details items (not just index 0)
         for detail in details:
@@ -374,7 +439,10 @@ def _extract_quota_details(json_text: str) -> Tuple[Optional[str], Optional[str]
             return None, None
 
         error_json = json_loads(json_str)
-        details = error_json.get("error", {}).get("details", [])
+        error_obj = error_json.get("error")
+        if not isinstance(error_obj, dict):
+            return None, None
+        details = error_obj.get("details", [])
 
         for detail in details:
             violations = detail.get("violations", [])
@@ -448,7 +516,7 @@ def get_retry_after(error: Exception) -> Optional[int]:
     error_str_lower = error_str.lower()
 
     for pattern in _RETRY_AFTER_PATTERNS:
-        match = re.search(pattern, error_str_lower)
+        match = pattern.search(error_str_lower)
         if match:
             duration_str = match.group(1)
             # Try parsing as compound duration first
@@ -568,6 +636,9 @@ PROVIDER_BACKOFF_CONFIGS: Dict[str, Dict[str, float]] = {
     },
 }
 
+_BACKOFF_CONFIG_CACHE: dict[str, dict] = {}
+_BACKOFF_ENV_CACHE: dict[str, Tuple[Optional[str], Optional[str]]] = {}
+
 
 def _get_provider_backoff_config(provider: Optional[str]) -> Dict[str, float]:
     """
@@ -583,34 +654,58 @@ def _get_provider_backoff_config(provider: Optional[str]) -> Dict[str, float]:
     if not provider:
         return {}
 
+    env_values: Tuple[Optional[str], Optional[str]]
+    if provider == "kilocode":
+        env_values = (
+            os.environ.get("KILOCODE_BACKOFF_BASE"),
+            os.environ.get("KILOCODE_MAX_BACKOFF"),
+        )
+    elif provider == 'inception':
+        env_values = (
+            os.environ.get('INCEPTION_BACKOFF_BASE'),
+            os.environ.get('INCEPTION_MAX_BACKOFF'),
+        )
+    else:
+        env_values = (None, None)
+
+    cached = _BACKOFF_CONFIG_CACHE.get(provider)
+    if cached is not None and _BACKOFF_ENV_CACHE.get(provider) == env_values:
+        return cached
+
     config = PROVIDER_BACKOFF_CONFIGS.get(provider, {}).copy()
 
     # Env var overrides for kilocode
     if provider == "kilocode":
-        if "KILOCODE_BACKOFF_BASE" in os.environ:
+        backoff_base = env_values[0]
+        max_backoff = env_values[1]
+        if backoff_base is not None:
             try:
-                config["server_error_base"] = float(os.environ["KILOCODE_BACKOFF_BASE"])
+                config["server_error_base"] = float(backoff_base)
             except ValueError:
                 lib_logger.debug("Invalid KILOCODE_BACKOFF_BASE value")
-        if "KILOCODE_MAX_BACKOFF" in os.environ:
+        if max_backoff is not None:
             try:
-                config["max_backoff"] = float(os.environ["KILOCODE_MAX_BACKOFF"])
+                config["max_backoff"] = float(max_backoff)
             except ValueError:
                 lib_logger.debug("Invalid KILOCODE_MAX_BACKOFF value")
 
     # Env var overrides for inception
     if provider == 'inception':
-        if 'INCEPTION_BACKOFF_BASE' in os.environ:
+        backoff_base = env_values[0]
+        max_backoff = env_values[1]
+        if backoff_base is not None:
             try:
-                config['server_error_base'] = float(os.environ['INCEPTION_BACKOFF_BASE'])
+                config['server_error_base'] = float(backoff_base)
             except ValueError:
                 lib_logger.debug("Invalid INCEPTION_BACKOFF_BASE value")
-        if 'INCEPTION_MAX_BACKOFF' in os.environ:
+        if max_backoff is not None:
             try:
-                config['max_backoff'] = float(os.environ['INCEPTION_MAX_BACKOFF'])
+                config['max_backoff'] = float(max_backoff)
             except ValueError:
                 lib_logger.debug("Invalid INCEPTION_MAX_BACKOFF value")
 
+    _BACKOFF_CONFIG_CACHE[provider] = config
+    _BACKOFF_ENV_CACHE[provider] = env_values
     return config
 
 
@@ -1101,6 +1196,9 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
     Returns:
         ClassifiedError with error_type, status_code, retry_after, etc.
     """
+    error_str = str(e)
+    error_str_lower = error_str.lower()
+
     # Determine HTTP status early so we can avoid misclassifying a genuine 400
     # (body may contain quota-sounding keywords) as quota_exceeded. The provider
     # quota parser is only meaningful for 429 or when status is unknown.
@@ -1125,8 +1223,8 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
             )
             return classify_stream_error(e)
         # Also check for nested error dict
-        if "error" in e and isinstance(e.get("error"), dict):
-            error_obj = e.get("error", {})
+        error_obj = e.get("error")
+        if isinstance(error_obj, dict):
             if is_provider_abort(error_obj):
                 return classify_stream_error(error_obj)
 
@@ -1138,10 +1236,11 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
 
         # Try to get error body for better classification
         try:
-            error_body = e.response.text.lower() if hasattr(e.response, "text") else ""
+            response_text_raw = e.response.text if hasattr(e.response, "text") else ""
         except (AttributeError, OSError):
             lib_logger.debug("Could not read httpx error response body", exc_info=True)
-            error_body = ""
+            response_text_raw = ""
+        error_body_lower = response_text_raw.lower()
 
         if status_code == 401:
             return ClassifiedError(
@@ -1151,9 +1250,8 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
             )
         if status_code == 403:
             # Check for Cloudflare Edge IP Restricted (non-retryable provider issue)
-            body_lower = error_body.lower()
-            if "edge_ip_restricted" in body_lower or "error 1034" in body_lower or (
-                "cloudflare" in body_lower and "owner_action_required" in body_lower
+            if "edge_ip_restricted" in error_body_lower or "error 1034" in error_body_lower or (
+                "cloudflare" in error_body_lower and "owner_action_required" in error_body_lower
             ):
                 return ClassifiedError(
                     error_type="ip_rate_limit",
@@ -1168,33 +1266,17 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
             )
         if status_code == 429:
             retry_after = get_retry_after(e)
-            response_text = None
-            try:
-                response_text = e.response.text if hasattr(e.response, "text") else ""
-            except (OSError, ValueError):
-                lib_logger.debug("Could not read error response for quota details", exc_info=True)
-                response_text = None
             return _classify_rate_limit(
                 e,
-                error_text=error_body,
+                error_text=error_body_lower,
                 status_code=status_code,
                 retry_after=retry_after,
                 provider=provider,
-                response_text=response_text,
+                response_text=response_text_raw,
             )
         if status_code == 400:
             # Check for context window / token limit errors with more specific patterns
-            if any(
-                pattern in error_body
-                for pattern in [
-                    "context_length",
-                    "max_tokens",
-                    "token limit",
-                    "context window",
-                    "too many tokens",
-                    "too long",
-                ]
-            ):
+            if any(pattern in error_body_lower for pattern in _CONTEXT_WINDOW_ERROR_PATTERNS):
                 return ClassifiedError(
                     error_type="context_window_exceeded",
                     original_exception=e,
@@ -1203,30 +1285,14 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
 
             # Provider-side transient 400s (from upstream wrappers) should rotate.
             # Keep strict fail-fast behavior for explicit policy/safety violations.
-            if any(
-                pattern in error_body
-                for pattern in [
-                    "policy",
-                    "safety",
-                    "content blocked",
-                    "prompt blocked",
-                ]
-            ):
+            if any(pattern in error_body_lower for pattern in _POLICY_ERROR_PATTERNS):
                 return ClassifiedError(
                     error_type="invalid_request",
                     original_exception=e,
                     status_code=status_code,
                 )
 
-            if any(
-                pattern in error_body
-                for pattern in [
-                    "provider returned error",
-                    "upstream error",
-                    "upstream temporarily unavailable",
-                    "upstream service unavailable",
-                ]
-            ):
+            if any(pattern in error_body_lower for pattern in _UPSTREAM_ERROR_PATTERNS):
                 return ClassifiedError(
                     error_type="server_error",
                     original_exception=e,
@@ -1296,15 +1362,14 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
             error_type="garbage_response",
             original_exception=e,
             status_code=503,
-            reason=e.reason if hasattr(e, 'reason') else str(e),
+            reason=e.reason if hasattr(e, 'reason') else error_str,
         )
 
     if isinstance(e, RateLimitError):
         retry_after = get_retry_after(e)
-        error_msg = str(e).lower()
         return _classify_rate_limit(
             e,
-            error_text=error_msg,
+            error_text=error_str_lower,
             status_code=status_code or 429,
             retry_after=retry_after,
             provider=provider,
@@ -1318,16 +1383,7 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
         )
 
     if isinstance(e, (InvalidRequestError, BadRequestError)):
-        error_msg = str(e).lower()
-        if any(
-            pattern in error_msg
-            for pattern in [
-                "provider returned error",
-                "upstream error",
-                "upstream temporarily unavailable",
-                "upstream service unavailable",
-            ]
-        ):
+        if any(pattern in error_str_lower for pattern in _UPSTREAM_ERROR_PATTERNS):
             return ClassifiedError(
                 error_type="server_error",
                 original_exception=e,
@@ -1336,21 +1392,7 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
 
         # Account/billing errors (e.g. Aliyun "Arrearage", "Access denied...account in good standing")
         # These are per-key/account issues — rotating to another credential may succeed.
-        if any(
-            pattern in error_msg
-            for pattern in [
-                "arrearage",
-                "overdue payment",
-                "account in good standing",
-                "insufficient balance",
-                "please recharge",
-                "out of credit",
-                "payment required",
-                "add credits to continue",
-                "credits required",
-                "usage_limit_exceeded",
-            ]
-        ):
+        if any(pattern in error_str_lower for pattern in _ACCOUNT_BILLING_ERROR_PATTERNS):
             return ClassifiedError(
                 error_type="quota_exceeded",
                 original_exception=e,
@@ -1378,7 +1420,7 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                         error_body = str(e.body)
                     # Also try the full string as body fallback
                     if not error_body:
-                        error_body = str(e)
+                        error_body = error_str
                     quota_info = provider_class.parse_quota_error(e, error_body)
                     if quota_info and quota_info.get("retry_after"):
                         retry_after = quota_info["retry_after"]
@@ -1409,8 +1451,7 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
 
     if isinstance(e, (APIConnectionError, Timeout)):
         # Inception Labs server errors often manifest as connection errors with specific messages
-        error_str = str(e).lower()
-        if 'server had an error' in error_str or 'the server had an error' in error_str:
+        if 'server had an error' in error_str_lower or 'the server had an error' in error_str_lower:
             return ClassifiedError(
                 error_type='api_connection',
                 original_exception=e,
@@ -1436,8 +1477,7 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
     # Catches "Not Found", 404, etc. from OpenAI-compatible endpoints.
     # Treat 404 as invalid_request (fail-fast, no rotation); otherwise fall through.
     if isinstance(e, OpenAIError):
-        error_msg = str(e).lower()
-        if "not found" in error_msg or "404" in error_msg:
+        if "not found" in error_str_lower or "404" in error_str_lower:
             return ClassifiedError(
                 error_type="invalid_request",
                 original_exception=e,
@@ -1455,8 +1495,7 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
     # litellm NotFoundError — model/endpoint not found at provider (404)
     # Not a key issue; don't penalize credentials with escalating cooldown
     if isinstance(e, NotFoundError):
-        error_msg = str(e).lower()
-        if "invalid path" in error_msg or "only accepts" in error_msg:
+        if "invalid path" in error_str_lower or "only accepts" in error_str_lower:
             return ClassifiedError(
                 error_type="invalid_request",
                 original_exception=e,
@@ -1472,16 +1511,7 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
 
     # litellm.APIError wraps upstream errors (402 credits, etc.) without exposing httpx status
     if isinstance(e, LiteLLMAPIError):
-        error_msg = str(e).lower()
-        if any(p in error_msg for p in [
-            "add credits to continue",
-            "credits required",
-            "usage_limit_exceeded",
-            "insufficient balance",
-            "out of credit",
-            "payment required",
-            "quota",
-        ]):
+        if any(p in error_str_lower for p in _LITELLM_API_CREDIT_PATTERNS):
             return ClassifiedError(
                 error_type="quota_exceeded",
                 original_exception=e,
@@ -1489,7 +1519,7 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                 retry_after=300,
                 reason="litellm_api_credits",
             )
-        if "invalid api key" in error_msg or "invalid_api_key" in error_msg:
+        if "invalid api key" in error_str_lower or "invalid_api_key" in error_str_lower:
             return ClassifiedError(
                 error_type="authentication",
                 original_exception=e,
@@ -1531,13 +1561,7 @@ def should_rotate_on_error(classified_error: ClassifiedError) -> bool:
     Returns:
         True if should rotate to next key, False if should fail immediately
     """
-    non_rotatable_errors = {
-        "invalid_request",
-        "context_window_exceeded",
-        "pre_request_callback_error",
-        "ip_rate_limit",
-    }
-    return classified_error.error_type not in non_rotatable_errors
+    return classified_error.error_type not in _NON_ROTATABLE_ERRORS
 
 
 def should_retry_same_key(classified_error: ClassifiedError) -> bool:
@@ -1550,11 +1574,6 @@ def should_retry_same_key(classified_error: ClassifiedError) -> bool:
     Returns:
         True if should retry same key, False if should rotate immediately
     """
-    retryable_errors = {
-        "server_error",
-        "api_connection",
-        "ip_rate_limit",
-    }
-    return classified_error.error_type in retryable_errors
+    return classified_error.error_type in _RETRYABLE_SAME_KEY_ERRORS
 
 

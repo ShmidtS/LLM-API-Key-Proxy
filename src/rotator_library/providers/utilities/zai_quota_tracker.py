@@ -86,7 +86,7 @@ class ZaiQuotaTracker(LightweightQuotaMixin):
         if data is None:
             return {
                 "status": "transient_error",
-                "error": None,
+                "error": "empty_or_invalid_response",
                 "level": "lite",
                 "hourly_used": 0,
                 "hourly_limit": 0,

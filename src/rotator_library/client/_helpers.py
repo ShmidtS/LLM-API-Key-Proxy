@@ -193,10 +193,16 @@ class HelpersMixin:
         Returns:
             Tuple of (credential_priorities, credential_tier_names)
         """
+        cache_key = provider + ":result"
+        # Fast path: return cached result tuple directly without lock
+        cached_result = self._credential_priority_cache.get(cache_key)
+        if cached_result is not None:
+            return cached_result
+
         lock = await self._lock_manager.get_lock(provider)
         async with lock:
-            # Fast path: return cached result tuple directly
-            cached_result = self._credential_priority_cache.get(provider + ":result")
+            # Double-check after acquiring lock
+            cached_result = self._credential_priority_cache.get(cache_key)
             if cached_result is not None:
                 return cached_result
 
@@ -230,7 +236,7 @@ class HelpersMixin:
 
             result = (priorities, tier_names)
             self._credential_priority_cache[provider] = cache_entry
-            self._credential_priority_cache[provider + ":result"] = result
+            self._credential_priority_cache[cache_key] = result
 
             return result
 
@@ -578,25 +584,41 @@ class HelpersMixin:
         provider_headers = get_provider_env_cache().get(provider_headers_key)
 
         if provider_headers:
-            try:
-                # Parse headers from JSON format
-                headers_dict = json_loads(provider_headers)
-                if isinstance(headers_dict, dict):
-                    # Use headers parameter if available, otherwise create it
-                    if "headers" not in litellm_kwargs:
-                        litellm_kwargs["headers"] = {}
-
-                    # Clean provider headers before merging
-                    self._strip_client_headers(headers_dict)
-                    litellm_kwargs["headers"].update(headers_dict)
-                    lib_logger.debug(
-                        "Applied provider-specific headers for %s from env",
-                        provider,
+            cache_key = (provider, hash(provider_headers))
+            parsed_headers_cache = getattr(self, "_parsed_headers_cache", None)
+            if parsed_headers_cache is None:
+                parsed_headers_cache = {}
+                self._parsed_headers_cache = parsed_headers_cache
+            headers_dict = parsed_headers_cache.get(cache_key)
+            if headers_dict is None:
+                try:
+                    # Parse headers from JSON format
+                    headers_dict = json_loads(provider_headers)
+                    if isinstance(headers_dict, dict):
+                        # Clean provider headers before merging
+                        self._strip_client_headers(headers_dict)
+                        # Cap cache size to prevent unbounded growth
+                        if len(parsed_headers_cache) >= 32:
+                            parsed_headers_cache.clear()
+                        parsed_headers_cache[cache_key] = headers_dict
+                    else:
+                        headers_dict = None
+                except (json.JSONDecodeError, ValueError) as e:
+                    lib_logger.warning(
+                        "Failed to parse %s: %s",
+                        provider_headers_key, e,
                     )
-            except (json.JSONDecodeError, ValueError) as e:
-                lib_logger.warning(
-                    "Failed to parse %s: %s",
-                    provider_headers_key, e,
+                    headers_dict = None
+
+            if headers_dict is not None:
+                # Use headers parameter if available, otherwise create it
+                if "headers" not in litellm_kwargs:
+                    litellm_kwargs["headers"] = {}
+
+                litellm_kwargs["headers"].update(headers_dict)
+                lib_logger.debug(
+                    "Applied provider-specific headers for %s from env",
+                    provider,
                 )
 
 
