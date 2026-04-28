@@ -55,10 +55,17 @@ async def audio_speech(
     }
     content_type = content_type_map.get(response_format, "audio/mpeg")
 
+    # litellm.aspeech may return an httpx.Response where aiter_bytes() is a coroutine
+    aiter = response.aiter_bytes()
+    if hasattr(aiter, "__aiter__"):
+        byte_iter = aiter
+    else:
+        byte_iter = await aiter
+
     async def _audio_stream():
         chunk_count = 0
         try:
-            async for chunk in response.aiter_bytes():
+            async for chunk in byte_iter:
                 yield chunk
                 chunk_count += 1
                 if chunk_count % 50 == 0 and await request.is_disconnected():

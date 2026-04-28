@@ -58,16 +58,9 @@ def get_rotating_client(request: Request) -> RotatingClient:
     return client
 
 
-def get_embedding_batcher(request: Request) -> EmbeddingBatcher:
+def get_embedding_batcher(request: Request) -> EmbeddingBatcher | None:
     """Dependency to get the embedding batcher instance from the app state."""
-    try:
-        batcher = request.app.state.embedding_batcher
-    except AttributeError as e:
-        logger.error("Failed to get embedding batcher from app state: %s", e)
-        batcher = None
-    if batcher is None:
-        raise HTTPException(status_code=500, detail="Server not initialized: embedding batcher unavailable")
-    return batcher
+    return getattr(request.app.state, "embedding_batcher", None)
 
 
 def make_error_response(

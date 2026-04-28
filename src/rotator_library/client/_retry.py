@@ -66,6 +66,7 @@ class RetryMixin(RetryBaseMixin):
         provider: str,
         provider_plugin: Any,
         log_label: str = "",
+        api_call: Any = None,
     ):
         """Apply shared provider-specific overrides to litellm_kwargs.
 
@@ -81,28 +82,45 @@ class RetryMixin(RetryBaseMixin):
             log_label: Optional label for safety-settings warning messages
                        (e.g. "streaming path").
         """
+        is_non_completion = api_call not in (
+            litellm.acompletion, litellm.completion,
+        )
         if provider_plugin:
-            try:
-                self._apply_default_safety_settings(litellm_kwargs, provider)
-            except asyncio.CancelledError:
-                raise
-            except (ValueError, TypeError, KeyError, AttributeError) as exc:
-                label = f" {log_label}" if log_label else ""
-                lib_logger.warning(
-                    "Could not apply default safety settings for%s %s: %s; continuing.",
-                    label, provider, type(exc).__name__,
-                )
-
-            if "safety_settings" in litellm_kwargs:
-                converted_settings = (
-                    provider_plugin.convert_safety_settings(
-                        litellm_kwargs["safety_settings"]
+            # Skip safety settings for non-completion endpoints (embeddings, TTS, etc.)
+            if not is_non_completion:
+                try:
+                    self._apply_default_safety_settings(litellm_kwargs, provider)
+                except asyncio.CancelledError:
+                    raise
+                except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                    label = f" {log_label}" if log_label else ""
+                    lib_logger.warning(
+                        "Could not apply default safety settings for%s %s: %s; continuing.",
+                        label, provider, type(exc).__name__,
                     )
-                )
-                if converted_settings is not None:
-                    litellm_kwargs["safety_settings"] = converted_settings
-                else:
-                    del litellm_kwargs["safety_settings"]
+
+                if "safety_settings" in litellm_kwargs:
+                    converted_settings = (
+                        provider_plugin.convert_safety_settings(
+                            litellm_kwargs["safety_settings"]
+                        )
+                    )
+                    if converted_settings is not None:
+                        litellm_kwargs["safety_settings"] = converted_settings
+                    else:
+                        del litellm_kwargs["safety_settings"]
+
+        # Strip completion-only params from embedding/media requests
+        if is_non_completion:
+            for key in ("temperature", "max_tokens", "max_output_tokens",
+                        "top_p", "frequency_penalty", "presence_penalty",
+                        "stream", "stream_options", "n",
+                        "reasoning_effort", "thinking"):
+                litellm_kwargs.pop(key, None)
+            # NVIDIA rejects encoding_format=None — default to "float"
+            if provider == "nvidia":
+                if litellm_kwargs.get("encoding_format") is None:
+                    litellm_kwargs["encoding_format"] = "float"
 
         if provider == "gemini" and provider_plugin:
             provider_plugin.handle_thinking_parameter(litellm_kwargs, model)
@@ -120,7 +138,8 @@ class RetryMixin(RetryBaseMixin):
             ]
 
         sanitized_kwargs, should_reject = sanitize_request_payload(
-            litellm_kwargs, model, registry=self._model_registry
+            litellm_kwargs, model, registry=self._model_registry,
+            auto_adjust_max_tokens=not is_non_completion,
         )
         # Update in-place so caller sees the changes
         if sanitized_kwargs is not litellm_kwargs:
@@ -132,6 +151,19 @@ class RetryMixin(RetryBaseMixin):
                 f"Input tokens exceed context window for model {model}. "
                 "Request rejected to prevent API error."
             )
+
+        # Re-strip completion-only params after sanitization (sanitize may re-add max_tokens)
+        # and add drop_params so litellm strips its own internally-injected params
+        if is_non_completion:
+            for key in ("temperature", "max_tokens", "max_output_tokens",
+                        "top_p", "frequency_penalty", "presence_penalty",
+                        "stream", "stream_options", "n",
+                        "reasoning_effort", "thinking"):
+                litellm_kwargs.pop(key, None)
+            if provider == "nvidia":
+                if litellm_kwargs.get("encoding_format") is None:
+                    litellm_kwargs["encoding_format"] = "float"
+            litellm_kwargs.setdefault("drop_params", True)
 
         if provider == "qwen_code":
             litellm_kwargs["custom_llm_provider"] = "qwen"
@@ -925,6 +957,7 @@ class RetryMixin(RetryBaseMixin):
                     # _prepare_request_kwargs already called _apply_provider_headers above
                     self._apply_common_provider_overrides(
                         litellm_kwargs, model, provider, provider_plugin,
+                        api_call=api_call,
                     )
 
                     for attempt in range(self.max_retries):
@@ -1345,6 +1378,7 @@ class RetryMixin(RetryBaseMixin):
                     self._apply_common_provider_overrides(
                         litellm_kwargs, model, provider, provider_plugin,
                         log_label="streaming path",
+                        api_call=litellm.acompletion,
                     )
 
                     for attempt in range(self.max_retries):
