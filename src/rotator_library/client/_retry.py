@@ -1416,6 +1416,16 @@ class RetryMixin(RetryBaseMixin):
                                     logger_fn=self._litellm_logger_callback,
                                 )
 
+                                if response is None:
+                                    lib_logger.error(
+                                        "litellm.acompletion returned None for credential %s.",
+                                        mask_credential(current_cred),
+                                    )
+                                    last_exception = RuntimeError(
+                                        "litellm.acompletion returned None — provider did not return a stream"
+                                    )
+                                    continue
+
                                 lib_logger.info(
                                     "Stream connection established for credential %s. Processing response.",
                                     mask_credential(current_cred),

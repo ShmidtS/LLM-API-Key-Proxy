@@ -46,6 +46,11 @@ class StreamingMixin:
         3. Only emit finish_reason on final chunk (detected by usage.completion_tokens > 0)
         """
         stream_completed = False
+        if stream is None:
+            lib_logger.error("Streaming returned None for model %s, credential %s.", model, mask_credential(key))
+            stream_completed = True
+            yield STREAM_DONE
+            return
         stream_iterator = stream.__aiter__()
         accumulated_finish_reason = None  # Track strongest finish_reason across chunks
         has_tool_calls = False  # Track if ANY tool calls were seen in stream
