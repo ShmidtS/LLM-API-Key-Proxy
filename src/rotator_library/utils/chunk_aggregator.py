@@ -23,6 +23,12 @@ class ChunkAggregator:
     get the assembled output.
     """
 
+    __slots__ = (
+        "_content_parts", "_flushed_content", "_joined_content",
+        "_generic_str_parts", "_aggregated_tool_calls", "_final_message",
+        "_usage_data", "_finish_reason", "_first_chunk_meta",
+    )
+
     _MAX_CONTENT_PARTS = 50000
     _MAX_GENERIC_PARTS = 5000
 

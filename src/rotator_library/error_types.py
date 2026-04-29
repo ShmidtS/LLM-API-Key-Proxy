@@ -250,6 +250,11 @@ def mask_credential(credential: str) -> str:
 
 
 class RequestErrorAccumulator:
+    __slots__ = (
+        "abnormal_errors", "normal_errors", "_tried_credentials",
+        "timeout_occurred", "model", "provider",
+    )
+
     """
     Tracks errors encountered during a request's credential rotation cycle.
 
@@ -293,7 +298,7 @@ class RequestErrorAccumulator:
     def _truncate_message(self, message: str, max_length: int = 150) -> str:
         """Truncate error message for readability."""
         # Take first line and truncate
-        first_line = message.split("\n")[0]
+        first_line = message.partition("\n")[0]
         if len(first_line) > max_length:
             return first_line[:max_length] + "..."
         return first_line

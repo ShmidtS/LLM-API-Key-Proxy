@@ -239,7 +239,8 @@ def _detect_ip_throttle(
     for indicator in IP_THROTTLE_INDICATORS:
         if indicator in error_body_lower:
             lib_logger.info(
-                f"Detected IP-based rate limiting: found indicator '{indicator}'"
+                "Detected IP-based rate limiting: found indicator '%s'",
+                indicator,
             )
             return RATE_LIMIT_DEFAULT_COOLDOWN
 
@@ -248,8 +249,9 @@ def _detect_ip_throttle(
     # backend-specific rather than IP-specific
     if provider and provider in PROXY_PROVIDERS:
         lib_logger.debug(
-            f"Skipping generic IP throttle detection for proxy provider '{provider}' "
-            "- rate limits may be backend-specific"
+            "Skipping generic IP throttle detection for proxy provider '%s' "
+            "- rate limits may be backend-specific",
+            provider,
         )
         return None
 
@@ -521,9 +523,12 @@ def get_retry_after(error: Exception) -> Optional[int]:
     # 1. Try to parse JSON from the error string representation
     # Some exceptions embed JSON in their string representation
     error_str = str(error)
-    result = _extract_retry_from_json_body(error_str)
-    if result is not None:
-        return result
+    if "{" in error_str:
+        error_str_lower = error_str.lower()
+        if "retry" in error_str_lower or "quota" in error_str_lower or "rate" in error_str_lower:
+            result = _extract_retry_from_json_body(error_str)
+            if result is not None:
+                return result
 
     # 2. Common regex patterns for 'retry-after' (with compound duration support)
     # Use lowercase for pattern matching
@@ -894,8 +899,9 @@ async def handle_429_error(
         # Error body explicitly indicates IP-level throttle
         cooldown = retry_after or ip_throttle_from_body
         lib_logger.warning(
-            f"IP-level throttle detected for provider '{provider}' from error body. "
-            f"Blocking provider for {cooldown}s."
+            "IP-level throttle detected for provider '%s' from error body. "
+            "Blocking provider for %ss.",
+            provider, cooldown,
         )
         action = ThrottleAction(
             action_type=ThrottleActionType.PROVIDER_COOLDOWN,
@@ -923,8 +929,9 @@ async def handle_429_error(
     if provider and provider in PROXY_PROVIDERS:
         cooldown = retry_after or RATE_LIMIT_DEFAULT_COOLDOWN
         lib_logger.debug(
-            f"Skipping IP throttle correlation for proxy provider '{provider}'. "
-            f"Credential-level cooldown: {cooldown}s."
+            "Skipping IP throttle correlation for proxy provider '%s'. "
+            "Credential-level cooldown: %ss.",
+            provider, cooldown,
         )
         action = ThrottleAction(
             action_type=ThrottleActionType.CREDENTIAL_COOLDOWN,
@@ -954,10 +961,9 @@ async def handle_429_error(
     if assessment.scope == ThrottleScope.IP:
         # Multiple credentials throttled - IP-level
         lib_logger.warning(
-            f"IP-level throttle detected for provider '{provider}' via correlation: "
-            f"{len(assessment.affected_credentials)} credentials affected, "
-            f"confidence={assessment.confidence:.2f}. "
-            f"Blocking provider for {cooldown}s."
+            "IP-level throttle detected for provider '%s' via correlation: "
+            "%s credentials affected, confidence=%.2f. Blocking provider for %ss.",
+            provider, len(assessment.affected_credentials), assessment.confidence, cooldown,
         )
         action = ThrottleAction(
             action_type=ThrottleActionType.PROVIDER_COOLDOWN,
@@ -982,8 +988,8 @@ async def handle_429_error(
 
     # Step 5: Single credential throttle
     lib_logger.debug(
-        f"Credential-level throttle for {mask_credential(credential)} "
-        f"on provider '{provider}'. Cooldown: {cooldown}s."
+        "Credential-level throttle for %s on provider '%s'. Cooldown: %ss.",
+        mask_credential(credential), provider, cooldown,
     )
     action = ThrottleAction(
         action_type=ThrottleActionType.CREDENTIAL_COOLDOWN,
@@ -1048,9 +1054,9 @@ def _try_parse_provider_quota_error(
             # Log the parsed result with human-readable duration
             hours = retry_after / 3600
             lib_logger.info(
-                f"Provider '{provider}' parsed quota error: "
-                f"retry_after={retry_after}s ({hours:.1f}h), reason={reason}"
-                + (f", resets at {reset_ts}" if reset_ts else "")
+                "Provider '%s' parsed quota error: retry_after=%ss (%.1fh), reason=%s%s",
+                provider, retry_after, hours, reason,
+                ", resets at %s" % reset_ts if reset_ts else "",
             )
 
             return ClassifiedError(
@@ -1063,7 +1069,8 @@ def _try_parse_provider_quota_error(
             )
     except (ValueError, KeyError, TypeError, AttributeError) as parse_error:
         lib_logger.debug(
-            f"Provider-specific error parsing failed for '{provider}': {parse_error}"
+            "Provider-specific error parsing failed for '%s': %s",
+            provider, parse_error,
         )
     return None
 
@@ -1222,8 +1229,8 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
     if isinstance(e, dict):
         if is_provider_abort(e):
             lib_logger.warning(
-                f"Provider abort detected in stream: finish_reason={e.get('finish_reason')}, "
-                f"native_finish_reason={e.get('native_finish_reason')}"
+                "Provider abort detected in stream: finish_reason=%s, native_finish_reason=%s",
+                e.get("finish_reason"), e.get("native_finish_reason"),
             )
             return classify_stream_error(e)
         # Also check for nested error dict
@@ -1438,7 +1445,7 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                             reason=quota_info.get("reason"),
                         )
             except (KeyError, TypeError, ValueError):
-                lib_logger.debug(f"Provider-specific quota parse failed for '{provider}'", exc_info=True)
+                lib_logger.debug("Provider-specific quota parse failed for '%s'", provider, exc_info=True)
 
         return ClassifiedError(
             error_type="invalid_request",

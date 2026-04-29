@@ -12,6 +12,9 @@ from ..utils.model_utils import extract_provider_from_model, normalize_model_str
 
 lib_logger = logging.getLogger("rotator_library")
 
+_IMAGE_URL_RE = re.compile(r"https?://\S+\.(?:png|jpg|jpeg|webp|gif)\S*")
+_DATA_IMAGE_RE = re.compile(r"data:image/[^;]+;base64,[A-Za-z0-9+/=]+")
+
 # Image-only model detection — these models are rejected by /chat/completions upstream
 # and must be redirected to /v1/images/generations. Covers flux, z-image, dall-e, sd3, etc.
 _IMAGE_ONLY_SUBSTRINGS = (
@@ -346,7 +349,6 @@ class MediaMixin:
         **kwargs,
     ) -> Any:
         """Route image generation through /chat/completions as fallback."""
-        import re
         import time as _time
 
         model = kwargs.get("model", "")
@@ -391,12 +393,10 @@ class MediaMixin:
             msg = choice.get("message", {})
             content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
 
-            url_matches = re.findall(
-                r"https?://\S+\.(?:png|jpg|jpeg|webp|gif)\S*", content
-            )
-            b64_matches = re.findall(
-                r"data:image/[^;]+;base64,[A-Za-z0-9+/=]+", content
-            )
+            if "http" not in content and "data:image/" not in content:
+                continue
+            url_matches = [m.group() for m in _IMAGE_URL_RE.finditer(content)]
+            b64_matches = [m.group() for m in _DATA_IMAGE_RE.finditer(content)]
 
             for url in url_matches:
                 images.append({"url": url})

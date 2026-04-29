@@ -29,9 +29,23 @@ lib_logger = logging.getLogger("rotator_library")
 
 
 _SENSITIVE_HEADER_KEYS = frozenset({
-    "authorization", "x-api-key", "api-key", "api_key", "cookie",
-    "proxy-authorization", "x-auth-token",
+    "authorization", "x_api_key", "api_key", "cookie",
+    "proxy_authorization", "x_auth_token",
 })
+
+_PROVIDER_URLS = {
+    "openai": "https://api.openai.com",
+    "anthropic": "https://api.anthropic.com",
+    "gemini": "https://generativelanguage.googleapis.com",
+    "antigravity": "https://api.antigravity.ai",
+    "iflow": "https://api.iflow.ai",
+}
+
+_LITELLM_LOG_KEYS_TO_POP = (
+    "messages", "input", "response", "data", "api_key", "api_base",
+    "original_response", "additional_args",
+)
+_LITELLM_LOG_NESTED_KEYS = ("kwargs", "litellm_params", "model_info", "proxy_server_request")
 
 
 class HelpersMixin:
@@ -39,6 +53,7 @@ class HelpersMixin:
 
     _last_cache_reset_time: float = 0.0
     _pool_init_lock: asyncio.Lock | None = None
+    _provider_headers_key_cache: Dict[str, str]
 
     def _build_request_headers(self, request: Optional[Any]) -> Dict[str, Any]:
         """Build a sanitized request headers dict for failure logging.
@@ -54,7 +69,9 @@ class HelpersMixin:
         sanitized = {}
         for k, v in headers.items() if hasattr(headers, "items") else headers:
             key_lower = k.lower() if isinstance(k, str) else k.decode("latin-1").lower()
-            if key_lower.replace("-", "_") in _SENSITIVE_HEADER_KEYS:
+            if key_lower in _SENSITIVE_HEADER_KEYS or (
+                "-" in key_lower and key_lower.replace("-", "_") in _SENSITIVE_HEADER_KEYS
+            ):
                 sanitized[k] = "***REDACTED***"
             else:
                 sanitized[k] = v
@@ -109,10 +126,9 @@ class HelpersMixin:
         """
         lock = await self._lock_manager.get_lock(provider)
         async with lock:
-            self._consecutive_quota_failures[credential_id] = (
-                self._consecutive_quota_failures.get(credential_id, 0) + 1
-            )
-            count = self._consecutive_quota_failures[credential_id]
+            failures = self._consecutive_quota_failures
+            count = failures.get(credential_id, 0) + 1
+            failures[credential_id] = count
         lib_logger.debug(
             "Quota failure increment for %s: %s/3",
             mask_credential(credential_id), count,
@@ -129,8 +145,7 @@ class HelpersMixin:
         """
         lock = await self._lock_manager.get_lock(provider)
         async with lock:
-            if credential_id in self._consecutive_quota_failures:
-                del self._consecutive_quota_failures[credential_id]
+            self._consecutive_quota_failures.pop(credential_id, None)
         lib_logger.debug(
             "Quota failure counter reset for %s",
             mask_credential(credential_id),
@@ -213,20 +228,20 @@ class HelpersMixin:
             cache_entry = {}
 
             if provider_plugin:
-                has_priority = hasattr(provider_plugin, "get_credential_priority")
-                has_tier_name = hasattr(provider_plugin, "get_credential_tier_name")
+                get_priority = getattr(provider_plugin, "get_credential_priority", None)
+                get_tier_name = getattr(provider_plugin, "get_credential_tier_name", None)
 
                 for cred in credentials:
                     cred_cache = {}
 
-                    if has_priority:
-                        priority = provider_plugin.get_credential_priority(cred)
+                    if get_priority:
+                        priority = get_priority(cred)
                         if priority is not None:
                             priorities[cred] = priority
                             cred_cache["priority"] = priority
 
-                    if has_tier_name:
-                        tier_name = provider_plugin.get_credential_tier_name(cred)
+                    if get_tier_name:
+                        tier_name = get_tier_name(cred)
                         if tier_name:
                             tier_names[cred] = tier_name
                             cred_cache["tier_name"] = tier_name
@@ -337,16 +352,6 @@ class HelpersMixin:
         Returns:
             List of URLs to pre-warm connections for
         """
-        # Map of provider names to their default API base URLs
-        # These are only used as fallbacks if no custom API_BASE is configured
-        provider_urls = {
-            "openai": "https://api.openai.com",
-            "anthropic": "https://api.anthropic.com",
-            "gemini": "https://generativelanguage.googleapis.com",
-            "antigravity": "https://api.antigravity.ai",
-            "iflow": "https://api.iflow.ai",
-        }
-
         # Build endpoint dict in a single pass, then derive list from it
         self._provider_endpoints = {}
         for provider in self.all_credentials.keys():
@@ -359,10 +364,18 @@ class HelpersMixin:
                             f"{parsed.scheme}://{parsed.netloc}"
                         )
                         continue
-            if provider in provider_urls:
-                self._provider_endpoints[provider] = provider_urls[provider]
+            if provider in _PROVIDER_URLS:
+                self._provider_endpoints[provider] = _PROVIDER_URLS[provider]
 
-        return list(set(self._provider_endpoints.values()))[:5]  # Dedupe and limit
+        warmup_hosts = []
+        seen = set()
+        for endpoint in self._provider_endpoints.values():
+            if endpoint not in seen:
+                seen.add(endpoint)
+                warmup_hosts.append(endpoint)
+                if len(warmup_hosts) == 5:
+                    break
+        return warmup_hosts
 
     async def _get_http_client(self, streaming: bool = False) -> httpx.AsyncClient:
         """
@@ -422,21 +435,6 @@ class HelpersMixin:
         if not isinstance(log_data, dict):
             return log_data
 
-        # Keys to remove at any level of the dictionary
-        keys_to_pop = [
-            "messages",
-            "input",
-            "response",
-            "data",
-            "api_key",
-            "api_base",
-            "original_response",
-            "additional_args",
-        ]
-
-        # Keys that might contain nested dictionaries to clean
-        nested_keys = ["kwargs", "litellm_params", "model_info", "proxy_server_request"]
-
         # Create a deep copy to avoid modifying the original log object in memory
         clean_data = json_deep_copy(log_data)
 
@@ -445,16 +443,16 @@ class HelpersMixin:
                 return
 
             # Remove sensitive/large keys
-            for key in keys_to_pop:
+            for key in _LITELLM_LOG_KEYS_TO_POP:
                 data_dict.pop(key, None)
 
             # Recursively clean nested dictionaries
-            for key in nested_keys:
+            for key in _LITELLM_LOG_NESTED_KEYS:
                 if key in data_dict and isinstance(data_dict[key], dict):
                     clean_recursively(data_dict[key])
 
             # Also iterate through all values to find any other nested dicts
-            for key, value in list(data_dict.items()):
+            for value in data_dict.values():
                 if isinstance(value, dict):
                     clean_recursively(value)
 
@@ -467,6 +465,9 @@ class HelpersMixin:
         This allows us to control the log level and destination of litellm's output.
         It also cleans up error logs for better readability in debug files.
         """
+        if not lib_logger.isEnabledFor(logging.DEBUG):
+            return
+
         # Filter out verbose pre_api_call and post_api_call logs
         log_event_type = log_data.get("log_event_type")
         if log_event_type in {"pre_api_call", "post_api_call"}:
@@ -511,12 +512,11 @@ class HelpersMixin:
             return
 
         # If generic form is present, ensure missing generic keys are filled in
-        if "safety_settings" in litellm_kwargs and isinstance(
-            litellm_kwargs["safety_settings"], dict
-        ):
+        safety_settings = litellm_kwargs.get("safety_settings")
+        if isinstance(safety_settings, dict):
             for k, v in DEFAULT_GENERIC_SAFETY_SETTINGS.items():
-                if k not in litellm_kwargs["safety_settings"]:
-                    litellm_kwargs["safety_settings"][k] = v
+                if k not in safety_settings:
+                    safety_settings[k] = v
             return
 
         # If Gemini form is present, ensure missing gemini categories are appended
@@ -557,16 +557,19 @@ class HelpersMixin:
         Args:
             litellm_kwargs: The kwargs dict to clean in-place
         """
+        pop = litellm_kwargs.pop
+        strip_exact = self._STRIP_EXACT
+        strip_prefixes = self._STRIP_PREFIXES
         for key in list(litellm_kwargs.keys()):
             if not isinstance(key, str):
                 continue
             key_lower = key.lower()
-            if key_lower in self._STRIP_EXACT:
-                litellm_kwargs.pop(key, None)
-            elif key_lower.startswith(self._STRIP_PREFIXES):
-                litellm_kwargs.pop(key, None)
+            if key_lower in strip_exact:
+                pop(key, None)
+            elif key_lower.startswith(strip_prefixes):
+                pop(key, None)
             elif key.startswith("_"):
-                litellm_kwargs.pop(key, None)
+                pop(key, None)
 
     async def _apply_provider_headers(
         self, litellm_kwargs: Dict[str, Any], provider: str, credential: str
@@ -575,12 +578,20 @@ class HelpersMixin:
         Apply correct provider headers and remove problematic client headers.
         """
         # Remove problematic headers from existing headers dict
-        if "headers" in litellm_kwargs and isinstance(litellm_kwargs["headers"], dict):
-            self._strip_client_headers(litellm_kwargs["headers"])
+        headers = litellm_kwargs.get("headers")
+        if isinstance(headers, dict):
+            self._strip_client_headers(headers)
 
         # Add provider-specific headers from environment variables if configured
         # These headers should be used instead of any client-provided ones
-        provider_headers_key = f"{provider.upper()}_API_HEADERS"
+        provider_headers_key_cache = getattr(self, "_provider_headers_key_cache", None)
+        if provider_headers_key_cache is None:
+            provider_headers_key_cache = {}
+            self._provider_headers_key_cache = provider_headers_key_cache
+        provider_headers_key = provider_headers_key_cache.get(provider)
+        if provider_headers_key is None:
+            provider_headers_key = provider.upper() + "_API_HEADERS"
+            provider_headers_key_cache[provider] = provider_headers_key
         provider_headers = get_provider_env_cache().get(provider_headers_key)
 
         if provider_headers:
@@ -612,10 +623,11 @@ class HelpersMixin:
 
             if headers_dict is not None:
                 # Use headers parameter if available, otherwise create it
-                if "headers" not in litellm_kwargs:
-                    litellm_kwargs["headers"] = {}
-
-                litellm_kwargs["headers"].update(headers_dict)
+                headers = litellm_kwargs.get("headers")
+                if not isinstance(headers, dict):
+                    headers = {}
+                    litellm_kwargs["headers"] = headers
+                headers.update(headers_dict)
                 lib_logger.debug(
                     "Applied provider-specific headers for %s from env",
                     provider,

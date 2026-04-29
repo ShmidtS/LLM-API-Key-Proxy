@@ -51,7 +51,7 @@ class StreamingMixin:
             stream_completed = True
             yield STREAM_DONE
             return
-        stream_iterator = stream.__aiter__()
+        stream_anext = stream.__aiter__().__anext__
         accumulated_finish_reason = None  # Track strongest finish_reason across chunks
         has_tool_calls = False  # Track if ANY tool calls were seen in stream
         chunk_index = 0  # Track chunk count for better error logging
@@ -73,7 +73,7 @@ class StreamingMixin:
                 disconnect_check_countdown -= 1
 
                 try:
-                    chunk = await stream_iterator.__anext__()
+                    chunk = await stream_anext()
                     chunk_index += 1
 
                     # Convert chunk to dict, handling both litellm.ModelResponse and raw dicts
@@ -161,11 +161,6 @@ class StreamingMixin:
                         # Emit finish_reason ONLY on the final chunk (has usage data)
                         if has_usage_data and accumulated_finish_reason:
                             choice["finish_reason"] = accumulated_finish_reason
-
-                        # Handle tool_calls in delta for proper finish_reason
-                        if tool_calls:
-                            has_tool_calls = True
-                            accumulated_finish_reason = "tool_calls"
 
                     yield chunk_dict
 

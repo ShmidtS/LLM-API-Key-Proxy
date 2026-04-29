@@ -52,7 +52,7 @@ class HalfOpenSlot:
         return False
 
 
-@dataclass
+@dataclass(slots=True)
 class _RetryContext:
     model: str
     provider: str
@@ -68,7 +68,7 @@ class _RetryContext:
     error_accumulator: Any = None
 
 
-@dataclass
+@dataclass(slots=True)
 class _ErrorDecision:
     """Decision from an error handler: what the retry loop should do next.
 
@@ -83,7 +83,7 @@ class _ErrorDecision:
     error_message: str = ""
 
 
-@dataclass
+@dataclass(slots=True)
 class _KeySelectionResult:
     """Result of _select_next_key() -- selected credential and control flow hint.
 
@@ -162,16 +162,15 @@ class RetryBaseMixin:
             on_cooldown = availability_stats["on_cooldown"]
             fc_excluded = availability_stats["fair_cycle_excluded"]
 
-            exclusion_parts = []
-            if on_cooldown > 0:
-                exclusion_parts.append(f"cd:{on_cooldown}")
-            if fc_excluded > 0:
-                exclusion_parts.append(f"fc:{fc_excluded}")
-            exclusion_str = (
-                f",{','.join(exclusion_parts)}" if exclusion_parts else ""
-            )
-
             if lib_logger.isEnabledFor(logging.INFO):
+                exclusion_parts = []
+                if on_cooldown > 0:
+                    exclusion_parts.append(f"cd:{on_cooldown}")
+                if fc_excluded > 0:
+                    exclusion_parts.append(f"fc:{fc_excluded}")
+                exclusion_str = (
+                    f",{','.join(exclusion_parts)}" if exclusion_parts else ""
+                )
                 lib_logger.info(
                     "Acquiring credential for model %s. Tried: %s/%s(%s%s)",
                     model, len(tried_creds), available_count, total_count, exclusion_str,

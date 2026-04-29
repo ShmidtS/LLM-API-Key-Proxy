@@ -339,7 +339,9 @@ class RotatingClient(
         for provider, max_val in self.max_concurrent_requests_per_key.items():
             if max_val < 1:
                 lib_logger.warning(
-                    f"Invalid max_concurrent for '{provider}': {max_val}. Setting to 1."
+                    "Invalid max_concurrent for '%s': %s. Setting to 1.",
+                    provider,
+                    max_val,
                 )
                 self.max_concurrent_requests_per_key[provider] = 1
 
@@ -398,17 +400,21 @@ class RotatingClient(
         if include_reasoning_effort and "reasoning_effort" in base_kwargs:
             litellm_kwargs["reasoning_effort"] = base_kwargs["reasoning_effort"]
 
-        if provider in self.litellm_provider_params:
-            litellm_kwargs["litellm_params"] = {
-                **self.litellm_provider_params[provider],
-                **litellm_kwargs.get("litellm_params", {}),
-            }
+        provider_params = self.litellm_provider_params.get(provider)
+        if provider_params:
+            existing_params = litellm_kwargs.get("litellm_params")
+            litellm_kwargs["litellm_params"] = (
+                {**provider_params, **existing_params}
+                if existing_params
+                else provider_params.copy()
+            )
 
         litellm_kwargs["num_retries"] = 0
 
         provider_plugin = self._get_provider_instance(provider)
-        if provider_plugin and hasattr(provider_plugin, "get_model_options"):
-            model_options = provider_plugin.get_model_options(model)
+        get_model_options = getattr(provider_plugin, "get_model_options", None) if provider_plugin else None
+        if get_model_options:
+            model_options = get_model_options(model)
             if model_options:
                 for key, value in model_options.items():
                     if key == "reasoning_effort":
@@ -469,7 +475,8 @@ class RotatingClient(
         # Only initialize providers for which we have credentials
         if credential_key not in self.all_credentials:
             lib_logger.debug(
-                f"Skipping provider '{provider_name}' initialization: no credentials configured"
+                "Skipping provider '%s' initialization: no credentials configured",
+                provider_name,
             )
             return None
 
@@ -549,9 +556,9 @@ class RotatingClient(
             prompt = self._extract_prompt_from_chat_messages(kwargs.get("messages", []))
             if prompt:
                 image_kwargs = {
-                    key: value
-                    for key, value in kwargs.items()
-                    if key in _IMAGE_PASSTHROUGH_PARAMS
+                    key: kwargs[key]
+                    for key in _IMAGE_PASSTHROUGH_PARAMS
+                    if key in kwargs
                 }
                 image_kwargs["model"] = model
                 image_kwargs["prompt"] = prompt
@@ -564,12 +571,12 @@ class RotatingClient(
                 )
 
         # Remove stream_options for providers that don't support it
-        if (
-            provider in _STREAM_OPTIONS_UNSUPPORTED_PROVIDERS
-            and "stream_options" in kwargs
-        ):
+        stream_options_supported = provider not in _STREAM_OPTIONS_UNSUPPORTED_PROVIDERS
+
+        if not stream_options_supported and "stream_options" in kwargs:
             lib_logger.debug(
-                f"Removing stream_options for {provider} provider (not supported)"
+                "Removing stream_options for %s provider (not supported)",
+                provider,
             )
             kwargs.pop("stream_options", None)
 
@@ -577,25 +584,27 @@ class RotatingClient(
         # Some providers (e.g., Fireworks) reject non-streaming requests when
         # max_tokens exceeds a threshold with: "Requests with max_tokens > N must have stream=true"
         forced_streaming = False
-        if not kwargs.get("stream"):
+        stream = kwargs.get("stream")
+        if not stream:
             max_tokens = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
-            if max_tokens and provider in _STREAM_REQUIRED_PROVIDERS:
-                threshold = _STREAM_REQUIRED_PROVIDERS[provider]
-                if max_tokens > threshold:
-                    lib_logger.info(
-                        f"Forcing stream=true for {provider} provider "
-                        f"(max_tokens={max_tokens} > threshold={threshold})"
-                    )
-                    kwargs["stream"] = True
-                    forced_streaming = True
+            threshold = _STREAM_REQUIRED_PROVIDERS.get(provider)
+            if max_tokens and threshold is not None and max_tokens > threshold:
+                lib_logger.info(
+                    "Forcing stream=true for %s provider (max_tokens=%s > threshold=%s)",
+                    provider,
+                    max_tokens,
+                    threshold,
+                )
+                kwargs["stream"] = True
+                forced_streaming = True
 
-        if kwargs.get("stream"):
-            # Only add stream_options for providers that support it
-            if provider not in _STREAM_OPTIONS_UNSUPPORTED_PROVIDERS:
-                if not isinstance(kwargs.get("stream_options"), dict):
-                    kwargs["stream_options"] = {}
-                if "include_usage" not in kwargs["stream_options"]:
-                    kwargs["stream_options"]["include_usage"] = True
+        if stream or forced_streaming:
+            if stream_options_supported:
+                stream_options = kwargs.get("stream_options")
+                if not isinstance(stream_options, dict):
+                    stream_options = {}
+                    kwargs["stream_options"] = stream_options
+                stream_options.setdefault("include_usage", True)
 
             if forced_streaming:
                 # Internally stream but collect into a non-streaming ModelResponse
@@ -696,17 +705,24 @@ class RotatingClient(
                 return await method(credential, http_client, **kwargs)
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
-                    lib_logger.warning(
-                        f"Rate limited on credential {mask_credential(credential)} "
-                        f"for {provider_name}.{method_name}, trying next"
-                    )
+                    if lib_logger.isEnabledFor(logging.WARNING):
+                        lib_logger.warning(
+                            "Rate limited on credential %s for %s.%s, trying next",
+                            mask_credential(credential),
+                            provider_name,
+                            method_name,
+                        )
                     continue
                 raise
             except (httpx.HTTPError, TimeoutError, ConnectionError, ValueError, RuntimeError) as e:
-                lib_logger.debug(
-                    f"Failed on credential for {provider_name}.{method_name}: {type(e).__name__}: {e}, "
-                    f"trying next"
-                )
+                if lib_logger.isEnabledFor(logging.DEBUG):
+                    lib_logger.debug(
+                        "Failed on credential for %s.%s: %s: %s, trying next",
+                        provider_name,
+                        method_name,
+                        type(e).__name__,
+                        e,
+                    )
                 continue
 
         raise RuntimeError(

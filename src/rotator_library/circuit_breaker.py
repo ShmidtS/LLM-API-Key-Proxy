@@ -50,7 +50,7 @@ class CircuitState(Enum):
     HALF_OPEN = "half_open" # Testing recovery
 
 
-@dataclass
+@dataclass(slots=True)
 class CircuitInfo:
     """Tracks circuit breaker state for a single provider."""
     state: CircuitState = CircuitState.CLOSED

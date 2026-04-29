@@ -51,6 +51,9 @@ def _cached_match_model_pattern(
 
 
 _MODEL_PATTERN_REGISTRY: dict[int, CompiledModelPatterns] = {}
+_PROVIDER_PREFIX_ALIASES = {
+    "nvidia_nim": "nvidia",
+}
 
 
 def compile_model_patterns(pattern_dict: dict[str, list[str]]) -> CompiledModelPatterns:
@@ -88,12 +91,10 @@ def match_model_pattern(
     patterns: CompiledModelPatterns,
     wildcard_return: bool = False,
 ) -> bool:
-    model_provider = model_id.split("/")[0]
+    model_provider, sep, provider_model_name = model_id.partition("/")
     if model_provider not in patterns:
         return False
-    try:
-        provider_model_name = model_id.split("/", 1)[1]
-    except IndexError:
+    if not sep:
         provider_model_name = model_id
     return _cached_match_model_pattern(
         provider,
@@ -140,10 +141,6 @@ def normalize_model_string(model: str) -> str:
     if not isinstance(model, str):
         return ""
     normalized = model.strip()
-    # Legacy provider prefix aliases
-    _PROVIDER_PREFIX_ALIASES = {
-        "nvidia_nim": "nvidia",
-    }
     slash_pos = normalized.find("/")
     if slash_pos > 0:
         prefix = normalized[:slash_pos]

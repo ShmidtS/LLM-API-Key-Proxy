@@ -129,7 +129,7 @@ class BufferedWriteRegistry(metaclass=SingletonMeta):
             retry_interval: Seconds between retry attempts
                            (default: DEFAULT_BUFFERED_WRITE_RETRY_INTERVAL)
         """
-        self._pending: Dict[str, Tuple[Any, Callable[[Any], str], Dict[str, Any]]] = {}
+        self._pending: Dict[str, Tuple[Any, Callable[[Any], Union[str, bytes]], Dict[str, Any]]] = {}
         self._retry_interval = retry_interval
         self._lock = threading.Lock()
         self._running = False
@@ -186,7 +186,7 @@ class BufferedWriteRegistry(metaclass=SingletonMeta):
         self,
         path: Union[str, Path],
         data: Any,
-        serializer: Callable[[Any], str],
+        serializer: Callable[[Any], Union[str, bytes]],
         options: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
@@ -204,7 +204,8 @@ class BufferedWriteRegistry(metaclass=SingletonMeta):
         path_str = str(Path(path).resolve())
         with self._lock:
             self._pending[path_str] = (data, serializer, options or {})
-            self._logger.debug(f"Registered pending write for {Path(path).name}")
+            if self._logger.isEnabledFor(logging.DEBUG):
+                self._logger.debug("Registered pending write for %s", Path(path).name)
 
     def unregister(self, path: Union[str, Path]) -> None:
         """
@@ -248,8 +249,10 @@ class BufferedWriteRegistry(metaclass=SingletonMeta):
                 tmp_fd, tmp_path = tempfile.mkstemp(
                     dir=path.parent, prefix=".tmp_", suffix=".json"
                 )
+                if isinstance(content, str):
+                    content = content.encode("utf-8")
                 with os.fdopen(tmp_fd, "wb") as f:
-                    f.write(content.encode("utf-8"))
+                    f.write(content)
                     tmp_fd = None
 
                 if options.get("secure_permissions") and os.name != "nt":
@@ -278,11 +281,13 @@ class BufferedWriteRegistry(metaclass=SingletonMeta):
                 with self._lock:
                     self._pending.pop(path_str, None)
 
-            self._logger.debug(f"Retry succeeded for {path.name}")
+            if self._logger.isEnabledFor(logging.DEBUG):
+                self._logger.debug("Retry succeeded for %s", path.name)
             return True
 
         except (OSError, PermissionError, IOError) as e:
-            self._logger.debug(f"Retry failed for {path.name}: {e}")
+            if self._logger.isEnabledFor(logging.DEBUG):
+                self._logger.debug("Retry failed for %s: %s", path.name, e)
             return False
 
     def flush_all(self) -> Dict[str, bool]:
@@ -311,7 +316,7 @@ class BufferedWriteRegistry(metaclass=SingletonMeta):
         if pending_count == 0:
             return
 
-        self._logger.info(f"Flushing {pending_count} pending write(s) on shutdown...")
+        self._logger.info("Flushing %s pending write(s) on shutdown...", pending_count)
         results = self.flush_all()
 
         succeeded = sum(1 for v in results.values() if v)
@@ -319,13 +324,13 @@ class BufferedWriteRegistry(metaclass=SingletonMeta):
 
         if failed > 0:
             self._logger.warning(
-                f"Shutdown flush: {succeeded} succeeded, {failed} failed"
+                "Shutdown flush: %s succeeded, %s failed", succeeded, failed
             )
             for path_str, success in results.items():
                 if not success:
-                    self._logger.warning(f"  Failed to save: {Path(path_str).name}")
+                    self._logger.warning("  Failed to save: %s", Path(path_str).name)
         else:
-            self._logger.info(f"Shutdown flush: all {succeeded} write(s) succeeded")
+            self._logger.info("Shutdown flush: all %s write(s) succeeded", succeeded)
 
     def get_pending_count(self) -> int:
         """Get the number of pending writes."""
@@ -380,7 +385,7 @@ class ResilientStateWriter:
         path: Union[str, Path],
         logger: logging.Logger,
         retry_interval: float = DEFAULT_BUFFERED_WRITE_RETRY_INTERVAL,
-        serializer: Optional[Callable[[Any], str]] = None,
+        serializer: Optional[Callable[[Any], Union[str, bytes]]] = None,
     ):
         """
         Initialize the resilient writer.
@@ -395,7 +400,7 @@ class ResilientStateWriter:
         self._logger = logger
         self.retry_interval = retry_interval
         self._serializer = serializer or (
-            lambda d: orjson.dumps(d, option=orjson.OPT_INDENT_2).decode()
+            lambda d: orjson.dumps(d, option=orjson.OPT_INDENT_2)
         )
 
         self._current_state: Optional[Any] = None
@@ -483,8 +488,10 @@ class ResilientStateWriter:
                     dir=self.path.parent, prefix=".tmp_", suffix=".json"
                 )
 
+                if isinstance(content, str):
+                    content = content.encode("utf-8")
                 with os.fdopen(tmp_fd, "wb") as f:
-                    f.write(content.encode("utf-8"))
+                    f.write(content)
                     tmp_fd = None  # fdopen closes the fd
 
                 await _async_resilient_os_replace(tmp_path, self.path)
@@ -596,8 +603,8 @@ def safe_write_json(
     path = Path(path)
 
     # Create serializer function that matches the requested formatting
-    def serializer(d: Any) -> str:
-        return orjson.dumps(d, option=orjson.OPT_INDENT_2).decode()
+    def serializer(d: Any) -> bytes:
+        return orjson.dumps(d, option=orjson.OPT_INDENT_2)
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -610,8 +617,10 @@ def safe_write_json(
                 tmp_fd, tmp_path = tempfile.mkstemp(
                     dir=path.parent, prefix=".tmp_", suffix=".json"
                 )
+                if isinstance(content, str):
+                    content = content.encode("utf-8")
                 with os.fdopen(tmp_fd, "wb") as f:
-                    f.write(content.encode("utf-8"))
+                    f.write(content)
                     tmp_fd = None
 
                 if secure_permissions and os.name != "nt":
@@ -634,7 +643,9 @@ def safe_write_json(
                     except OSError as e:
                         logger.debug("I/O operation failed: %s", e)
         else:
-            with open(path, "w", encoding="utf-8") as f:
+            if isinstance(content, str):
+                content = content.encode("utf-8")
+            with open(path, "wb") as f:
                 f.write(content)
 
             if secure_permissions and os.name != "nt":
@@ -661,7 +672,8 @@ def safe_write_json(
                 serializer,
                 {"secure_permissions": secure_permissions},
             )
-            logger.debug(f"Buffered {path.name} for retry on next interval or shutdown")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Buffered %s for retry on next interval or shutdown", path.name)
 
         return False
 
@@ -692,8 +704,8 @@ async def async_safe_write_json(
     """
     path = Path(path)
 
-    def serializer(d: Any) -> str:
-        return orjson.dumps(d, option=orjson.OPT_INDENT_2).decode()
+    def serializer(d: Any) -> bytes:
+        return orjson.dumps(d, option=orjson.OPT_INDENT_2)
 
     def write_json_sync() -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -706,8 +718,10 @@ async def async_safe_write_json(
                 tmp_fd, tmp_path = tempfile.mkstemp(
                     dir=path.parent, prefix=".tmp_", suffix=".json"
                 )
+                if isinstance(content, str):
+                    content = content.encode("utf-8")
                 with os.fdopen(tmp_fd, "wb") as f:
-                    f.write(content.encode("utf-8"))
+                    f.write(content)
                     tmp_fd = None
 
                 if secure_permissions and os.name != "nt":
@@ -730,7 +744,9 @@ async def async_safe_write_json(
                     except OSError as e:
                         logger.debug("I/O operation failed: %s", e)
         else:
-            with open(path, "w", encoding="utf-8") as f:
+            if isinstance(content, str):
+                content = content.encode("utf-8")
+            with open(path, "wb") as f:
                 f.write(content)
 
             if secure_permissions and os.name != "nt":
@@ -758,7 +774,8 @@ async def async_safe_write_json(
                 serializer,
                 {"secure_permissions": secure_permissions},
             )
-            logger.debug(f"Buffered {path.name} for retry on next interval or shutdown")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Buffered %s for retry on next interval or shutdown", path.name)
 
         return False
 

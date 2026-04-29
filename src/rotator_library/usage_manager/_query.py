@@ -2,10 +2,16 @@
 # Copyright (c) 2026 ShmidtS
 
 from ._constants import lib_logger, MAX_CACHE_ENTRIES
+import re
 import time
 from collections import OrderedDict
 from typing import Optional, Dict, List, Any
 from ..utils.model_utils import get_or_create_provider_instance
+
+
+_OAUTH_PATH_RE = re.compile(r"/([a-z_]+)_oauth_\d+\.json$", re.IGNORECASE)
+_OAUTH_CREDS_RE = re.compile(r"oauth_creds/([a-z_]+)_", re.IGNORECASE)
+_OAUTH_FILENAME_RE = re.compile(r"([a-z_]+)_oauth_\d+\.json$", re.IGNORECASE)
 
 
 class UsageManagerQueryMixin:
@@ -28,32 +34,30 @@ class UsageManagerQueryMixin:
         Returns:
             Provider name string or None if cannot be determined
         """
-        import re
-
         # Pattern: env:// URI format (e.g., "env://antigravity/1" -> "antigravity")
         if credential.startswith("env://"):
-            parts = credential[6:].split("/")  # Remove "env://" prefix
-            if parts and parts[0]:
-                return parts[0].lower()
+            provider = credential[6:].partition("/")[0]
+            if provider:
+                return provider.lower()
             # Malformed env:// URI (empty provider name)
-            lib_logger.warning(f"Malformed env:// credential URI: {credential}")
+            lib_logger.warning("Malformed env:// credential URI: %s", credential)
             return None
 
         # Normalize path separators
         normalized = credential.replace("\\", "/")
 
         # Pattern: path ending with {provider}_oauth_{number}.json
-        match = re.search(r"/([a-z_]+)_oauth_\d+\.json$", normalized, re.IGNORECASE)
+        match = _OAUTH_PATH_RE.search(normalized)
         if match:
             return match.group(1).lower()
 
         # Pattern: oauth_creds/{provider}_...
-        match = re.search(r"oauth_creds/([a-z_]+)_", normalized, re.IGNORECASE)
+        match = _OAUTH_CREDS_RE.search(normalized)
         if match:
             return match.group(1).lower()
 
         # Pattern: filename only {provider}_oauth_{number}.json (no path)
-        match = re.match(r"([a-z_]+)_oauth_\d+\.json$", normalized, re.IGNORECASE)
+        match = _OAUTH_FILENAME_RE.match(normalized)
         if match:
             return match.group(1).lower()
 
@@ -453,8 +457,16 @@ class UsageManagerQueryMixin:
         # Normalize model name for consistent lookup (data is stored under normalized names)
         model = self._normalize_model_for_tracking(key, model)
 
-        key_data = self._usage_data.get(key, {})
-        model_data = key_data.get("models", {}).get(model, {})
+        usage_data = self._usage_data
+        key_data = usage_data.get(key)
+        if not key_data:
+            return "quota: 0"
+        models = key_data.get("models")
+        if not models:
+            return "quota: 0"
+        model_data = models.get(model)
+        if not model_data:
+            return "quota: 0"
 
         request_count = model_data.get("request_count", 0)
         max_requests = model_data.get("quota_max_requests")
@@ -520,17 +532,33 @@ class UsageManagerQueryMixin:
         # Normalize model name for consistent lookup (data is stored under normalized names)
         model = self._normalize_model_for_tracking(key, model)
 
-        key_data = self._usage_data.get(key, {})
+        usage_data = self._usage_data
+        key_data = usage_data.get(key)
+        if not key_data:
+            return 0
         reset_mode = self._get_reset_mode(key)
 
         if reset_mode == "per_model":
             # New per-model structure: key_data["models"][model][field]
-            return key_data.get("models", {}).get(model, {}).get(field, 0)
+            models = key_data.get("models")
+            if not models:
+                return 0
+            model_data = models.get(model)
+            if not model_data:
+                return 0
+            return model_data.get(field, 0)
         else:
             # Legacy structure: key_data["daily"]["models"][model][field]
-            return (
-                key_data.get("daily", {}).get("models", {}).get(model, {}).get(field, 0)
-            )
+            daily = key_data.get("daily")
+            if not daily:
+                return 0
+            models = daily.get("models")
+            if not models:
+                return 0
+            model_data = models.get(model)
+            if not model_data:
+                return 0
+            return model_data.get(field, 0)
 
     async def get_available_credentials_for_model(
         self, credentials: List[str], model: str
@@ -553,28 +581,33 @@ class UsageManagerQueryMixin:
         now = time.time()
         available = []
 
+        usage_data = self._usage_data
+        normalize = self._normalize_model_for_tracking
         async with self._data_lock.read():
             for key in credentials:
-                key_data = self._usage_data.get(key, {})
+                key_data = usage_data.get(key)
+                if key_data is None:
+                    continue
 
                 # Skip if key-level cooldown is active
-                if (key_data.get("key_cooldown_until") or 0) > now:
+                key_cooldown_until = key_data.get("key_cooldown_until") or 0
+                if key_cooldown_until > now:
                     continue
 
                 # Normalize model name for consistent cooldown lookup
                 # (cooldowns are stored under normalized names by record_failure)
                 # For providers without normalize_model_for_tracking (non-Antigravity),
                 # this returns the model unchanged, so cooldown lookups work as before.
-                normalized_model = self._normalize_model_for_tracking(key, model)
+                normalized_model = normalize(key, model)
 
                 # Skip if model-specific cooldown is active
-                model_cooldowns = key_data.get("model_cooldowns", {})
-                model_cd = model_cooldowns.get(normalized_model) or 0
-                if model_cd == 0:
+                model_cooldowns = key_data.get("model_cooldowns")
+                model_cd = model_cooldowns.get(normalized_model) if model_cooldowns else 0
+                if model_cd == 0 and model_cooldowns:
                     model_cd = self._check_quota_group_cooldown(
                         key, model_cooldowns, normalized_model
                     )
-                if model_cd > now:
+                if (model_cd or 0) > now:
                     continue
 
                 # Skip if quota confirmed exhausted via background refresh
@@ -617,22 +650,24 @@ class UsageManagerQueryMixin:
         not_on_cooldown = []
 
         # First pass: check cooldowns
+        usage_data = self._usage_data
+        normalize = self._normalize_model_for_tracking
         async with self._data_lock.read():
             for key in credentials:
-                key_data = self._usage_data.get(key, {})
-                model_cooldowns = key_data.get("model_cooldowns", {})
+                key_data = usage_data.get(key)
+                if key_data is None:
+                    continue
+                model_cooldowns = key_data.get("model_cooldowns")
 
                 # Check if key-level or model-level cooldown is active
-                normalized_model = self._normalize_model_for_tracking(key, model)
-                model_cd = model_cooldowns.get(normalized_model) or 0
-                if model_cd == 0:
+                normalized_model = normalize(key, model)
+                model_cd = model_cooldowns.get(normalized_model) if model_cooldowns else 0
+                if model_cd == 0 and model_cooldowns:
                     model_cd = self._check_quota_group_cooldown(
                         key, model_cooldowns, normalized_model
                     )
-                is_on_cooldown = (
-                    (key_data.get("key_cooldown_until") or 0) > now
-                    or model_cd > now
-                )
+                key_cooldown_until = key_data.get("key_cooldown_until") or 0
+                is_on_cooldown = key_cooldown_until > now or (model_cd or 0) > now
 
                 if is_on_cooldown:
                     on_cooldown += 1
@@ -712,7 +747,7 @@ class UsageManagerQueryMixin:
                         key, model_cooldowns_map, normalized_model
                     )
 
-                if model_cooldown > now:
+                if (model_cooldown or 0) > now:
                     if soonest_end is None or model_cooldown < soonest_end:
                         soonest_end = model_cooldown
 

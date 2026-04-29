@@ -198,7 +198,7 @@ def anthropic_to_openai_messages(
             # Handle content blocks
             openai_content: List[Dict[str, Any]] = []
             tool_calls: List[Dict[str, Any]] = []
-            reasoning_content: str = ""
+            reasoning_parts: list[str] = []
             thinking_signature: str = ""
 
             for block in content:
@@ -256,7 +256,7 @@ def anthropic_to_openai_messages(
                         ):
                             thinking_text: str = block.get("thinking", "")
                             if thinking_text:
-                                reasoning_content += thinking_text
+                                reasoning_parts.append(thinking_text)
                             thinking_signature = signature
                     elif block_type == "redacted_thinking":
                         signature: str = block.get("signature", "")
@@ -325,10 +325,15 @@ def anthropic_to_openai_messages(
 
                             # If we only have text parts, join them as a string for compatibility
                             # Otherwise use the array format for multimodal content
-                            if all(p.get("type") == "text" for p in tool_content_parts):
-                                combined_text: str = " ".join(
-                                    p.get("text", "") for p in tool_content_parts
-                                )
+                            tool_texts: List[str] = []
+                            all_text = True
+                            for p in tool_content_parts:
+                                if p.get("type") != "text":
+                                    all_text = False
+                                    break
+                                tool_texts.append(p.get("text", ""))
+                            if all_text and tool_texts:
+                                combined_text: str = " ".join(tool_texts)
                                 openai_messages.append(
                                     {
                                         "role": "tool",
@@ -368,6 +373,7 @@ def anthropic_to_openai_messages(
                         continue  # Don't add to current message
 
             # Build the message
+            reasoning_content: str = "".join(reasoning_parts) if reasoning_parts else ""
             if tool_calls:
                 # Assistant message with tool calls
                 msg_dict: Dict[str, Any] = {"role": role}
@@ -528,10 +534,14 @@ def openai_to_anthropic_response(openai_response: Dict[str, Any], original_model
         except _json_decode_error:
             input_data = {}
 
+        tc_id = tc.get("id")
+        if tc_id is None:
+            tc_id = f"toolu_{uuid.uuid4().hex[:12]}"
+
         content_blocks.append(
             {
                 "type": "tool_use",
-                "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:12]}"),
+                "id": tc_id,
                 "name": func.get("name", ""),
                 "input": input_data,
             }
