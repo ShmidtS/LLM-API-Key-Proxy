@@ -54,13 +54,18 @@ class LifespanConfig:
 # --- Extracted helper functions ---
 
 
+_WIN_SOCKET_ERRORS = frozenset({64, 121})  # ERROR_NETNAME_DELETED, ERROR_SEM_TIMEOUT
+
+
 def suppress_connection_reset(loop, original_handler):
-    """Create a handler that suppresses noisy ConnectionResetError on Windows.
+    """Create a handler that suppresses noisy transport-level errors on Windows.
 
     High-TPS providers (fireworks, friendli) forcefully close connections
     after streaming, causing socket.shutdown() to throw in cleanup callbacks.
+    Also suppresses WinError 64/121 (network name deleted / semaphore timeout)
+    that occur when a client disconnects during accept().
     Scope: only suppress transport-level errors (proactor/send/socket context),
-    not arbitrary business logic errors that happen to be ConnectionResetError.
+    not arbitrary business logic errors that happen to match the exception type.
     """
 
     def _handler(loop, context):
@@ -76,7 +81,13 @@ def suppress_connection_reset(loop, original_handler):
                 or "fatal write error" in context_msg
                 or "write error" in context_msg
             ):
-                return  # Disconnected client / transport cleanup
+                return
+        # OSError with winerror 64 (ERROR_NETNAME_DELETED) or 121 (ERROR_SEM_TIMEOUT)
+        # occurs when a client disconnects during accept() on Windows proactor loop.
+        if isinstance(exc, OSError):
+            winerr = getattr(exc, "winerror", None)
+            if winerr in _WIN_SOCKET_ERRORS:
+                return
         if original_handler:
             original_handler(loop, context)
         else:
