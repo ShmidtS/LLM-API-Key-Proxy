@@ -199,7 +199,7 @@ class TransactionLogger:
             request_data: The request data dict (messages, model, etc.)
             filename: Custom filename for the log file (default: request.json)
         """
-        if not self.enabled or not self._dir_available:
+        if not self.enabled:
             return
 
         self.streaming = request_data.get("stream", False)
@@ -218,7 +218,7 @@ class TransactionLogger:
         Args:
             chunk: The streaming chunk data
         """
-        if not self.enabled or not self._dir_available:
+        if not self.enabled:
             return
 
         log_entry = {
@@ -244,7 +244,7 @@ class TransactionLogger:
             headers: Optional response headers
             filename: Custom filename for the log file (default: response.json)
         """
-        if not self.enabled or not self._dir_available:
+        if not self.enabled:
             return
 
         end_time = time.time()

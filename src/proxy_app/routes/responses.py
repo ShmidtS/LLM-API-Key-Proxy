@@ -12,6 +12,7 @@ from fastapi import APIRouter, Request, Depends
 from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key
 from proxy_app.streaming import streaming_response_wrapper, make_sse_response
+from proxy_app.detailed_logger import RawIOLogger
 from proxy_app.routes._helpers import log_request_to_console
 from proxy_app.routes.error_handler import handle_route_errors
 from rotator_library.utils.json_utils import sse_data_event
@@ -73,6 +74,11 @@ async def create_response(
     request_data = orjson.loads(await request.body())
     chat_request_data = _responses_request_to_chat_request(request_data)
 
+    enable_raw_logging = getattr(request.app.state, "enable_raw_logging", False)
+    raw_logger = RawIOLogger() if enable_raw_logging else None
+    if raw_logger:
+        await raw_logger.log_request(headers=request.headers, body=request_data)
+
     logger.info(
         "Responses request normalized: model=%s stream=%s max_tokens=%s max_completion_tokens=%s has_max_output_tokens=%s tools=%s input_type=%s",
         chat_request_data.get("model"),
@@ -92,21 +98,36 @@ async def create_response(
 
     is_streaming = chat_request_data.get("stream", False)
 
-    if is_streaming:
-        response_generator = client.acompletion(request=request, **chat_request_data)
-        chat_sse_stream = streaming_response_wrapper(request, response_generator)
-        return make_sse_response(
-            _chat_sse_to_responses_sse(
-                chat_sse_stream,
-                model=chat_request_data.get("model", ""),
+    try:
+        if is_streaming:
+            response_generator = client.acompletion(request=request, **chat_request_data)
+            chat_sse_stream = streaming_response_wrapper(request, response_generator, raw_logger)
+            return make_sse_response(
+                _chat_sse_to_responses_sse(
+                    chat_sse_stream,
+                    model=chat_request_data.get("model", ""),
+                )
             )
-        )
 
-    response = await client.acompletion(request=request, **chat_request_data)
-    return _chat_completion_to_response(
-        response,
-        model=chat_request_data.get("model", ""),
-    )
+        response = await client.acompletion(request=request, **chat_request_data)
+        if raw_logger:
+            response_headers = response.headers if hasattr(response, "headers") else None
+            status_code = response.status_code if hasattr(response, "status_code") else 200
+            raw_logger.log_final_response(
+                status_code=status_code,
+                headers=response_headers,
+                body=response.model_dump(),
+            )
+        return _chat_completion_to_response(
+            response,
+            model=chat_request_data.get("model", ""),
+        )
+    except Exception:
+        if getattr(request.app.state, "enable_request_logging", False) and raw_logger:
+            raw_logger.log_final_response(
+                status_code=500, headers=None, body={"error": "Internal server error"}
+            )
+        raise
 
 
 def _responses_request_to_chat_request(request_data: dict[str, Any]) -> dict[str, Any]:
@@ -380,6 +401,15 @@ def _text_config_to_response_format(text_config: Any) -> dict[str, Any] | None:
     format_type = text_format.get("type")
     if format_type in (None, "text"):
         return None
+
+    if format_type == "json_schema":
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                k: v for k, v in text_format.items() if k not in ("type",)
+            },
+        }
+
     return text_format
 
 
@@ -400,18 +430,19 @@ async def _chat_sse_to_responses_sse(
     state = _new_responses_stream_state(model)
 
     try:
-        async for event in chat_sse_stream:
-            payload = _parse_sse_payload(event)
-            if payload is None:
-                continue
-            if payload == "[DONE]":
-                for response_event in _complete_response_stream_events(state):
-                    yield _responses_sse_event(response_event)
-                yield b"data: [DONE]\n\n"
-                return
+        async for raw_chunk in chat_sse_stream:
+            for event in _split_sse_blocks(raw_chunk):
+                payload = _parse_sse_payload(event)
+                if payload is None:
+                    continue
+                if payload == "[DONE]":
+                    for response_event in _complete_response_stream_events(state):
+                        yield _responses_sse_event(response_event)
+                    yield b"data: [DONE]\n\n"
+                    return
 
-            for response_event in _chat_chunk_to_response_stream_events(payload, state):
-                yield _responses_sse_event(response_event)
+                for response_event in _chat_chunk_to_response_stream_events(payload, state):
+                    yield _responses_sse_event(response_event)
 
         for response_event in _complete_response_stream_events(state):
             yield _responses_sse_event(response_event)
@@ -426,6 +457,16 @@ async def _chat_sse_to_responses_sse(
                 await chat_sse_stream.aclose()
             except Exception as e:
                 logger.debug("Error closing SSE stream: %s", e)
+
+
+def _split_sse_blocks(raw: str | bytes) -> list[str]:
+    """Split a potentially concatenated SSE chunk into individual event blocks.
+
+    The streaming wrapper may buffer and flush multiple ``data: ...`` events
+    in a single yield. Each SSE event is delimited by a blank line (``\\n\\n``).
+    """
+    text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+    return [block.strip() for block in text.split("\n\n") if block.strip()]
 
 
 def _parse_sse_payload(event: str | bytes) -> dict[str, Any] | str | None:
