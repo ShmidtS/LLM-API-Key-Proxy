@@ -4,6 +4,8 @@ fastapi
 uvicorn
 # For loading environment variables from a .env file
 python-dotenv
+# Required by FastAPI routes that accept form-data uploads
+python-multipart
 
 # Installs the local rotator_library in editable mode
 -e src/rotator_library
@@ -13,8 +15,10 @@ litellm
 
 cachetools
 httpx
+h2
 aiofiles
 aiohttp
+orjson
 
 colorlog
 

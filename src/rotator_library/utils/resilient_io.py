@@ -17,6 +17,7 @@ Provides three main patterns:
 
 import asyncio
 import atexit
+import errno
 import orjson
 import os
 import tempfile
@@ -29,6 +30,33 @@ from typing import Any, Callable, Dict, Optional, Tuple, Union
 from .singleton import SingletonMeta
 
 _logger = logging.getLogger("rotator_library.resilient_io")
+
+
+def _is_bind_mount_replace_error(exc: OSError) -> bool:
+    """Return True when Linux rejects replacing a Docker single-file bind mount."""
+    return os.name != "nt" and getattr(exc, "errno", None) == errno.EBUSY
+
+
+def _write_bytes_direct(
+    path: Union[str, Path],
+    content: Union[str, bytes],
+    secure_permissions: bool = False,
+) -> None:
+    """Fallback writer for file targets that cannot be atomically replaced."""
+    path = Path(path)
+    if isinstance(content, str):
+        content = content.encode("utf-8")
+
+    with open(path, "wb") as f:
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+
+    if secure_permissions and os.name != "nt":
+        try:
+            os.chmod(path, 0o600)
+        except (OSError, AttributeError) as e:
+            _logger.debug("Failed to set secure permissions: %s", e)
 
 # =============================================================================
 # WINDOWS RESILIENT os.replace()
@@ -261,8 +289,15 @@ class BufferedWriteRegistry(metaclass=SingletonMeta):
                     except (OSError, AttributeError) as e:
                         self._logger.debug("Failed to set secure permissions: %s", e)
 
-                _resilient_os_replace(tmp_path, path)
-                tmp_path = None
+                try:
+                    _resilient_os_replace(tmp_path, path)
+                    tmp_path = None
+                except OSError as e:
+                    if not _is_bind_mount_replace_error(e):
+                        raise
+                    _write_bytes_direct(
+                        path, content, options.get("secure_permissions", False)
+                    )
 
             finally:
                 if tmp_fd is not None:
@@ -494,8 +529,13 @@ class ResilientStateWriter:
                     f.write(content)
                     tmp_fd = None  # fdopen closes the fd
 
-                await _async_resilient_os_replace(tmp_path, self.path)
-                tmp_path = None
+                try:
+                    await _async_resilient_os_replace(tmp_path, self.path)
+                    tmp_path = None
+                except OSError as e:
+                    if not _is_bind_mount_replace_error(e):
+                        raise
+                    await asyncio.to_thread(_write_bytes_direct, self.path, content)
 
             finally:
                 # Cleanup on failure
@@ -629,8 +669,13 @@ def safe_write_json(
                     except (OSError, AttributeError) as e:
                         _logger.debug("Failed to set secure permissions: %s", e)
 
-                _resilient_os_replace(tmp_path, path)
-                tmp_path = None
+                try:
+                    _resilient_os_replace(tmp_path, path)
+                    tmp_path = None
+                except OSError as e:
+                    if not _is_bind_mount_replace_error(e):
+                        raise
+                    _write_bytes_direct(path, content, secure_permissions)
             finally:
                 if tmp_fd is not None:
                     try:
@@ -730,8 +775,13 @@ async def async_safe_write_json(
                     except (OSError, AttributeError) as e:
                         _logger.debug("Failed to set secure permissions: %s", e)
 
-                _resilient_os_replace(tmp_path, path)
-                tmp_path = None
+                try:
+                    _resilient_os_replace(tmp_path, path)
+                    tmp_path = None
+                except OSError as e:
+                    if not _is_bind_mount_replace_error(e):
+                        raise
+                    _write_bytes_direct(path, content, secure_permissions)
             finally:
                 if tmp_fd is not None:
                     try:

@@ -46,4 +46,4 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONPATH=/app/src
 
 # Default command - runs proxy with the correct PYTHONPATH
-CMD ["python", "src/proxy_app/main.py", "--port", "8000"]
+CMD ["python", "src/proxy_app/main.py", "--host", "0.0.0.0", "--port", "8000"]
