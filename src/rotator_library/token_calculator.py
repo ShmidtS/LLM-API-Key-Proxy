@@ -24,7 +24,12 @@ logger = logging.getLogger("rotator_library")
 # Models that require `max_completion_tokens` exclusively — sending both
 # `max_tokens` and `max_completion_tokens` produces an upstream 400.
 _MAX_COMPLETION_TOKENS_MODEL_PREFIXES: tuple = (
-    "openai/", "gpt-5", "gpt-image", "o1-", "o3-", "o4-",
+    "openai/",
+    "gpt-5",
+    "gpt-image",
+    "o1-",
+    "o3-",
+    "o4-",
 )
 
 
@@ -41,8 +46,11 @@ def _normalize_max_tokens_keys(payload: dict, model: str) -> None:
         logger.debug(
             "Normalized max_tokens keys for model %s: dropped max_tokens=%s, "
             "kept max_completion_tokens=%s",
-            model, dropped, payload.get("max_completion_tokens"),
+            model,
+            dropped,
+            payload.get("max_completion_tokens"),
         )
+
 
 # Default context window sizes for common models (fallback when registry unavailable)
 DEFAULT_CONTEXT_WINDOWS: Dict[str, int] = {
@@ -97,9 +105,6 @@ DEFAULT_SAFETY_BUFFER = 1000
 
 # Minimum max_tokens to request (avoid degenerate cases)
 MIN_MAX_TOKENS = 256
-
-# Maximum percentage of context window to use for output (prevent edge cases)
-MAX_OUTPUT_RATIO = 0.75
 
 # Maximum percentage of context window for input (leave room for output)
 # If input exceeds this, messages should be trimmed or request rejected
@@ -241,6 +246,28 @@ def count_input_tokens(
     return total
 
 
+def get_max_output_tokens(model: str, registry=None) -> Optional[int]:
+    """
+    Get the maximum output tokens for a model from the provider registry.
+
+    Args:
+        model: Full model identifier (e.g., "openai/gpt-5.5")
+        registry: ModelRegistry instance for lookups
+
+    Returns:
+        Maximum output tokens, or None if unknown
+    """
+    if registry is not None:
+        try:
+            metadata = registry.lookup(model)
+            if metadata and metadata.limits.max_output:
+                return metadata.limits.max_output
+        except (ValueError, KeyError, TypeError, Exception) as e:
+            logger.debug(f"Registry lookup failed for {model}: {e}")
+
+    return None
+
+
 def get_provider_safety_buffer(model: str) -> int:
     """
     Get provider-specific safety buffer based on model prefix.
@@ -326,9 +353,18 @@ def calculate_max_tokens(
         )
         return MIN_MAX_TOKENS, "input_exceeds_context_minimal_output"
 
-    # Apply maximum output ratio
-    max_allowed_by_ratio = int(context_window * MAX_OUTPUT_RATIO)
-    capped_available = min(available_for_output, max_allowed_by_ratio)
+    capped_available = available_for_output
+
+    # Cap by model's actual max output tokens from provider registry
+    model_max_output = get_max_output_tokens(model, registry)
+    if model_max_output is not None and capped_available > model_max_output:
+        logger.debug(
+            "Capping max_tokens from %d to model max_output=%d for %s",
+            capped_available,
+            model_max_output,
+            model,
+        )
+        capped_available = model_max_output
 
     # If user requested a specific value, honor it if valid
     if requested_max_tokens is not None:
@@ -423,5 +459,3 @@ def adjust_max_tokens_in_payload(
     _normalize_max_tokens_keys(payload, model)
 
     return payload, False
-
-    return payload

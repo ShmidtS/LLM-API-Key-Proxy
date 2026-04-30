@@ -32,6 +32,19 @@ FIREWORKS_UNSUPPORTED_PARAMS: Set[str] = {
 
 _GEMINI_THINKING_MODELS = frozenset({"gemini/gemini-2.5-pro", "gemini/gemini-2.5-flash"})
 
+# Models that don't support the temperature parameter at all.
+# OpenAI returns 400 "Only the default (1) value is supported" for these.
+_NO_TEMPERATURE_MODEL_PREFIXES = (
+    "openai/gpt-5",
+    "openai/o1-",
+    "openai/o3-",
+    "openai/o4-",
+    "gpt-5",
+    "o1-",
+    "o3-",
+    "o4-",
+)
+
 
 def sanitize_request_payload(
     payload: Dict[str, Any],
@@ -88,6 +101,13 @@ def sanitize_request_payload(
         for param in FIREWORKS_UNSUPPORTED_PARAMS:
             if param in payload:
                 del payload[param]
+
+    # Strip temperature for models that don't support it at all (400 error)
+    if "temperature" in payload:
+        for prefix in _NO_TEMPERATURE_MODEL_PREFIXES:
+            if normalized_model.startswith(prefix):
+                del payload["temperature"]
+                break
 
     # Auto-adjust max_tokens to prevent context window overflow
     should_reject = False

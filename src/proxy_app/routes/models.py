@@ -117,6 +117,72 @@ async def model_info_stats(
     return {"error": "Model info service not initialized"}
 
 
+PROXY_VERSION = "1.16"
+
+
+# --- Compatibility endpoints for OpenAI/Ollama/LM Studio clients ---
+
+@router.get("/api/v1/models")
+async def list_models_api_v1(
+    request: Request,
+    client: RotatingClient = Depends(get_rotating_client),
+    _=Depends(verify_api_key),
+    enriched: bool = True,
+) -> Response:
+    """OpenAI-compatible /api/v1/models (LM Studio and similar clients)."""
+    return await list_models(request, client, _, enriched=enriched)
+
+
+@router.get("/api/tags")
+async def list_models_ollama(
+    request: Request,
+    client: RotatingClient = Depends(get_rotating_client),
+    _=Depends(verify_api_key),
+) -> Response:
+    """Ollama-compatible /api/tags endpoint."""
+    model_ids = await client.get_all_available_models(grouped=False)
+    ollama_models = [
+        {
+            "name": mid,
+            "model": mid,
+            "modified_at": "",
+            "size": 0,
+            "digest": "",
+            "details": {
+                "parent_model": "",
+                "format": "gguf",
+                "family": mid.split("/")[0] if "/" in mid else "unknown",
+                "families": [],
+                "parameter_size": "",
+                "quantization_level": "",
+            },
+        }
+        for mid in model_ids
+    ]
+    return Response(
+        content=orjson.dumps({"models": ollama_models}),
+        media_type="application/json",
+    )
+
+
+@router.get("/v1/props")
+async def server_props_v1(_=Depends(verify_api_key)) -> Dict[str, Any]:
+    """LM Studio /v1/props endpoint."""
+    return {"version": PROXY_VERSION, "mode": "llm", "gpu_devices": []}
+
+
+@router.get("/props")
+async def server_props(_=Depends(verify_api_key)) -> Dict[str, Any]:
+    """LM Studio /props endpoint."""
+    return {"version": PROXY_VERSION, "mode": "llm", "gpu_devices": []}
+
+
+@router.get("/version")
+async def server_version() -> Dict[str, Any]:
+    """Server version endpoint."""
+    return {"version": PROXY_VERSION}
+
+
 @router.get("/v1/providers")
 async def list_providers(_=Depends(verify_api_key)) -> List[str]:
     """
