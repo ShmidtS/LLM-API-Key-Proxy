@@ -147,6 +147,37 @@ class ModelsMixin:
     async def get_available_models(self, provider: str) -> List[str]:
         """Returns a list of available models for a specific provider, with caching."""
         lib_logger.info("Getting available models for provider: %s", provider)
+        provider_instance = self._get_provider_instance(provider)
+
+        def get_static_fallback() -> List[str]:
+            static_fallback = []
+            try:
+                static_fallback = self.model_definitions.get_all_provider_models(provider)
+            except (OSError, IOError, ValueError) as e:
+                lib_logger.error(
+                    "Failed to get static models for provider %s: %s: %s",
+                    provider,
+                    type(e).__name__,
+                    e,
+                )
+                static_fallback = []
+            if (
+                not static_fallback
+                and provider_instance
+                and hasattr(provider_instance, "get_static_models")
+            ):
+                try:
+                    static_fallback = provider_instance.get_static_models()
+                except (OSError, IOError, ValueError, TypeError) as e:
+                    lib_logger.error(
+                        "Failed to get provider static models for %s: %s: %s",
+                        provider,
+                        type(e).__name__,
+                        e,
+                    )
+                    static_fallback = []
+            return static_fallback
+
         lock = await self._lock_manager.get_lock(provider)
         async with lock:
             if provider in self._model_list_cache:
@@ -158,7 +189,13 @@ class ModelsMixin:
             credentials_for_provider = self.all_credentials.get(provider)
             if not credentials_for_provider:
                 lib_logger.warning("No credentials for provider: %s", provider)
-                return []
+                static_fallback = get_static_fallback()
+                lib_logger.warning(
+                    "No credentials for provider %s; using %d static models",
+                    provider,
+                    len(static_fallback),
+                )
+                return static_fallback
 
             shuffled_credentials = list(credentials_for_provider)
             offset = self._cred_offset.get(provider, 0)
@@ -167,7 +204,6 @@ class ModelsMixin:
                 shuffled_credentials[offset:] + shuffled_credentials[:offset]
             )
 
-        provider_instance = self._get_provider_instance(provider)
         if provider_instance:
             # For providers with hardcoded models (like gemini_cli), we only need to call once.
             # For others, we might need to try multiple keys if one is invalid.
@@ -237,32 +273,7 @@ class ModelsMixin:
 
         # Discovery failure is a degradation (static models still usable),
         # not a hard failure; downgrade to warning and include static count.
-        static_fallback = []
-        try:
-            static_fallback = self.model_definitions.get_all_provider_models(provider)
-        except (OSError, IOError, ValueError) as e:
-            lib_logger.error(
-                "Failed to get static models for provider %s: %s: %s",
-                provider,
-                type(e).__name__,
-                e,
-            )
-            static_fallback = []
-        if (
-            not static_fallback
-            and provider_instance
-            and hasattr(provider_instance, "get_static_models")
-        ):
-            try:
-                static_fallback = provider_instance.get_static_models()
-            except (OSError, IOError, ValueError, TypeError) as e:
-                lib_logger.error(
-                    "Failed to get provider static models for %s: %s: %s",
-                    provider,
-                    type(e).__name__,
-                    e,
-                )
-                static_fallback = []
+        static_fallback = get_static_fallback()
         lib_logger.warning(
             "Failed to get models for provider %s after trying all credentials; "
             "provider unreachable, using %d static models",

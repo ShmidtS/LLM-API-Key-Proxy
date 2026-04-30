@@ -208,10 +208,11 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
                 data = response.json()
             except (json.JSONDecodeError, ValueError) as e:
                 lib_logger.warning(
-                    "Invalid JSON from ZAI models: %s, body=%s",
+                    "Invalid JSON from ZAI models: %s, status=%s",
                     e,
-                    response.text[:200],
+                    response.status_code,
                 )
+                lib_logger.debug("Invalid JSON body from ZAI models: %s", response.text[:200])
                 return self.get_static_models()
             models = list(ZAI_DOCUMENTED_MODELS)
             for model in data.get("data", []):
@@ -229,7 +230,8 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
                 lib_logger.warning(
                     "Auth error fetching ZAI models: %s", e.response.status_code
                 )
-            elif e.response.status_code >= 500:
+                raise
+            if e.response.status_code >= 500:
                 lib_logger.warning(
                     "Server error fetching ZAI models: %s", e.response.status_code
                 )
@@ -276,10 +278,16 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
         try:
             return response.json()
         except (json.JSONDecodeError, ValueError) as e:
-            body_preview = response.text[:200] if response.text else "<empty>"
             lib_logger.warning(
-                "Invalid JSON response from %s: %s — body: %s",
-                self.provider_name, e, body_preview,
+                "Invalid JSON response from %s: %s, status=%s",
+                self.provider_name,
+                e,
+                response.status_code,
+            )
+            lib_logger.debug(
+                "Invalid JSON body from %s: %s",
+                self.provider_name,
+                response.text[:200] if response.text else "<empty>",
             )
             raise
 

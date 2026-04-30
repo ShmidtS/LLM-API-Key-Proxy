@@ -295,6 +295,10 @@ class BufferedWriteRegistry(metaclass=SingletonMeta):
                 except OSError as e:
                     if not _is_bind_mount_replace_error(e):
                         raise
+                    self._logger.warning(
+                        "Atomic replace failed with EBUSY, falling back to direct write for %s",
+                        path,
+                    )
                     _write_bytes_direct(
                         path, content, options.get("secure_permissions", False)
                     )
@@ -535,6 +539,10 @@ class ResilientStateWriter:
                 except OSError as e:
                     if not _is_bind_mount_replace_error(e):
                         raise
+                    self._logger.warning(
+                        "Atomic replace failed with EBUSY, falling back to direct write for %s",
+                        self.path,
+                    )
                     await asyncio.to_thread(_write_bytes_direct, self.path, content)
 
             finally:
@@ -675,6 +683,10 @@ def safe_write_json(
                 except OSError as e:
                     if not _is_bind_mount_replace_error(e):
                         raise
+                    logger.warning(
+                        "Atomic replace failed with EBUSY, falling back to direct write for %s",
+                        path,
+                    )
                     _write_bytes_direct(path, content, secure_permissions)
             finally:
                 if tmp_fd is not None:
@@ -781,6 +793,10 @@ async def async_safe_write_json(
                 except OSError as e:
                     if not _is_bind_mount_replace_error(e):
                         raise
+                    logger.warning(
+                        "Atomic replace failed with EBUSY, falling back to direct write for %s",
+                        path,
+                    )
                     _write_bytes_direct(path, content, secure_permissions)
             finally:
                 if tmp_fd is not None:
