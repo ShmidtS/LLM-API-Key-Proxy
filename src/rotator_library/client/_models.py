@@ -236,20 +236,40 @@ class ModelsMixin:
                     continue  # Try the next credential
 
         # Discovery failure is a degradation (static models still usable),
-        # not a hard failure — downgrade to warning and include static count.
+        # not a hard failure; downgrade to warning and include static count.
         static_fallback = []
         try:
             static_fallback = self.model_definitions.get_all_provider_models(provider)
         except (OSError, IOError, ValueError) as e:
-            lib_logger.error(f"Failed to get static models for provider {provider}: {type(e).__name__}: {e}")
+            lib_logger.error(
+                "Failed to get static models for provider %s: %s: %s",
+                provider,
+                type(e).__name__,
+                e,
+            )
             static_fallback = []
+        if (
+            not static_fallback
+            and provider_instance
+            and hasattr(provider_instance, "get_static_models")
+        ):
+            try:
+                static_fallback = provider_instance.get_static_models()
+            except (OSError, IOError, ValueError, TypeError) as e:
+                lib_logger.error(
+                    "Failed to get provider static models for %s: %s: %s",
+                    provider,
+                    type(e).__name__,
+                    e,
+                )
+                static_fallback = []
         lib_logger.warning(
             "Failed to get models for provider %s after trying all credentials; "
             "provider unreachable, using %d static models",
             provider,
             len(static_fallback),
         )
-        return []
+        return static_fallback
 
     async def get_all_available_models(
         self, grouped: bool = True

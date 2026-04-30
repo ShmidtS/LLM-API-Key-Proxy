@@ -190,6 +190,12 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             return ["_quota"] + self._known_models
         return []
 
+    def get_static_models(self) -> List[str]:
+        models = list(ZAI_DOCUMENTED_MODELS)
+        if not self._known_models:
+            self._known_models = models
+        return [f"zai/{m}" for m in models]
+
     async def get_models(self, api_key: str, client: httpx.AsyncClient) -> List[str]:
         try:
             response = await client.get(
@@ -201,26 +207,38 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             try:
                 data = response.json()
             except (json.JSONDecodeError, ValueError) as e:
-                lib_logger.warning(f"Invalid JSON from ZAI models: {e}, body={response.text[:200]}")
-                return []
+                lib_logger.warning(
+                    "Invalid JSON from ZAI models: %s, body=%s",
+                    e,
+                    response.text[:200],
+                )
+                return self.get_static_models()
             models = list(ZAI_DOCUMENTED_MODELS)
             for model in data.get("data", []):
-                if isinstance(model, dict) and "id" in model and model["id"] not in models:
+                if (
+                    isinstance(model, dict)
+                    and "id" in model
+                    and model["id"] not in models
+                ):
                     models.append(model["id"])
             if models and not self._known_models:
                 self._known_models = models
             return [f"zai/{m}" for m in models]
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (401, 403):
-                lib_logger.warning(f"Auth error fetching ZAI models: {e.response.status_code}")
+                lib_logger.warning(
+                    "Auth error fetching ZAI models: %s", e.response.status_code
+                )
             elif e.response.status_code >= 500:
-                lib_logger.warning(f"Server error fetching ZAI models: {e.response.status_code}")
+                lib_logger.warning(
+                    "Server error fetching ZAI models: %s", e.response.status_code
+                )
             else:
                 lib_logger.error(f"HTTP error fetching ZAI models: {e}")
-            return []
+            return self.get_static_models()
         except httpx.RequestError as e:
             lib_logger.error(f"Failed to fetch ZAI models: {e}")
-            return []
+            return self.get_static_models()
 
     async def get_auth_header(self, credential_identifier: str) -> Dict[str, str]:
         return {"Authorization": f"Bearer {credential_identifier}"}
