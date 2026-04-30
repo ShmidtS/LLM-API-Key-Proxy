@@ -741,7 +741,7 @@ class RetryMixin(RetryBaseMixin):
         }
 
     async def _prepare_retry_context(self, **kwargs) -> _RetryContext:
-        model = normalize_model_string(kwargs.get("model"))
+        model = self._resolve_model_alias(kwargs.get("model"))
         if not model:
             raise ValueError("'model' is a required parameter.")
         kwargs["model"] = model

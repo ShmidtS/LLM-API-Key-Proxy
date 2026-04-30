@@ -7,12 +7,65 @@ from litellm.litellm_core_utils.token_counter import token_counter
 
 from ..error_handler import classify_error
 from ..error_types import mask_credential
-from ..utils.model_utils import extract_provider_from_model, match_model_pattern
+from ..utils.model_utils import (
+    extract_provider_from_model,
+    match_model_pattern,
+    normalize_model_string,
+)
 
 lib_logger = logging.getLogger("rotator_library")
 
 
 class ModelsMixin:
+    def _resolve_model_alias(self, model: str) -> str:
+        """Resolve a bare model name to a unique configured provider/model ID."""
+        normalized = normalize_model_string(model)
+        if not normalized or "/" in normalized:
+            return normalized
+
+        matches: list[str] = []
+        for provider in self.all_credentials:
+            provider_models: set[str] = set()
+
+            try:
+                provider_models.update(
+                    self.model_definitions.get_all_provider_models(provider)
+                )
+            except (OSError, IOError, ValueError, AttributeError):
+                provider_models = set()
+
+            cached = self._model_list_cache.get(provider)
+            if cached:
+                provider_models.update(cached[0])
+
+            provider_instance = self._get_provider_instance(provider)
+            get_static_models = (
+                getattr(provider_instance, "get_static_models", None)
+                if provider_instance
+                else None
+            )
+            if get_static_models:
+                try:
+                    provider_models.update(get_static_models())
+                except (OSError, IOError, ValueError, TypeError):
+                    pass
+
+            full_model = f"{provider}/{normalized}"
+            if full_model in provider_models:
+                matches.append(full_model)
+
+        if len(matches) == 1:
+            return matches[0]
+
+        if len(matches) > 1:
+            lib_logger.warning(
+                "Bare model alias %s is ambiguous across providers: %s",
+                normalized,
+                ", ".join(sorted(matches)),
+            )
+
+        return normalized
+
     def _match_model_pattern(
         self,
         provider: str,

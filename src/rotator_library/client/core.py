@@ -548,7 +548,7 @@ class RotatingClient(
         Returns:
             The completion response object, or an async generator for streaming responses, or None if all retries fail.
         """
-        model = normalize_model_string(kwargs.get("model", ""))
+        model = self._resolve_model_alias(kwargs.get("model", ""))
         kwargs["model"] = model
         provider = extract_provider_from_model(model)
 

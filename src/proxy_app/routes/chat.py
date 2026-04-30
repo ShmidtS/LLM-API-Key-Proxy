@@ -68,6 +68,10 @@ async def chat_completions(
         if raw_logger:
             await raw_logger.log_request(headers=request.headers, body=request_data)
 
+        resolved_model = client._resolve_model_alias(request_data.get("model"))
+        if resolved_model:
+            request_data["model"] = resolved_model
+
         # Extract and log specific reasoning parameters for monitoring.
         model = request_data.get("model")
         generation_cfg = (
