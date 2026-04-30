@@ -8,6 +8,8 @@ import re
 import webbrowser
 from dataclasses import dataclass, field
 from typing import ClassVar, Union, Optional, List, Dict, Any
+
+_RE_OAUTH_CRED = re.compile(r"_oauth_(\d+)\.json$")
 import json
 import time
 import asyncio
@@ -1123,7 +1125,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
 
         existing_numbers = []
         for cred_file in glob(pattern):
-            match = re.search(r"_oauth_(\d+)\.json$", cred_file)
+            match = _RE_OAUTH_CRED.search(cred_file)
             if match:
                 existing_numbers.append(int(match.group(1)))
 
@@ -1337,7 +1339,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             email = creds.get("email") or creds.get("_proxy_metadata", {}).get("email", "unknown")
 
             # Get credential number from filename
-            match = re.search(r"_oauth_(\d+)\.json$", cred_path.name)
+            match = _RE_OAUTH_CRED.search(cred_path.name)
             cred_number = int(match.group(1)) if match else 1
 
             # Build output path
@@ -1391,7 +1393,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                 metadata = creds.get("_proxy_metadata", {})
 
                 # Extract number from filename
-                match = re.search(r"_oauth_(\d+)\.json$", cred_file)
+                match = _RE_OAUTH_CRED.search(cred_file)
                 number = int(match.group(1)) if match else 0
 
                 # Top-level email for iFlow/Qwen, metadata email for Google

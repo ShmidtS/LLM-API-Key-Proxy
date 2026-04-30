@@ -3,6 +3,7 @@
 
 """Tool recovery mixin for AntigravityProvider."""
 
+import re
 import time
 import uuid
 from typing import Any, Dict, Optional, Tuple
@@ -13,6 +14,8 @@ from ...utils.json_utils import json_loads, json_dumps_str
 from .constants import (
     lib_logger,
 )
+
+_RE_MALFORMED_CALL = re.compile(r"Malformed function call:\s*call:[^:]+:([^{]+)(\{.+\})$", re.DOTALL)
 
 
 class ToolRecoveryMixin:
@@ -50,11 +53,7 @@ class ToolRecoveryMixin:
              "raw_args": "{filePath: \"...\"}"}
             or None if unparseable
         """
-        import re
-
-        # Pattern: "Malformed function call: call:namespace:tool_name{args}"
-        pattern = r"Malformed function call:\s*call:[^:]+:([^{]+)(\{.+\})$"
-        match = re.match(pattern, finish_message, re.DOTALL)
+        match = _RE_MALFORMED_CALL.match(finish_message)
 
         if not match:
             lib_logger.warning(

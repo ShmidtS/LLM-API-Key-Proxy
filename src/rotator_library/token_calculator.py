@@ -10,6 +10,7 @@ This module calculates balanced max_tokens values based on:
 3. Safety buffer to avoid edge cases
 """
 
+import functools
 import logging
 import re
 from typing import Dict, Any, Optional, Tuple
@@ -128,6 +129,12 @@ def extract_model_name(model: str) -> str:
     return model
 
 
+_RE_DATE_SUFFIX = re.compile(r"-[0-9]{4,}$")
+_RE_PREVIEW_SUFFIX = re.compile(r"-preview$")
+_RE_LATEST_SUFFIX = re.compile(r"-latest$")
+
+
+@functools.lru_cache(maxsize=256)
 def normalize_model_name(model: str) -> str:
     """
     Normalize model name for lookup.
@@ -139,9 +146,9 @@ def normalize_model_name(model: str) -> str:
     model = model.lower().strip()
 
     # Remove version/date suffixes
-    model = re.sub(r"-[0-9]{4,}$", "", model)  # Remove date like -20240229
-    model = re.sub(r"-preview$", "", model)
-    model = re.sub(r"-latest$", "", model)
+    model = _RE_DATE_SUFFIX.sub("", model)
+    model = _RE_PREVIEW_SUFFIX.sub("", model)
+    model = _RE_LATEST_SUFFIX.sub("", model)
 
     return model
 

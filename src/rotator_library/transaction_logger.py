@@ -318,7 +318,7 @@ class TransactionLogger:
             return
         try:
             async with aiofiles.open(self.log_dir / filename, "w", encoding="utf-8") as f:
-                await f.write(sanitize_for_log(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode("utf-8")))
+                await f.write(orjson.dumps(sanitize_for_log(data), option=orjson.OPT_INDENT_2).decode("utf-8"))
         except (OSError, IOError, TypeError, ValueError) as e:
             lib_logger.error(f"TransactionLogger: Failed to write {filename}: {e}")
 

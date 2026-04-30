@@ -3,14 +3,13 @@
 
 """Message transform mixin for AntigravityProvider."""
 
-import copy
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import json
 from ...config import env_bool
-from ...utils.json_utils import json_loads, json_dumps_str
+from ...utils.json_utils import json_loads, json_dumps_str, json_deep_copy
 from .constants import (
     DEFAULT_MAX_OUTPUT_TOKENS,
     PREPEND_INSTRUCTION,
@@ -296,7 +295,7 @@ class MessageTransformMixin:
         if not tools:
             return tools
 
-        modified = copy.deepcopy(tools) if copy_tools else tools
+        modified = json_deep_copy(tools) if copy_tools else tools
         for tool in modified:
             for func_decl in tool.get("functionDeclarations", []):
                 name = func_decl.get("name", "")
@@ -327,7 +326,7 @@ class MessageTransformMixin:
         if not tools:
             return tools
 
-        modified = copy.deepcopy(tools) if copy_tools else tools
+        modified = json_deep_copy(tools) if copy_tools else tools
         for tool in modified:
             for func_decl in tool.get("functionDeclarations", []):
                 # Support both parametersJsonSchema and parameters keys
@@ -363,7 +362,7 @@ class MessageTransformMixin:
         # Use provided prompt or default to Gemini 3 prompt
         prompt_template = description_prompt or self._gemini3_description_prompt
 
-        modified = copy.deepcopy(tools) if copy_tools else tools
+        modified = json_deep_copy(tools) if copy_tools else tools
         for tool in modified:
             for func_decl in tool.get("functionDeclarations", []):
                 # Delegate to mixin's singular _inject_signature_into_description method
@@ -511,7 +510,7 @@ class MessageTransformMixin:
             "requestType": "agent",  # Required for agent-style requests
             "requestId": _generate_request_id(),
             "model": internal_model,
-            "request": copy.deepcopy(gemini_payload),
+            "request": json_deep_copy(gemini_payload),
         }
 
         # Add stable session ID based on first user message

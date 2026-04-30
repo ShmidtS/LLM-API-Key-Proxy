@@ -228,12 +228,14 @@ def _dns_query(host: str, dns_host: str, dns_port: int = 53) -> Optional[str]:
 
         # Send DNS query via UDP
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(get_dns_query_timeout())
-        sock.sendto(query, (dns_host, dns_port))
+        try:
+            sock.settimeout(get_dns_query_timeout())
+            sock.sendto(query, (dns_host, dns_port))
 
-        # Receive response
-        response, _ = sock.recvfrom(512)
-        sock.close()
+            # Receive response
+            response, _ = sock.recvfrom(512)
+        finally:
+            sock.close()
 
         # Parse response
         # Skip header (12 bytes)

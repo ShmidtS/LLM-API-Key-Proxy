@@ -937,6 +937,7 @@ class ModelRegistry(metaclass=SingletonMeta):
         self._result_cache: Dict[str, ModelMetadata] = {}
         self._negative_cache: Dict[str, float] = {}
         self._negative_cache_ttl = 300.0
+        self._cache_maxsize = 2048
         self._raw_models_cache: Optional[Dict[str, Dict]] = None
 
         # Async coordination
@@ -1057,8 +1058,12 @@ class ModelRegistry(metaclass=SingletonMeta):
 
         metadata = self._resolve_model(model_id)
         if metadata:
+            if len(self._result_cache) >= self._cache_maxsize:
+                self._result_cache.clear()
             self._result_cache[model_id] = metadata
         else:
+            if len(self._negative_cache) >= self._cache_maxsize:
+                self._negative_cache.clear()
             self._negative_cache[model_id] = time.time()
         return metadata
 

@@ -3,10 +3,9 @@
 
 from ._constants import lib_logger
 from typing import Dict, Any
-from ..utils.json_utils import json_loads
+from ..utils.json_utils import json_loads, json_deep_copy
 from ..batched_persistence import UsagePersistenceManager
 import aiofiles
-import copy
 import json
 import os
 
@@ -77,7 +76,7 @@ class UsageManagerPersistenceMixin:
                 # Clean up empty cycle data
                 del self._usage_data["__fair_cycle__"]
 
-            snapshot = copy.deepcopy(self._usage_data)
+            snapshot = json_deep_copy(self._usage_data)
 
         # Use batch persistence if enabled (high-throughput mode)
         if self._use_batch_persistence and self._batch_persistence:
