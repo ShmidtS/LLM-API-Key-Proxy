@@ -11,13 +11,18 @@ cd /d "%~dp0"
 
 REM Auto-update before launch
 echo.
-echo Checking for updates...
 if exist ".git" (
-    git pull --quiet
+    git diff --quiet
     if errorlevel 1 (
-        echo Warning: git pull failed, continuing with current version...
+        echo Local changes detected. Skipping auto-update to avoid conflicts.
     ) else (
-        echo Repository is up to date.
+        echo Checking for updates...
+        git pull --quiet
+        if errorlevel 1 (
+            echo Warning: git pull failed, continuing with current version...
+        ) else (
+            echo Repository is up to date.
+        )
     )
 ) else (
     echo Not a git repository, skipping update.
