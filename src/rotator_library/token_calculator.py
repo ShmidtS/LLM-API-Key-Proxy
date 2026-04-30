@@ -355,16 +355,9 @@ def calculate_max_tokens(
 
     capped_available = available_for_output
 
-    # Cap by model's actual max output tokens from provider registry
-    model_max_output = get_max_output_tokens(model, registry)
-    if model_max_output is not None and capped_available > model_max_output:
-        logger.debug(
-            "Capping max_tokens from %d to model max_output=%d for %s",
-            capped_available,
-            model_max_output,
-            model,
-        )
-        capped_available = model_max_output
+    # NOTE: model-specific max_output from external catalogs (models.dev) is
+    # intentionally ignored — the data is often inaccurate.  The remaining
+    # guardrails (context_window, input tokens, safety_buffer) are sufficient.
 
     # If user requested a specific value, honor it if valid
     if requested_max_tokens is not None:
