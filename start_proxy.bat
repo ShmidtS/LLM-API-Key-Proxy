@@ -9,6 +9,21 @@ echo.
 
 cd /d "%~dp0"
 
+REM Auto-update before launch
+echo.
+echo Checking for updates...
+if exist ".git" (
+    git pull --quiet
+    if errorlevel 1 (
+        echo Warning: git pull failed, continuing with current version...
+    ) else (
+        echo Repository is up to date.
+    )
+) else (
+    echo Not a git repository, skipping update.
+)
+echo.
+
 REM Disable aiodns to fix "Domain name not found" errors when ping works
 REM This must be set BEFORE Python imports aiohttp
 set AIOHTTP_NO_EXTENSIONS=1
