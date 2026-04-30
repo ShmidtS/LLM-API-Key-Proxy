@@ -250,13 +250,13 @@ def anthropic_to_openai_messages(
                             )
                     elif block_type == "thinking":
                         signature: str = block.get("signature", "")
+                        thinking_text: str = block.get("thinking", "")
+                        if thinking_text:
+                            reasoning_parts.append(thinking_text)
                         if (
                             signature
                             and len(signature) >= MIN_THINKING_SIGNATURE_LENGTH
                         ):
-                            thinking_text: str = block.get("thinking", "")
-                            if thinking_text:
-                                reasoning_parts.append(thinking_text)
                             thinking_signature = signature
                     elif block_type == "redacted_thinking":
                         signature: str = block.get("signature", "")

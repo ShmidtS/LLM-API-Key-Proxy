@@ -231,6 +231,10 @@ class ChunkAggregator:
         if tool_calls_list:
             final_message["tool_calls"] = tool_calls_list
 
+        # Promote aggregated string fields (e.g. reasoning_content) from chunks
+        for key, parts in self._generic_str_parts.items():
+            final_message[key] = "".join(parts)
+
         fr = self._finish_reason
         if fr is None:
             if tool_calls_list:
