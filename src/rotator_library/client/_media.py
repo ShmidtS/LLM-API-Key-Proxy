@@ -449,13 +449,82 @@ class MediaMixin:
         pre_request_callback: Optional[callable] = None,
         **kwargs,
     ) -> Any:
-        """Generate speech audio via the speech endpoint."""
+        """Generate speech audio via the speech endpoint.
+
+        Gemini TTS models are routed to _native_gemini_tts because
+        litellm.aspeech() sends them to generateContent without
+        responseModalities, causing 500 errors.
+        """
+        model = normalize_model_string(str(kwargs.get("model", "")))
+        if model.lower().startswith("gemini/") and "tts" in model.lower():
+            return self._rate_limited_execute(
+                self._native_gemini_tts,
+                request=request,
+                pre_request_callback=pre_request_callback,
+                **kwargs,
+            )
         return self._media_request(
             litellm.aspeech,
             request=request,
             pre_request_callback=pre_request_callback,
             **kwargs,
         )
+
+    async def _native_gemini_tts(self, **kwargs) -> Any:
+        """Call Gemini TTS API directly with responseModalities=['AUDIO'].
+
+        litellm.aspeech() and litellm.acompletion() both fail for Gemini TTS
+        because they don't include responseModalities in the API payload.
+        """
+        import base64 as _b64
+
+        model = normalize_model_string(str(kwargs.pop("model", "")))
+        api_key = kwargs.pop("api_key")
+        input_text = kwargs.pop("input", "")
+        voice = kwargs.pop("voice", "Kore")
+        speed = kwargs.pop("speed", None)
+        timeout = kwargs.pop("timeout", getattr(self, "global_timeout", 60))
+
+        model_name = model.split("/", 1)[1] if "/" in model else model
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": input_text}]}],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {
+                    "voiceConfig": {
+                        "prebuiltVoiceConfig": {
+                            "voiceName": voice,
+                        }
+                    }
+                },
+            },
+        }
+        if speed is not None:
+            payload["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["speed"] = float(speed)
+
+        http_client = await self._get_http_client_async(streaming=False)
+        resp = await http_client.post(url, json=payload, timeout=timeout)
+        if resp.status_code != 200:
+            lib_logger.error(
+                "Gemini TTS API error %d: %s | payload: %s",
+                resp.status_code, resp.text[:500], str(payload)[:500],
+            )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Extract audio from response
+        candidates = data.get("candidates", [])
+        for candidate in candidates:
+            content = candidate.get("content", {})
+            for part in content.get("parts", []):
+                inline_data = part.get("inlineData")
+                if inline_data and inline_data.get("data"):
+                    return _b64.b64decode(inline_data["data"])
+
+        lib_logger.error("No audio data in Gemini TTS response: %s", list(data.keys()))
+        raise ValueError(f"Gemini TTS returned no audio data: {list(data.keys())}")
 
     def atranscription(
         self,

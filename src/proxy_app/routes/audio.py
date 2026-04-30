@@ -7,7 +7,7 @@ from typing import Any
 
 import orjson
 from fastapi import APIRouter, Request, Depends, UploadFile, File, Form
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +40,13 @@ async def audio_speech(
         request_data=request_data,
     )
 
+    # Extract response_format for content-type mapping before passing to litellm.
+    # litellm.aspeech misroutes response_format through get_optional_params
+    # (chat/completions path) for some providers, causing TypeError.
+    response_format = request_data.pop("response_format", "mp3")
+
     response = await client.aspeech(request=request, **request_data)
 
-    # litellm.aspeech returns an httpx.Response with streaming content
-    # Determine content type from response_format or default to audio/mpeg
-    response_format = request_data.get("response_format", "mp3")
     content_type_map = {
         "mp3": "audio/mpeg",
         "opus": "audio/opus",
@@ -55,7 +57,21 @@ async def audio_speech(
     }
     content_type = content_type_map.get(response_format, "audio/mpeg")
 
-    # litellm.aspeech may return an httpx.Response where aiter_bytes() is a coroutine
+    # Native Gemini TTS returns raw bytes directly
+    if isinstance(response, (bytes, bytearray)):
+        return Response(
+            content=bytes(response),
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f"attachment; filename=speech.{response_format}",
+            },
+        )
+
+    # litellm.aspeech may return a dict error payload instead of raising
+    if isinstance(response, dict):
+        raise ValueError(response)
+
+    # litellm.aspeech returns an httpx.Response with streaming content
     aiter = response.aiter_bytes()
     if hasattr(aiter, "__aiter__"):
         byte_iter = aiter
