@@ -23,6 +23,7 @@ Usage:
     ```
 """
 
+import ipaddress
 import logging
 import os
 import sys
@@ -36,6 +37,7 @@ import ssl
 import threading
 import time
 from typing import List, Tuple, Optional, Dict
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +159,14 @@ def close_dns_executor() -> None:
         if _dns_executor is not None:
             _dns_executor.shutdown(wait=False)
             _dns_executor = None
+
+
+def _is_public_dns_host(dns_host: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(dns_host)
+    except ValueError:
+        return True
+    return ip.is_global
 
 
 def _doh_query(host: str, doh_url: str) -> Optional[str]:
@@ -304,13 +314,16 @@ def _custom_getaddrinfo_sync(
             ip = None
 
             # Check if it's a DoH URL
-            if dns_resolver.startswith("http://") or dns_resolver.startswith(
-                "https://"
-            ):
-                # Use DoH
-                ip = _doh_query(host, dns_resolver)
-                if ip:
-                    logger.debug("Resolved %s -> %s via DoH: %s", host, ip, dns_resolver)
+            parsed = urlparse(dns_resolver)
+            if parsed.scheme:
+                if parsed.scheme != "https":
+                    logger.warning("Invalid DoH resolver scheme: %s", parsed.scheme)
+                elif parsed.hostname and not _is_public_dns_host(parsed.hostname):
+                    logger.warning("Invalid DoH resolver host: %s", parsed.hostname)
+                else:
+                    ip = _doh_query(host, dns_resolver)
+                    if ip:
+                        logger.debug("Resolved %s -> %s via DoH: %s", host, ip, dns_resolver)
             else:
                 # Use traditional DNS
                 dns_host = dns_resolver
@@ -324,11 +337,14 @@ def _custom_getaddrinfo_sync(
                     except ValueError:
                         logger.warning("Invalid DNS port in resolver: %s", dns_resolver)
 
-                ip = _dns_query(host, dns_host, dns_port)
-                if ip:
-                    logger.debug(
-                        "Resolved %s -> %s via %s:%s", host, ip, dns_host, dns_port
-                    )
+                if _is_public_dns_host(dns_host):
+                    ip = _dns_query(host, dns_host, dns_port)
+                    if ip:
+                        logger.debug(
+                            "Resolved %s -> %s via %s:%s", host, ip, dns_host, dns_port
+                        )
+                else:
+                    logger.warning("Invalid DNS resolver host: %s", dns_host)
 
             if ip:
                 return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
@@ -407,17 +423,30 @@ def apply_dns_fix():
     if not dns_resolver or dns_resolver.lower() in ("false", "0", "no", "off"):
         return
 
-    # Parse DNS resolver
-    dns_host = dns_resolver
-    dns_port = 53
+    parsed = urlparse(dns_resolver)
+    if parsed.scheme:
+        if parsed.scheme != "https":
+            logger.warning("Invalid DoH resolver scheme: %s", parsed.scheme)
+            return
+        dns_host = dns_resolver
+        dns_port = "DoH"
+    else:
+        # Parse DNS resolver
+        dns_host = dns_resolver
+        dns_port = 53
 
-    if ":" in dns_resolver:
-        parts = dns_resolver.rsplit(":", 1)
-        dns_host = parts[0]
-        try:
-            dns_port = int(parts[1])
-        except ValueError:
-            logger.warning("Invalid DNS port in resolver: %s", dns_resolver)
+        if ":" in dns_resolver:
+            parts = dns_resolver.rsplit(":", 1)
+            dns_host = parts[0]
+            try:
+                dns_port = int(parts[1])
+            except ValueError:
+                logger.warning("Invalid DNS port in resolver: %s", dns_resolver)
+                return
+
+        if not _is_public_dns_host(dns_host):
+            logger.warning("Invalid DNS resolver host: %s", dns_host)
+            return
 
     # Apply monkey-patch
     socket.getaddrinfo = _custom_getaddrinfo

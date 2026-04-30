@@ -35,25 +35,30 @@ class UsageManagerPersistenceMixin:
         async with self._data_lock.write():
             if not os.path.exists(self.file_path):
                 self._usage_data = {}
+                self._clear_provider_resolution_cache()
                 return
 
             try:
                 async with aiofiles.open(self.file_path, "r", encoding="utf-8") as f:
                     content = await f.read()
                     self._usage_data = json_loads(content) if content.strip() else {}
+                    self._clear_provider_resolution_cache()
             except FileNotFoundError:
                 # File deleted between exists check and open
                 self._usage_data = {}
+                self._clear_provider_resolution_cache()
             except json.JSONDecodeError as e:
                 lib_logger.warning(
                     f"Corrupted usage file {self.file_path}: {e}. Starting fresh."
                 )
                 self._usage_data = {}
+                self._clear_provider_resolution_cache()
             except (OSError, PermissionError, IOError) as e:
                 lib_logger.warning(
                     f"Cannot read usage file {self.file_path}: {e}. Using empty state."
                 )
                 self._usage_data = {}
+                self._clear_provider_resolution_cache()
 
             # Restore fair cycle state from persisted data
             fair_cycle_data = self._usage_data.get("__fair_cycle__", {})
@@ -66,6 +71,7 @@ class UsageManagerPersistenceMixin:
             return
 
         async with self._data_lock.write():
+            self._clear_provider_resolution_cache()
             # Add human-readable timestamp fields before saving
             self._add_readable_timestamps(self._usage_data)
 

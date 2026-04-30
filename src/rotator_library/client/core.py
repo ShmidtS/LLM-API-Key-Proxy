@@ -3,7 +3,7 @@
 
 # CRITICAL LOAD-BEARING IMPORT ORDER:
 # 1. AIOHTTP_NO_EXTENSIONS=1 must be set before any aiohttp import
-# 2. dns_fix.py must run before litellm/aiohttp import
+# 2. bootstrap.apply_import_time_patches must run before litellm/aiohttp users
 # 3. litellm_patches.patch_litellm_finish_reason must run before litellm import
 # 4. SSL monkey-patch fires when HTTP_SSL_VERIFY=false
 # Do NOT reorder or simplify these imports.
@@ -12,27 +12,14 @@ import os
 import sys
 import time
 
-# CRITICAL: Apply DNS fix BEFORE importing litellm/aiohttp
-# This fixes DNS hijacking by VPN/proxy/antivirus that returns wrong IPs
-from ..dns_fix import apply_dns_fix
+from . import bootstrap as _bootstrap
 
-apply_dns_fix()
-
-# CRITICAL: Apply finish_reason patch BEFORE importing litellm/openai
-# LiteLLM caches OpenAI models on import, so patch must run first
-from ..utils.litellm_patches import patch_litellm_finish_reason
-
-patch_litellm_finish_reason()
-
-# CRITICAL: Patch aiohttp.TCPConnector to use TLS 1.2 and disable SSL verification
-# This fixes ConnectionResetError and SSLCertVerificationError with servers like noobrouterproduction.azurewebsites.net
-from ..ssl_patch import _patch_aiohttp_connector
-
-_patch_aiohttp_connector()
+apply_import_time_patches = _bootstrap.apply_import_time_patches
+apply_import_time_patches()
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 import httpx
 import litellm
 from pathlib import Path
@@ -75,6 +62,9 @@ _STREAM_REQUIRED_PROVIDERS = {
 # Providers that don't support stream_options parameter
 # These providers return 400/406 errors when stream_options is sent
 _STREAM_OPTIONS_UNSUPPORTED_PROVIDERS = frozenset({"iflow", "kilocode"})
+_PROVIDER_METHOD_CACHE_MISS = object()
+_PROVIDER_METHOD_NO_PROVIDER = object()
+_PROVIDER_METHOD_NO_METHOD = object()
 
 from ..usage_manager import UsageManager
 from ..failure_logger import configure_failure_logger
@@ -96,8 +86,8 @@ from ..resilience import ResilienceOrchestrator
 from ..credential_manager import CredentialManager
 from ..background_refresher import BackgroundRefresher
 from ..model_definitions import ModelDefinitions
-from ..utils.paths import get_default_root, get_logs_dir, get_oauth_dir
-from ..utils.litellm_patches import suppress_litellm_serialization_warnings
+from ..utils.paths import get_default_root, get_oauth_dir
+from .bootstrap import configure_client_logging, configure_litellm_runtime
 from ..utils.model_utils import (
     clear_model_match_cache,
     compile_model_patterns,
@@ -188,27 +178,8 @@ class RotatingClient(
         else:
             self.data_dir = get_default_root()
 
-        # Configure failure logger to use correct logs directory
-        configure_failure_logger(get_logs_dir(self.data_dir))
-
-        os.environ["LITELLM_LOG"] = "ERROR"
-        litellm.set_verbose = False
-        litellm.drop_params = True
-
-        # Suppress harmless Pydantic serialization warnings from litellm
-        # See: https://github.com/BerriAI/litellm/issues/11759
-        suppress_litellm_serialization_warnings()
-
-        if configure_logging:
-            # When True, this allows logs from this library to be handled
-            # by the parent application's logging configuration.
-            lib_logger.propagate = True
-            # Remove any default handlers to prevent duplicate logging
-            if lib_logger.hasHandlers():
-                lib_logger.handlers.clear()
-                lib_logger.addHandler(logging.NullHandler())
-        else:
-            lib_logger.propagate = False
+        configure_client_logging(self.data_dir, configure_logging)
+        configure_litellm_runtime()
 
         api_keys = api_keys or {}
         oauth_credentials = oauth_credentials or {}
@@ -290,6 +261,7 @@ class RotatingClient(
             credential_to_provider=self._build_credential_to_provider_map(),
         )
         self._model_list_cache: dict[str, tuple[list[str], float]] = {}
+        self._provider_method_cache: dict[tuple[str, str], Any] = {}
         # Use HttpClientPool singleton for optimized connection management
         self._http_pool: Optional[HttpClientPool] = None
         self._pool_initialized = False
@@ -411,8 +383,7 @@ class RotatingClient(
 
         litellm_kwargs["num_retries"] = 0
 
-        provider_plugin = self._get_provider_instance(provider)
-        get_model_options = getattr(provider_plugin, "get_model_options", None) if provider_plugin else None
+        get_model_options = self._get_provider_method(provider, "get_model_options")
         if get_model_options:
             model_options = get_model_options(model)
             if model_options:
@@ -449,6 +420,46 @@ class RotatingClient(
             for cred in creds:
                 mapping[cred] = provider
         return mapping
+
+    def _get_provider_method(
+        self, provider_name: str, method_name: str, required: bool = False
+    ):
+        cache_key = (provider_name, method_name)
+        cached = self._provider_method_cache.get(cache_key, _PROVIDER_METHOD_CACHE_MISS)
+        if cached is _PROVIDER_METHOD_NO_PROVIDER:
+            if required:
+                raise ValueError(f"No provider instance for '{provider_name}'")
+            return None
+        if cached is _PROVIDER_METHOD_NO_METHOD:
+            if required:
+                raise AttributeError(
+                    f"Provider '{provider_name}' has no method '{method_name}'"
+                )
+            return None
+        if cached is not _PROVIDER_METHOD_CACHE_MISS:
+            return cached
+
+        provider_instance = self._get_provider_instance(provider_name)
+        cache_optional_missing = not required and method_name == "get_model_options"
+        if provider_instance is None:
+            if required:
+                raise ValueError(f"No provider instance for '{provider_name}'")
+            if cache_optional_missing:
+                self._provider_method_cache[cache_key] = _PROVIDER_METHOD_NO_PROVIDER
+            return None
+
+        method = getattr(provider_instance, method_name, None)
+        if method is None:
+            if required:
+                raise AttributeError(
+                    f"Provider '{provider_name}' has no method '{method_name}'"
+                )
+            if cache_optional_missing:
+                self._provider_method_cache[cache_key] = _PROVIDER_METHOD_NO_METHOD
+            return None
+
+        self._provider_method_cache[cache_key] = method
+        return method
 
     def _get_provider_instance(self, provider_name: str):
         """
@@ -532,7 +543,7 @@ class RotatingClient(
     def acompletion(
         self,
         request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         **kwargs,
     ) -> Union[Any, AsyncGenerator[Any, None]]:
         """
@@ -628,7 +639,7 @@ class RotatingClient(
     def aembedding(
         self,
         request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         **kwargs,
     ) -> Any:
         """
@@ -684,15 +695,7 @@ class RotatingClient(
         instance, and delegates the call. Raises AttributeError if the
         provider or method doesn't exist.
         """
-        provider_instance = self._get_provider_instance(provider_name)
-        if provider_instance is None:
-            raise ValueError(f"No provider instance for '{provider_name}'")
-
-        method = getattr(provider_instance, method_name, None)
-        if method is None:
-            raise AttributeError(
-                f"Provider '{provider_name}' has no method '{method_name}'"
-            )
+        method = self._get_provider_method(provider_name, method_name, required=True)
 
         credentials = self.all_credentials.get(provider_name)
         if not credentials:

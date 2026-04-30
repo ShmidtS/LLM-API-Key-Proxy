@@ -50,6 +50,7 @@ class UsageManagerResetMixin:
                     )
 
         if needs_saving:
+            self._clear_provider_resolution_cache()
             await self._save_usage()
 
     async def _check_per_model_resets(

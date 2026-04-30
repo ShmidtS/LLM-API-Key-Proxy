@@ -4,14 +4,20 @@
 from ._constants import lib_logger, MAX_CACHE_ENTRIES
 import re
 import time
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 from typing import Optional, Dict, List, Any
 from ..utils.model_utils import get_or_create_provider_instance
+from ..error_types import mask_credential
 
 
 _OAUTH_PATH_RE = re.compile(r"/([a-z_]+)_oauth_\d+\.json$", re.IGNORECASE)
 _OAUTH_CREDS_RE = re.compile(r"oauth_creds/([a-z_]+)_", re.IGNORECASE)
 _OAUTH_FILENAME_RE = re.compile(r"([a-z_]+)_oauth_\d+\.json$", re.IGNORECASE)
+
+
+_CredentialAvailabilityState = namedtuple(
+    "_CredentialAvailabilityState", "normalized_model key_cooldown_until model_cooldown_until is_on_cooldown soonest_cooldown_until key_data_exists"
+)
 
 
 class UsageManagerQueryMixin:
@@ -34,13 +40,26 @@ class UsageManagerQueryMixin:
         Returns:
             Provider name string or None if cannot be determined
         """
+        # Lookup from credential-to-provider mapping (built at init from all_credentials)
+        if self.credential_to_provider and credential in self.credential_to_provider:
+            return self.credential_to_provider[credential]
+
+        cached_provider = self._provider_resolution_cache.get(credential)
+        if cached_provider is not None:
+            self._provider_resolution_cache.move_to_end(credential)
+            return cached_provider
+
         # Pattern: env:// URI format (e.g., "env://antigravity/1" -> "antigravity")
         if credential.startswith("env://"):
             provider = credential[6:].partition("/")[0]
             if provider:
-                return provider.lower()
+                provider = provider.lower()
+                self._cache_provider_resolution(credential, provider)
+                return provider
             # Malformed env:// URI (empty provider name)
-            lib_logger.warning("Malformed env:// credential URI: %s", credential)
+            lib_logger.warning(
+                "Malformed env:// credential URI: %s", mask_credential(credential)
+            )
             return None
 
         # Normalize path separators
@@ -49,17 +68,23 @@ class UsageManagerQueryMixin:
         # Pattern: path ending with {provider}_oauth_{number}.json
         match = _OAUTH_PATH_RE.search(normalized)
         if match:
-            return match.group(1).lower()
+            provider = match.group(1).lower()
+            self._cache_provider_resolution(credential, provider)
+            return provider
 
         # Pattern: oauth_creds/{provider}_...
         match = _OAUTH_CREDS_RE.search(normalized)
         if match:
-            return match.group(1).lower()
+            provider = match.group(1).lower()
+            self._cache_provider_resolution(credential, provider)
+            return provider
 
         # Pattern: filename only {provider}_oauth_{number}.json (no path)
         match = _OAUTH_FILENAME_RE.match(normalized)
         if match:
-            return match.group(1).lower()
+            provider = match.group(1).lower()
+            self._cache_provider_resolution(credential, provider)
+            return provider
 
         # Pattern: API key prefixes for specific providers
         # These are raw API keys with recognizable prefixes
@@ -70,11 +95,8 @@ class UsageManagerQueryMixin:
         }
         for prefix, provider in api_key_prefixes.items():
             if credential.startswith(prefix):
+                self._cache_provider_resolution(credential, provider)
                 return provider
-
-        # Lookup from credential-to-provider mapping (built at init from all_credentials)
-        if self.credential_to_provider and credential in self.credential_to_provider:
-            return self.credential_to_provider[credential]
 
         # Fallback: For raw API keys, extract provider from model names in usage data
         # This handles providers like firmware, chutes, nanogpt that use credential-level quota
@@ -88,6 +110,7 @@ class UsageManagerQueryMixin:
                 first_model = next(iter(models_data.keys()), None)
                 if first_model and "/" in first_model:
                     provider = first_model.split("/")[0].lower()
+                    self._cache_provider_resolution(credential, provider)
                     return provider
 
             # Fallback to "daily" section (legacy structure)
@@ -98,9 +121,19 @@ class UsageManagerQueryMixin:
                 first_model = next(iter(daily_models.keys()), None)
                 if first_model and "/" in first_model:
                     provider = first_model.split("/")[0].lower()
+                    self._cache_provider_resolution(credential, provider)
                     return provider
 
         return None
+
+    def _cache_provider_resolution(self, credential: str, provider: str) -> None:
+        self._provider_resolution_cache[credential] = provider
+        self._provider_resolution_cache.move_to_end(credential)
+        while len(self._provider_resolution_cache) > MAX_CACHE_ENTRIES:
+            self._provider_resolution_cache.popitem(last=False)
+
+    def _clear_provider_resolution_cache(self) -> None:
+        self._provider_resolution_cache.clear()
 
     def _get_provider_instance(self, provider: str) -> Optional[Any]:
         """
@@ -112,9 +145,39 @@ class UsageManagerQueryMixin:
         Returns:
             Provider plugin instance or None
         """
+        plugin_entry = self.provider_plugins.get(provider)
+        if plugin_entry is not None:
+            cached_instance = self._provider_instances.get(provider)
+            if isinstance(plugin_entry, type):
+                if isinstance(cached_instance, plugin_entry):
+                    return cached_instance
+                instance = plugin_entry()
+            else:
+                instance = plugin_entry
+            self._provider_instances.register(provider, instance)
+            return instance
+
         return get_or_create_provider_instance(
             provider, self.provider_plugins, self._provider_instances
         )
+
+    def _get_provider_capability(
+        self, provider: Optional[str], method_name: str
+    ) -> Optional[Any]:
+        if not provider:
+            return None
+
+        plugin_instance = self._get_provider_instance(provider)
+        if not plugin_instance:
+            return None
+
+        provider_cache = self._provider_capability_cache.setdefault(provider, {})
+        if method_name not in provider_cache:
+            provider_cache[method_name] = hasattr(plugin_instance, method_name)
+
+        if provider_cache[method_name]:
+            return getattr(plugin_instance, method_name)
+        return None
 
     def _get_usage_reset_config(self, credential: str) -> Optional[Dict[str, Any]]:
         """
@@ -128,10 +191,11 @@ class UsageManagerQueryMixin:
             or None to use default daily reset.
         """
         provider = self._get_provider_from_credential(credential)
-        plugin_instance = self._get_provider_instance(provider)
-
-        if plugin_instance and hasattr(plugin_instance, "get_usage_reset_config"):
-            return plugin_instance.get_usage_reset_config(credential)
+        get_usage_reset_config = self._get_provider_capability(
+            provider, "get_usage_reset_config"
+        )
+        if get_usage_reset_config:
+            return get_usage_reset_config(credential)
 
         return None
 
@@ -171,11 +235,13 @@ class UsageManagerQueryMixin:
             return key_cache[model]
 
         provider = self._get_provider_from_credential(credential)
-        plugin_instance = self._get_provider_instance(provider)
+        get_model_quota_group = self._get_provider_capability(
+            provider, "get_model_quota_group"
+        )
 
         result = None
-        if plugin_instance and hasattr(plugin_instance, "get_model_quota_group"):
-            result = plugin_instance.get_model_quota_group(model)
+        if get_model_quota_group:
+            result = get_model_quota_group(model)
 
         # Populate cache with eviction check
         if credential not in self._quota_group_cache:
@@ -209,18 +275,23 @@ class UsageManagerQueryMixin:
             return models_list
 
         provider = self._get_provider_from_credential(credential)
-        plugin_instance = self._get_provider_instance(provider)
+        get_models_in_quota_group = self._get_provider_capability(
+            provider, "get_models_in_quota_group"
+        )
 
-        if plugin_instance and hasattr(plugin_instance, "get_models_in_quota_group"):
-            models = plugin_instance.get_models_in_quota_group(group)
+        if get_models_in_quota_group:
+            models = get_models_in_quota_group(group)
 
             # Normalize and deduplicate
-            if hasattr(plugin_instance, "normalize_model_for_tracking"):
+            normalize_model_for_tracking = self._get_provider_capability(
+                provider, "normalize_model_for_tracking"
+            )
+            if normalize_model_for_tracking:
                 seen = set()
                 normalized = []
                 for m in models:
                     prefixed = f"{provider}/{m}"
-                    norm = plugin_instance.normalize_model_for_tracking(prefixed)
+                    norm = normalize_model_for_tracking(prefixed)
                     if norm not in seen:
                         seen.add(norm)
                         normalized.append(norm)
@@ -242,26 +313,29 @@ class UsageManagerQueryMixin:
 
     def _cleanup_caches(self) -> None:
         """
-        Evict oldest 20% of cache entries if total exceeds MAX_CACHE_ENTRIES.
+        Evict oldest nested cache entries if total exceeds MAX_CACHE_ENTRIES.
 
         Called after each cache population to prevent unbounded growth.
-        Uses LRU eviction: oldest entries (at the front of OrderedDict) are removed.
+        Uses LRU eviction: oldest nested entries (at the front of OrderedDict) are removed.
         """
         total_entries = sum(len(v) for v in self._quota_group_cache.values())
         total_entries += sum(len(v) for v in self._grouped_models_cache.values())
 
-        if total_entries <= MAX_CACHE_ENTRIES:
-            return
-
-        # Evict 20% from each cache
-        evict_ratio = 0.2
-
-        for cache in (self._quota_group_cache, self._grouped_models_cache):
-            entries_to_evict = int(len(cache) * evict_ratio)
-            if entries_to_evict > 0:
-                for _ in range(entries_to_evict):
-                    if cache:
-                        cache.popitem(last=False)
+        while total_entries > MAX_CACHE_ENTRIES:
+            evicted = False
+            for cache in (self._quota_group_cache, self._grouped_models_cache):
+                for credential in list(cache.keys()):
+                    key_cache = cache[credential]
+                    if key_cache:
+                        key_cache.popitem(last=False)
+                        total_entries -= 1
+                        evicted = True
+                    if not key_cache:
+                        del cache[credential]
+                    if total_entries <= MAX_CACHE_ENTRIES:
+                        return
+            if not evicted:
+                return
 
     def _get_model_usage_weight(self, credential: str, model: str) -> int:
         """
@@ -275,10 +349,11 @@ class UsageManagerQueryMixin:
             Weight multiplier (default 1 if not configured)
         """
         provider = self._get_provider_from_credential(credential)
-        plugin_instance = self._get_provider_instance(provider)
-
-        if plugin_instance and hasattr(plugin_instance, "get_model_usage_weight"):
-            return plugin_instance.get_model_usage_weight(model)
+        get_model_usage_weight = self._get_provider_capability(
+            provider, "get_model_usage_weight"
+        )
+        if get_model_usage_weight:
+            return get_model_usage_weight(model)
 
         return 1
 
@@ -297,12 +372,59 @@ class UsageManagerQueryMixin:
             Normalized model name (provider prefix preserved if present)
         """
         provider = self._get_provider_from_credential(credential)
-        plugin_instance = self._get_provider_instance(provider)
-
-        if plugin_instance and hasattr(plugin_instance, "normalize_model_for_tracking"):
-            return plugin_instance.normalize_model_for_tracking(model)
+        normalize_model_for_tracking = self._get_provider_capability(
+            provider, "normalize_model_for_tracking"
+        )
+        if normalize_model_for_tracking:
+            return normalize_model_for_tracking(model)
 
         return model
+
+    def _get_credential_availability_state(
+        self,
+        key: str,
+        model: str,
+        now: float,
+        key_data: Optional[Dict[str, Any]] = None,
+    ) -> _CredentialAvailabilityState:
+        if key_data is None:
+            key_data = getattr(self, "_usage_data", {}).get(key)
+        normalized_model = self._normalize_model_for_tracking(key, model)
+
+        if key_data is None:
+            return _CredentialAvailabilityState(normalized_model, 0, 0, False, None, False)
+
+        key_cooldown_until = key_data.get("key_cooldown_until") or 0
+        model_cooldowns = key_data.get("model_cooldowns") or {}
+        direct_model_cooldown_until = model_cooldowns.get(normalized_model) or 0
+        quota_group_cooldown_until = 0
+        if model_cooldowns:
+            quota_group_cooldown_until = self._check_quota_group_cooldown(
+                key, model_cooldowns, normalized_model
+            )
+        model_cooldown_until = max(
+            direct_model_cooldown_until, quota_group_cooldown_until
+        )
+
+        soonest_cooldown_until = None
+        for cooldown in (
+            key_cooldown_until,
+            direct_model_cooldown_until,
+            quota_group_cooldown_until,
+        ):
+            if cooldown > now and (
+                soonest_cooldown_until is None or cooldown < soonest_cooldown_until
+            ):
+                soonest_cooldown_until = cooldown
+
+        return _CredentialAvailabilityState(
+            normalized_model,
+            key_cooldown_until,
+            model_cooldown_until,
+            soonest_cooldown_until is not None,
+            soonest_cooldown_until,
+            True,
+        )
 
     def _check_quota_group_cooldown(
         self,
@@ -327,10 +449,12 @@ class UsageManagerQueryMixin:
         provider = self._get_provider_from_credential(credential)
         if not provider:
             return 0
-        plugin = self._get_provider_instance(provider)
-        if not plugin or not hasattr(plugin, "get_model_quota_group"):
+        get_model_quota_group = self._get_provider_capability(
+            provider, "get_model_quota_group"
+        )
+        if not get_model_quota_group:
             return 0
-        group = plugin.get_model_quota_group(normalized_model)
+        group = get_model_quota_group(normalized_model)
         if not group:
             return 0
         virtual_name = f"{provider}/_quota"
@@ -499,10 +623,11 @@ class UsageManagerQueryMixin:
 
         # Check provider default
         provider = self._get_provider_from_credential(credential)
-        plugin_instance = self._get_provider_instance(provider)
-
-        if plugin_instance and hasattr(plugin_instance, "get_default_usage_field_name"):
-            return plugin_instance.get_default_usage_field_name()
+        get_default_usage_field_name = self._get_provider_capability(
+            provider, "get_default_usage_field_name"
+        )
+        if get_default_usage_field_name:
+            return get_default_usage_field_name()
 
         return "daily"
 
@@ -582,36 +707,16 @@ class UsageManagerQueryMixin:
         available = []
 
         usage_data = self._usage_data
-        normalize = self._normalize_model_for_tracking
         async with self._data_lock.read():
             for key in credentials:
-                key_data = usage_data.get(key)
-                if key_data is None:
-                    continue
-
-                # Skip if key-level cooldown is active
-                key_cooldown_until = key_data.get("key_cooldown_until") or 0
-                if key_cooldown_until > now:
-                    continue
-
-                # Normalize model name for consistent cooldown lookup
-                # (cooldowns are stored under normalized names by record_failure)
-                # For providers without normalize_model_for_tracking (non-Antigravity),
-                # this returns the model unchanged, so cooldown lookups work as before.
-                normalized_model = normalize(key, model)
-
-                # Skip if model-specific cooldown is active
-                model_cooldowns = key_data.get("model_cooldowns")
-                model_cd = model_cooldowns.get(normalized_model) if model_cooldowns else 0
-                if model_cd == 0 and model_cooldowns:
-                    model_cd = self._check_quota_group_cooldown(
-                        key, model_cooldowns, normalized_model
-                    )
-                if (model_cd or 0) > now:
+                state = self._get_credential_availability_state(
+                    key, model, now, usage_data.get(key)
+                )
+                if not state.key_data_exists or state.is_on_cooldown:
                     continue
 
                 # Skip if quota confirmed exhausted via background refresh
-                baseline = self._get_baseline_remaining(key, normalized_model)
+                baseline = self._get_baseline_remaining(key, state.normalized_model)
                 if baseline is not None and baseline <= 0:
                     continue
 
@@ -651,25 +756,15 @@ class UsageManagerQueryMixin:
 
         # First pass: check cooldowns
         usage_data = self._usage_data
-        normalize = self._normalize_model_for_tracking
         async with self._data_lock.read():
             for key in credentials:
-                key_data = usage_data.get(key)
-                if key_data is None:
+                state = self._get_credential_availability_state(
+                    key, model, now, usage_data.get(key)
+                )
+                if not state.key_data_exists:
                     continue
-                model_cooldowns = key_data.get("model_cooldowns")
 
-                # Check if key-level or model-level cooldown is active
-                normalized_model = normalize(key, model)
-                model_cd = model_cooldowns.get(normalized_model) if model_cooldowns else 0
-                if model_cd == 0 and model_cooldowns:
-                    model_cd = self._check_quota_group_cooldown(
-                        key, model_cooldowns, normalized_model
-                    )
-                key_cooldown_until = key_data.get("key_cooldown_until") or 0
-                is_on_cooldown = key_cooldown_until > now or (model_cd or 0) > now
-
-                if is_on_cooldown:
+                if state.is_on_cooldown:
                     on_cooldown += 1
                 else:
                     not_on_cooldown.append(key)
@@ -730,26 +825,10 @@ class UsageManagerQueryMixin:
 
         async with self._data_lock.read():
             for key in credentials:
-                key_data = self._usage_data.get(key, {})
-                normalized_model = self._normalize_model_for_tracking(key, model)
-
-                # Check key-level cooldown
-                key_cooldown = key_data.get("key_cooldown_until") or 0
-                if key_cooldown > now:
-                    if soonest_end is None or key_cooldown < soonest_end:
-                        soonest_end = key_cooldown
-
-                # Check model-level cooldown
-                model_cooldowns_map = key_data.get("model_cooldowns", {})
-                model_cooldown = model_cooldowns_map.get(normalized_model) or 0
-                if model_cooldown == 0:
-                    model_cooldown = self._check_quota_group_cooldown(
-                        key, model_cooldowns_map, normalized_model
-                    )
-
-                if (model_cooldown or 0) > now:
-                    if soonest_end is None or model_cooldown < soonest_end:
-                        soonest_end = model_cooldown
+                state = self._get_credential_availability_state(key, model, now)
+                if state.soonest_cooldown_until is not None:
+                    if soonest_end is None or state.soonest_cooldown_until < soonest_end:
+                        soonest_end = state.soonest_cooldown_until
 
         return soonest_end
 

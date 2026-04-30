@@ -123,6 +123,7 @@ class UsageManagerCore(
         self.priority_multipliers_by_mode = priority_multipliers_by_mode or {}
         self.sequential_fallback_multipliers = sequential_fallback_multipliers or {}
         self._provider_instances = get_provider_registry()  # Shared singleton registry
+        self._provider_capability_cache: dict[str, dict[str, Any]] = {}
         self.key_states: Dict[str, Dict[str, Any]] = {}
 
         # Fair cycle rotation configuration
@@ -149,6 +150,8 @@ class UsageManagerCore(
         # Lazy caches for stable quota group config (OrderedDict for LRU eviction)
         # (key, model) -> group_name or None
         self._quota_group_cache: "OrderedDict[str, OrderedDict[str, Optional[str]]]" = OrderedDict()
+        # credential -> provider for parsed/derived provider resolution hits
+        self._provider_resolution_cache: "OrderedDict[str, str]" = OrderedDict()
         # (key, group) -> (models_list, request_count_at_snapshot)
         # Used by record_success to skip syncing siblings when count unchanged
         self._grouped_models_cache: "OrderedDict[str, OrderedDict[str, Tuple[List[str], int]]]" = OrderedDict()

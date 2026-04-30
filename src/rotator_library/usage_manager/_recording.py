@@ -315,6 +315,7 @@ class UsageManagerRecordingMixin:
                 )
 
             key_data["last_used_ts"] = now_ts
+            self._clear_provider_resolution_cache()
 
         await self._save_usage()
 
@@ -600,6 +601,7 @@ class UsageManagerRecordingMixin:
                 "model": model,
                 "error": str(classified_error.original_exception),
             }
+            self._clear_provider_resolution_cache()
 
         await self._save_usage()
 
@@ -840,6 +842,7 @@ class UsageManagerRecordingMixin:
                 f"Updated quota baseline for {mask_credential(credential)} model={model}: "
                 f"remaining={remaining_fraction:.2%}, synced_request_count={synced_count}"
             )
+            self._clear_provider_resolution_cache()
 
         await self._save_usage()
         return cooldown_set_info
