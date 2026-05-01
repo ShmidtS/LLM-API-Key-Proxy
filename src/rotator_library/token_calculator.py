@@ -95,6 +95,16 @@ DEFAULT_CONTEXT_WINDOWS: Dict[str, int] = {
     "z-ai/glm-5": 202800,
 }
 
+# Fallback maximum output tokens for models where external catalogs are
+# inaccurate or unavailable.  These are applied as a hard cap on top of the
+# context-window-based calculation.
+DEFAULT_MAX_OUTPUT_TOKENS: Dict[str, int] = {
+    # Moonshot / Kimi
+    "kimi-k2.6": 98304,
+    # ZhipuAI / GLM
+    "glm-5.1": 131072,
+}
+
 # Safety buffer (tokens reserved for system overhead, response formatting, etc.)
 # Increased from 100 to 1000 to account for:
 # - Token counting estimation errors (~5-10%)
@@ -248,7 +258,9 @@ def count_input_tokens(
 
 def get_max_output_tokens(model: str, registry=None) -> Optional[int]:
     """
-    Get the maximum output tokens for a model from the provider registry.
+    Get the maximum output tokens for a model.
+
+    Tries the provider registry first, then falls back to DEFAULT_MAX_OUTPUT_TOKENS.
 
     Args:
         model: Full model identifier (e.g., "openai/gpt-5.5")
@@ -257,6 +269,7 @@ def get_max_output_tokens(model: str, registry=None) -> Optional[int]:
     Returns:
         Maximum output tokens, or None if unknown
     """
+    # Try registry first if available
     if registry is not None:
         try:
             metadata = registry.lookup(model)
@@ -264,6 +277,21 @@ def get_max_output_tokens(model: str, registry=None) -> Optional[int]:
                 return metadata.limits.max_output
         except (ValueError, KeyError, TypeError, Exception) as e:
             logger.debug(f"Registry lookup failed for {model}: {e}")
+
+    # Fallback to static catalog
+    base_model = extract_model_name(model)
+    normalized = normalize_model_name(base_model)
+
+    if base_model in DEFAULT_MAX_OUTPUT_TOKENS:
+        return DEFAULT_MAX_OUTPUT_TOKENS[base_model]
+
+    if normalized in DEFAULT_MAX_OUTPUT_TOKENS:
+        return DEFAULT_MAX_OUTPUT_TOKENS[normalized]
+
+    # Partial / prefix matches
+    for pattern, limit in DEFAULT_MAX_OUTPUT_TOKENS.items():
+        if pattern in normalized or normalized in pattern:
+            return limit
 
     return None
 
@@ -353,11 +381,12 @@ def calculate_max_tokens(
         )
         return MIN_MAX_TOKENS, "input_exceeds_context_minimal_output"
 
-    capped_available = available_for_output
-
-    # NOTE: model-specific max_output from external catalogs (models.dev) is
-    # intentionally ignored — the data is often inaccurate.  The remaining
-    # guardrails (context_window, input tokens, safety_buffer) are sufficient.
+    # Hard cap by model-specific max_output when known
+    max_output = get_max_output_tokens(model, registry)
+    if max_output is not None and available_for_output > max_output:
+        capped_available = max_output
+    else:
+        capped_available = available_for_output
 
     # If user requested a specific value, honor it if valid
     if requested_max_tokens is not None:
@@ -371,10 +400,14 @@ def calculate_max_tokens(
             )
 
     # No specific request - use calculated value
-    return (
-        capped_available,
-        f"calculated_from_context_{context_window}_input_{input_tokens}",
-    )
+    if max_output is not None and capped_available == max_output:
+        reason = (
+            f"output_capped_to_{max_output}_from_"
+            f"context_{context_window}_input_{input_tokens}"
+        )
+    else:
+        reason = f"calculated_from_context_{context_window}_input_{input_tokens}"
+    return (capped_available, reason)
 
 
 def adjust_max_tokens_in_payload(
