@@ -313,29 +313,36 @@ class UsageManagerQueryMixin:
 
     def _cleanup_caches(self) -> None:
         """
-        Evict oldest nested cache entries if total exceeds MAX_CACHE_ENTRIES.
+        Evict oldest nested cache entries in bulk if total exceeds MAX_CACHE_ENTRIES.
 
         Called after each cache population to prevent unbounded growth.
-        Uses LRU eviction: oldest nested entries (at the front of OrderedDict) are removed.
+        Uses bulk eviction: entire credential sub-caches are removed.
         """
-        total_entries = sum(len(v) for v in self._quota_group_cache.values())
-        total_entries += sum(len(v) for v in self._grouped_models_cache.values())
+        if getattr(self, "_is_cleaning_caches", False):
+            return
 
-        while total_entries > MAX_CACHE_ENTRIES:
-            evicted = False
+        self._is_cleaning_caches = True
+        try:
+            total_entries = sum(len(v) for v in self._quota_group_cache.values())
+            total_entries += sum(len(v) for v in self._grouped_models_cache.values())
+
+            if total_entries <= MAX_CACHE_ENTRIES:
+                return
+
+            margin = int(MAX_CACHE_ENTRIES * 0.1)
+            excess = total_entries - (MAX_CACHE_ENTRIES - margin)
+
             for cache in (self._quota_group_cache, self._grouped_models_cache):
                 for credential in list(cache.keys()):
-                    key_cache = cache[credential]
-                    if key_cache:
-                        key_cache.popitem(last=False)
-                        total_entries -= 1
-                        evicted = True
-                    if not key_cache:
-                        del cache[credential]
-                    if total_entries <= MAX_CACHE_ENTRIES:
-                        return
-            if not evicted:
-                return
+                    if excess <= 0:
+                        break
+                    excess -= len(cache[credential])
+                    del cache[credential]
+
+                if excess <= 0:
+                    break
+        finally:
+            self._is_cleaning_caches = False
 
     def _get_model_usage_weight(self, credential: str, model: str) -> int:
         """
@@ -386,10 +393,13 @@ class UsageManagerQueryMixin:
         model: str,
         now: float,
         key_data: Optional[Dict[str, Any]] = None,
+        provider: Optional[str] = None,
+        normalized_model: Optional[str] = None,
     ) -> _CredentialAvailabilityState:
         if key_data is None:
             key_data = getattr(self, "_usage_data", {}).get(key)
-        normalized_model = self._normalize_model_for_tracking(key, model)
+        if normalized_model is None:
+            normalized_model = self._normalize_model_for_tracking(key, model)
 
         if key_data is None:
             return _CredentialAvailabilityState(normalized_model, 0, 0, False, None, False)
@@ -400,7 +410,7 @@ class UsageManagerQueryMixin:
         quota_group_cooldown_until = 0
         if model_cooldowns:
             quota_group_cooldown_until = self._check_quota_group_cooldown(
-                key, model_cooldowns, normalized_model
+                key, model_cooldowns, normalized_model, provider=provider
             )
         model_cooldown_until = max(
             direct_model_cooldown_until, quota_group_cooldown_until
@@ -431,6 +441,7 @@ class UsageManagerQueryMixin:
         credential: str,
         model_cooldowns: Dict[str, float],
         normalized_model: str,
+        provider: Optional[str] = None,
     ) -> float:
         """Check if a virtual _quota model cooldown applies to this model.
 
@@ -446,7 +457,8 @@ class UsageManagerQueryMixin:
         """
         if normalized_model in model_cooldowns:
             return 0  # model has its own cooldown entry — use that
-        provider = self._get_provider_from_credential(credential)
+        if provider is None:
+            provider = self._get_provider_from_credential(credential)
         if not provider:
             return 0
         get_model_quota_group = self._get_provider_capability(
@@ -657,33 +669,25 @@ class UsageManagerQueryMixin:
         # Normalize model name for consistent lookup (data is stored under normalized names)
         model = self._normalize_model_for_tracking(key, model)
 
-        usage_data = self._usage_data
-        key_data = usage_data.get(key)
-        if not key_data:
+        try:
+            key_data = self._usage_data[key]
+        except KeyError:
             return 0
+
         reset_mode = self._get_reset_mode(key)
 
         if reset_mode == "per_model":
             # New per-model structure: key_data["models"][model][field]
-            models = key_data.get("models")
-            if not models:
+            try:
+                return key_data["models"][model][field]
+            except KeyError:
                 return 0
-            model_data = models.get(model)
-            if not model_data:
-                return 0
-            return model_data.get(field, 0)
         else:
             # Legacy structure: key_data["daily"]["models"][model][field]
-            daily = key_data.get("daily")
-            if not daily:
+            try:
+                return key_data["daily"]["models"][model][field]
+            except KeyError:
                 return 0
-            models = daily.get("models")
-            if not models:
-                return 0
-            model_data = models.get(model)
-            if not model_data:
-                return 0
-            return model_data.get(field, 0)
 
     async def get_available_credentials_for_model(
         self, credentials: List[str], model: str
@@ -707,10 +711,18 @@ class UsageManagerQueryMixin:
         available = []
 
         usage_data = self._usage_data
+        # Pre-compute provider and normalized model outside the lock
+        precomputed = []
+        for key in credentials:
+            provider = self._get_provider_from_credential(key)
+            normalized_model = self._normalize_model_for_tracking(key, model)
+            precomputed.append((key, provider, normalized_model))
+
         async with self._data_lock.read():
-            for key in credentials:
+            for key, provider, normalized_model in precomputed:
                 state = self._get_credential_availability_state(
-                    key, model, now, usage_data.get(key)
+                    key, model, now, usage_data.get(key),
+                    provider=provider, normalized_model=normalized_model
                 )
                 if not state.key_data_exists or state.is_on_cooldown:
                     continue
@@ -756,10 +768,18 @@ class UsageManagerQueryMixin:
 
         # First pass: check cooldowns
         usage_data = self._usage_data
+        # Pre-compute provider and normalized model outside the lock
+        precomputed = []
+        for key in credentials:
+            provider = self._get_provider_from_credential(key)
+            normalized_model = self._normalize_model_for_tracking(key, model)
+            precomputed.append((key, provider, normalized_model))
+
         async with self._data_lock.read():
-            for key in credentials:
+            for key, provider, normalized_model in precomputed:
                 state = self._get_credential_availability_state(
-                    key, model, now, usage_data.get(key)
+                    key, model, now, usage_data.get(key),
+                    provider=provider, normalized_model=normalized_model
                 )
                 if not state.key_data_exists:
                     continue
@@ -823,9 +843,19 @@ class UsageManagerQueryMixin:
         now = time.time()
         soonest_end = None
 
+        # Pre-compute provider and normalized model outside the lock
+        precomputed = []
+        for key in credentials:
+            provider = self._get_provider_from_credential(key)
+            normalized_model = self._normalize_model_for_tracking(key, model)
+            precomputed.append((key, provider, normalized_model))
+
         async with self._data_lock.read():
-            for key in credentials:
-                state = self._get_credential_availability_state(key, model, now)
+            for key, provider, normalized_model in precomputed:
+                state = self._get_credential_availability_state(
+                    key, model, now,
+                    provider=provider, normalized_model=normalized_model
+                )
                 if state.soonest_cooldown_until is not None:
                     if soonest_end is None or state.soonest_cooldown_until < soonest_end:
                         soonest_end = state.soonest_cooldown_until

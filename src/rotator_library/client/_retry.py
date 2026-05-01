@@ -1554,6 +1554,8 @@ class RetryMixin(RetryBaseMixin):
                             )
 
                             error_details = error_payload.get("error", {})
+                            if not isinstance(error_details, dict):
+                                error_details = {"message": str(error_details)}
                             error_status = error_details.get("status", "")
                             error_message_text = error_details.get(
                                 "message", str(original_exc).partition("\n")[0]

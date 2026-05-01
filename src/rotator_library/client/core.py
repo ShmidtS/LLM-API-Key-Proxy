@@ -437,7 +437,18 @@ class RotatingClient(
                 )
             return None
         if cached is not _PROVIDER_METHOD_CACHE_MISS:
-            return cached
+            # Dynamically resolve on current provider instance to avoid stale references
+            provider_instance = self._get_provider_instance(provider_name)
+            if provider_instance is None:
+                if required:
+                    raise ValueError(f"No provider instance for '{provider_name}'")
+                return None
+            method = getattr(provider_instance, method_name, None)
+            if method is None and required:
+                raise AttributeError(
+                    f"Provider '{provider_name}' has no method '{method_name}'"
+                )
+            return method
 
         provider_instance = self._get_provider_instance(provider_name)
         cache_optional_missing = not required and method_name == "get_model_options"
@@ -458,7 +469,8 @@ class RotatingClient(
                 self._provider_method_cache[cache_key] = _PROVIDER_METHOD_NO_METHOD
             return None
 
-        self._provider_method_cache[cache_key] = method
+        # Cache sentinel to avoid repeated introspection; resolve dynamically on hit
+        self._provider_method_cache[cache_key] = True
         return method
 
     def _get_provider_instance(self, provider_name: str):
