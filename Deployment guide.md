@@ -11,18 +11,34 @@ The process is beginner-friendly and takes about 15-30 minutes. We'll use Render
 - Basic terminal access (e.g., Command Prompt, Terminal, or Git Bash).
 - API keys from LLM providers (e.g., Gemini, OpenAI—get them from their dashboards). For details on supported providers and how to format their keys (e.g., API key naming conventions), refer to the [LiteLLM Providers Documentation](https://docs.litellm.ai/docs/providers).
 
-**Note**: You don't need Python installed for initial testing—use the pre-compiled Windows EXE from the repo's releases for a quick local trial.
+**Note**: Python 3.10+ is required for running from source.
 
-## Step 1: Test Locally with the Compiled EXE (No Python Required)
+## Step 1: Test Locally from Source
 
-Before deploying, try the proxy locally to ensure your keys work. This uses a pre-built executable that's easy to set up.
+Before deploying, try the proxy locally to ensure your keys work.
 
-1. Go to the repo's [GitHub Releases page](https://github.com/ShmidtS/LLM-API-Key-Proxy/releases).
-2. Download the latest release ZIP file (e.g., for Windows).
-3. Unzip the file.
-4. Double-click `setup_env.bat`. A window will open—follow the prompts to add your PROXY_API_KEY (a strong secret you create) and provider keys. Use the [LiteLLM Providers Documentation](https://docs.litellm.ai/docs/providers) for guidance on key formats (e.g., `GEMINI_API_KEY_1="your-key"`).
-5. Double-click `proxy_app.exe` to start the proxy. It runs at `http://127.0.0.1:8000`—visit in a browser to confirm "API Key Proxy is running".
-6. Test with curl (replace with your PROXY_API_KEY):
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/ShmidtS/LLM-API-Key-Proxy.git
+   cd LLM-API-Key-Proxy
+   ```
+2. Create a virtual environment and install dependencies:
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate  # Windows: venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+3. Copy the example environment file and add your keys:
+   ```bash
+   cp .env.example .env
+   ```
+   Open `.env` in a text editor and set at least `PROXY_API_KEY` and one provider key (e.g., `GEMINI_API_KEY_1`).
+4. Start the proxy:
+   ```bash
+   python src/proxy_app/main.py
+   ```
+   It runs at `http://127.0.0.1:8000`—visit in a browser to confirm "API Key Proxy is running".
+5. Test with curl (replace with your PROXY_API_KEY):
 
 ```
 curl -X POST http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer your-proxy-key" -d '{"model": "gemini/gemini-2.5-flash", "messages": [{"role": "user", "content": "What is the capital of France?"}]}'

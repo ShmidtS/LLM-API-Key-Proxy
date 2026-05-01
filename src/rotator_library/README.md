@@ -32,6 +32,14 @@ A robust, asynchronous, and thread-safe Python library for managing a pool of AP
 -   **Fair Cycle Rotation**: Ensures each credential exhausts at least once before any can be reused within a tier. Prevents a single credential from being repeatedly used while others sit idle. Configurable per provider with tracking modes and cross-tier support.
 -   **Custom Usage Caps**: Set custom limits per tier, per model/group that are more restrictive than actual API limits. Supports percentages (e.g., "80%") and multiple cooldown modes (`quota_reset`, `offset`, `fixed`). Credentials go on cooldown before hitting actual API limits.
 -   **Centralized Defaults**: All tunable defaults are defined in [`config/defaults.py`](config/defaults.py) for easy customization and visibility.
+-   **Static Model Fallback**: Providers can define `get_static_models()` to return a hardcoded model list when dynamic discovery fails (network errors, auth failures, server errors). Ensures the model list is always available even when the provider API is unreachable.
+-   **Performance Optimizations**: Hot paths are optimized with `__slots__` on critical classes (reducing memory and attribute lookup overhead), pre-compiled regex patterns, cached model/provider lookups, and lazy logging initialization. These optimizations reduce per-request overhead without changing behavior.
+-   **Batched Persistence**: Usage tracking data is persisted to disk via a background batched writer ([`BatchedPersistence`](batched_persistence.py)) instead of synchronous writes on every update. State changes are kept in-memory and flushed periodically, dramatically reducing disk I/O in high-throughput scenarios while ensuring data durability on shutdown.
+-   **Async Read-Write Locks**: [`ReadWriteLock`](async_locks.py) allows multiple concurrent readers with exclusive writer access, replacing standard `asyncio.Lock` in read-heavy patterns (model lookups, usage queries) for better throughput.
+-   **Transaction Logger**: Correlated request/response logging ([`TransactionLogger`](transaction_logger.py)) creates a unique directory per API transaction with both client-level I/O and provider-specific details. Supports streaming chunk logging, metadata capture (timing, usage, reasoning), and provider subdirectory logging via [`ProviderLogger`](transaction_logger.py).
+-   **Enhanced Error Context**: `InternalServerError` now includes `llm_provider` and `model` parameters for precise error attribution. Streaming retry handling robustly processes non-dict error details (e.g., string error payloads) by wrapping them before field access.
+-   **Moonshot Provider Support**: Moonshot AI (`moonshot/`) is supported as a known litellm provider with streaming and function calling. `reasoning_content` from Moonshot responses is preserved through the streaming pipeline and correctly translated to Anthropic thinking blocks via `anthropic_compat`.
+-   **ZAI Provider Support**: Full support for the ZAI (z.ai) API with hourly request quota tracking (lite/pro/max tiers), sequential rotation mode, static model fallback, and additional native endpoints (video generation, image generation, agent chat, tokenizer, layout parsing, web reader).
 
 ## Installation
 
@@ -82,7 +90,8 @@ client = RotatingClient(
     whitelist_models={},
     enable_request_logging=False,
     max_concurrent_requests_per_key={},
-    rotation_tolerance=2.0  # 0.0=deterministic, 2.0=recommended random
+    rotation_tolerance=2.0,  # 0.0=deterministic, 2.0=recommended random
+    data_dir=None,  # Auto-detect: EXE dir if frozen, else cwd
 )
 ```
 
@@ -104,13 +113,14 @@ client = RotatingClient(
     - `0.0`: **Deterministic** - Always selects the least-used credential for perfect load balance.
     - `2.0` (default, recommended): **Weighted Random** - Randomly selects credentials with bias toward less-used ones. Provides unpredictability (harder to fingerprint) while maintaining good balance.
     - `5.0+`: **High Randomness** - Even heavily-used credentials have significant selection probability. Maximum unpredictability.
-    
+
     The weight formula is: `weight = (max_usage - credential_usage) + tolerance + 1`
-    
+
     **Use Cases:**
     - `0.0`: When perfect load balance is critical
     - `2.0`: When avoiding fingerprinting/rate limit detection is important
     - `5.0+`: For stress testing or maximum unpredictability
+-   `data_dir` (`Optional[Union[str, Path]]`, default: `None`): Root directory for all data files (logs, cache, oauth credentials, key_usage.json). If `None`, auto-detects: uses the EXE directory if running as a frozen binary, otherwise the current working directory.
 
 ### Concurrency and Resource Management
 
@@ -168,7 +178,7 @@ Calculates the token count for a given text or list of messages using `litellm.t
 
 #### `async def get_available_models(self, provider: str) -> List[str]:`
 
-Fetches a list of available models for a specific provider, applying any configured whitelists or blacklists. Results are cached in memory.
+Fetches a list of available models for a specific provider, applying any configured whitelists or blacklists. Results are cached in memory. If the provider API is unreachable, falls back to `get_static_models()` if available.
 
 #### `async def get_all_available_models(self, grouped: bool = True) -> Union[Dict[str, List[str]], List[str]]:`
 
@@ -226,6 +236,7 @@ async with RotatingClient(api_keys=api_keys) as client:
 -   **Full Message Translation**: Converts between Anthropic and OpenAI message formats including text, images, tool_use, and tool_result blocks
 -   **Extended Thinking Support**: Translates Anthropic's `thinking` configuration to `reasoning_effort` for providers that support it
 -   **Streaming SSE Conversion**: Converts OpenAI streaming chunks to Anthropic's SSE event format (`message_start`, `content_block_delta`, etc.)
+-   **Reasoning Content Preservation**: `reasoning_content` fields from providers (Moonshot, DeepSeek, etc.) are correctly translated to Anthropic `thinking` blocks in streaming responses
 -   **Cache Token Handling**: Properly translates `prompt_tokens_details.cached_tokens` to Anthropic's `cache_read_input_tokens`
 -   **Tool Call Support**: Full support for tool definitions and tool use/result blocks
 
@@ -294,20 +305,45 @@ Use this tool to:
 -   **Fair Cycle Rotation**: Enabled by default in sequential mode. Ensures all credentials cycle before reuse.
 -   **Custom Caps**: Configurable per-tier caps with offset cooldowns for pacing usage. See `config/defaults.py`.
 
+### Moonshot AI
+-   **API**: OpenAI-compatible completion API at `https://api.moonshot.ai/v1`. Supported via litellm as a known provider with route `moonshot/`.
+-   **Auth**: Standard API key via `MOONSHOT_API_KEY` environment variable. Optional `MOONSHOT_API_BASE` for custom endpoint.
+-   **Features**: Streaming and function calling support.
+-   **Reasoning Content**: `reasoning_content` from Moonshot responses is preserved through the streaming pipeline and correctly translated to Anthropic `thinking` blocks when using `anthropic_compat`.
+
+### ZAI (z.ai)
+-   **API**: OpenAI-compatible completion API at `https://api.z.ai/api/coding/paas/v4`. Configurable via `ZAI_API_BASE` environment variable.
+-   **Auth**: Standard API key via `ZAI_API_KEY` environment variable.
+-   **Quota Tracking**: Hourly request quotas with three tiers:
+    - `lite`: 100 requests/hour
+    - `pro`: 1000 requests/hour
+    - `max`: 4000 requests/hour
+    - Background quota monitoring via `GET https://api.z.ai/api/monitor/usage/quota/limit`.
+-   **Quota Error Parsing**: Custom parser for ZAI-specific error codes: `1113` = insufficient balance (cooldown until midnight UTC), `429` = hourly quota exhausted (cooldown until next hour boundary).
+-   **Rotation**: Sequential rotation mode by default -- use one key until its quota is exhausted, then switch.
+-   **Static Model Fallback**: Returns a documented model list (`glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.6`, `glm-4.5`, etc.) when dynamic discovery fails.
+-   **Native Endpoints**: Additional ZAI-specific API endpoints beyond chat completions:
+    - `video/generate` and `video/{id}/status` for async video generation
+    - `images/generations` and `images/{id}` for async image generation
+    - `agents/chat`, `agents/file-upload`, `agents/async-result`, `agents/conversation` for agent workflows
+    - `tools/tokenizer`, `tools/layout-parsing`, `tools/web-reader` for utility tools
+-   **All models share a single hourly quota group** (`zai_global`), so cooldowns on one model propagate to all others.
+
 ## Error Handling and Cooldowns
 
 The client uses a sophisticated error handling mechanism:
 
 -   **Error Classification**: All exceptions from `litellm` are passed through a `classify_error` function to determine their type (`rate_limit`, `authentication`, `server_error`, `quota`, `context_length`, etc.).
--   **Server Errors**: The client will retry the request with the *same key* up to `max_retries` times, using an exponential backoff strategy.
+-   **Server Errors**: The client will retry the request with the *same key* up to `max_retries` times, using an exponential backoff strategy. `InternalServerError` exceptions include `llm_provider` and `model` parameters for precise error attribution.
 -   **Key-Specific Errors (Authentication, Quota, etc.)**: The client records the failure in the `UsageManager`, which applies an escalating cooldown to the key for that specific model. The client then immediately acquires a new key and continues its attempt to complete the request.
--   **Escalating Cooldown Strategy**: Consecutive failures for a key on the same model result in increasing cooldown períods:
+-   **Escalating Cooldown Strategy**: Consecutive failures for a key on the same model result in increasing cooldown periods:
     - 1st failure: 10 seconds
     - 2nd failure: 30 seconds
     - 3rd failure: 60 seconds
     - 4th+ failure: 120 seconds
 -   **Key-Level Lockouts**: If a key fails on multiple different models (3+ distinct models), the `UsageManager` applies a global 5-minute lockout for that key, removing it from rotation entirely.
 -   **Authentication Errors**: Immediate 5-minute global lockout (key is assumed revoked or invalid).
+-   **Streaming Error Resilience**: Mid-stream error payloads are parsed robustly -- non-dict error details (e.g., string messages) are wrapped into a dict before field access, preventing `AttributeError` during retry handling.
 
 ### Global Timeout and Deadline-Driven Logic
 
@@ -317,12 +353,68 @@ To ensure predictable performance, the client now operates on a strict time budg
 -   **Deadline-Aware Retries**: If a retry requires a wait time that would exceed the remaining budget, the wait is skipped, and the client immediately rotates to the next key.
 -   **Silent Internal Errors**: Intermittent failures like provider capacity limits or temporary server errors are logged internally but are **not raised** to the caller. The client will simply rotate to the next key.
 
+## Batched Persistence
+
+Usage tracking data is persisted to disk via [`BatchedPersistence`](batched_persistence.py), which replaces synchronous writes with a background batched writer:
+
+-   **In-Memory State**: State changes are applied immediately in memory and marked as "dirty".
+-   **Background Writer**: A background task writes dirty state to disk periodically (default: every 10 seconds).
+-   **Forced Writes**: Maximum dirty age (default: 30 seconds) triggers a forced write even if the interval hasn't elapsed.
+-   **Shutdown Safety**: `stop()` ensures a final write of any pending state before the writer terminates.
+-   **Coalesced Updates**: Bursty updates are coalesced -- only the latest state is written, reducing redundant I/O.
+-   **Environment Configuration**: Intervals can be overridden via `USAGE_PERSISTENCE_WRITE_INTERVAL` and `USAGE_PERSISTENCE_MAX_DIRTY_AGE` environment variables.
+
+The specialized [`UsagePersistenceManager`](batched_persistence.py) wraps `BatchedPersistence` specifically for the `key_usage.json` file.
+
+## Async Locking
+
+[`ReadWriteLock`](async_locks.py) provides an alternative to `asyncio.Lock` for read-heavy access patterns:
+
+-   **Multiple Concurrent Readers**: Read locks can be held by multiple coroutines simultaneously.
+-   **Exclusive Writer**: Write locks require exclusive access (no active readers or writers).
+-   **Reader Batching**: Limits the number of consecutive reader batches (default: 8) before yielding to a waiting writer, preventing writer starvation.
+-   **Timeout Support**: Both read and write acquisitions support optional timeouts (default: 30 seconds).
+-   **Context Managers**: `async with lock.read()` and `async with lock.write()` for safe acquisition/release.
+
+Used internally for model list lookups, usage queries, and other read-mostly operations where a standard mutex would unnecessarily serialize concurrent reads.
+
+## Transaction Logger
+
+[`TransactionLogger`](transaction_logger.py) provides correlated request/response logging for debugging complex interactions:
+
+-   **Per-Transaction Directory**: Each API call gets a unique directory under `logs/transactions/` with the format `MMDD_HHMMSS_{format}_{provider}_{model}_{request_id}/`.
+-   **Client-Level Logging**: `request.json` (OpenAI-compatible input), `response.json` (OpenAI-compatible output), `streaming_chunks.jsonl` (if streaming), and `metadata.json` (timing, usage, model, provider).
+-   **Provider-Level Logging**: A `provider/` subdirectory for provider-specific logs (request payload, raw response stream, final response, errors). Providers extend [`ProviderLogger`](transaction_logger.py) for custom logging needs.
+-   **Reasoning Capture**: Automatically extracts `reasoning_content` from responses and includes it in metadata.
+-   **Correlation Context**: `TransactionContext` is passed to providers so their logs share the same directory and request ID as the client-level logs.
+-   **Enabled via `enable_request_logging`**: Set to `True` during `RotatingClient` initialization to activate.
+
+## Performance Optimizations
+
+The library applies several performance optimizations to minimize per-request overhead:
+
+-   **`__slots__`**: Critical classes (`ResilienceOrchestrator`, `TransactionLogger`, `ProviderLogger`, `TTLDict`, etc.) use `__slots__` to reduce memory footprint and eliminate dynamic attribute dictionary overhead.
+-   **Pre-Compiled Regex**: Error classification patterns and model matching patterns are compiled once at module load, not recompiled per request.
+-   **Cached Lookups**: Model-to-provider resolution, provider instance creation, and model pattern matching are cached with TTL to avoid repeated lookups.
+-   **Lazy Logging Initialization**: The failure logger and transaction logger are initialized on first use rather than at import time, reducing startup overhead for applications that don't need logging.
+-   **Hot Path Optimization**: The request/retry loop avoids unnecessary object allocations and string formatting in the common (success) path.
+
+## Resilience Orchestrator
+
+[`ResilienceOrchestrator`](resilience.py) is a facade that delegates to specialized resilience components:
+
+-   **Cooldown Manager**: Manages per-model and per-key cooldown periods.
+-   **Circuit Breaker**: Tracks provider-level failure rates and temporarily blocks requests to failing providers (with half-open probing for recovery).
+-   **IP Throttle Detector**: Detects rate limits that apply at the IP level rather than the API key level, enabling provider-level cooldowns instead of key rotation.
+-   **Adaptive Rate Limiter**: Token bucket with AIMD (Additive Increase / Multiplicative Decrease) rate adjustment. Proactive per-provider request pacing that decreases rate on 429s and gradually increases on successes. Disabled by default; enable via `ADAPTIVE_RATE_LIMIT_ENABLED=true`.
+
 ## Extending with Provider Plugins
 
 The library uses a dynamic plugin system. To add support for a new provider's model list, you only need to:
 
 1.  **Create a new provider file** in `src/rotator_library/providers/` (e.g., `my_provider.py`).
 2.  **Implement the `ProviderInterface`**: Inside your new file, create a class that inherits from `ProviderInterface` and implements the `get_models` method.
+3.  **Optional - Static Model Fallback**: Implement `get_static_models()` to return a hardcoded list when dynamic discovery fails.
 
 ```python
 # src/rotator_library/providers/my_provider.py
@@ -331,9 +423,14 @@ from typing import List
 import httpx
 
 class MyProvider(ProviderInterface):
+    def get_static_models(self) -> List[str]:
+        """Return hardcoded model list as fallback when API is unreachable."""
+        return ["my_provider/model-a", "my_provider/model-b"]
+
     async def get_models(self, credential: str, client: httpx.AsyncClient) -> List[str]:
         # Logic to fetch and return a list of model names
         # The credential argument allows using the key to fetch models
+        # On failure, callers will fall back to get_static_models()
         pass
 ```
 
@@ -342,4 +439,3 @@ The system will automatically discover and register your new provider.
 ## Detailed Documentation
 
 For a more in-depth technical explanation of the library's architecture, including the `UsageManager`'s concurrency model and the error classification system, please refer to the [Technical Documentation](../../DOCUMENTATION.md).
-

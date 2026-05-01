@@ -9,9 +9,12 @@ The project is a monorepo containing two primary components:
 1.  **The Proxy Application (`proxy_app`)**: This is the user-facing component. It's a FastAPI application that acts as a universal gateway. It uses `litellm` to translate requests to various provider formats and includes:
     *   **Batch Manager**: Optimizes high-volume embedding requests.
     *   **Detailed Logger**: Provides per-request file logging for debugging.
-    *   **OpenAI-Compatible Endpoints**: `/v1/chat/completions`, `/v1/embeddings`, etc.
+    *   **OpenAI-Compatible Endpoints**: `/v1/chat/completions`, `/v1/embeddings`, `/v1/audio/speech`, `/v1/audio/transcriptions`, etc.
+    *   **OpenAI Responses API**: `/v1/responses` endpoint for Codex CLI and other OpenAI Responses API clients, with automatic translation to/from Chat Completions format.
     *   **Anthropic-Compatible Endpoints**: `/v1/messages`, `/v1/messages/count_tokens` for Claude Code and other Anthropic API clients.
+    *   **Compatibility Endpoints**: Ollama (`/api/tags`), LM Studio (`/v1/props`, `/props`) for non-OpenAI client compatibility.
     *   **Model Filter GUI**: Visual interface for configuring model ignore/whitelist rules per provider (see Section 6).
+    *   **Auto-Updating Launcher** (`start_proxy.bat`): Windows batch script with automatic `git pull` before launch (skipped if local changes exist to avoid merge conflicts).
 2.  **The Resilience Library (`rotator_library`)**: This is the core engine that provides high availability. It is consumed by the proxy app to manage a pool of API keys, handle errors gracefully, and ensure requests are completed successfully even when individual keys or provider endpoints face issues.
 
 This architecture cleanly separates the API interface from the resilience logic, making the library a portable and powerful tool for any application needing robust API key management.
@@ -335,6 +338,23 @@ The `sanitize_request_payload` function ensures requests are compatible with eac
    - Only valid for `gemini/gemini-2.5-pro` and `gemini/gemini-2.5-flash`
    - Removed for all other models
 
+3. **`temperature` Parameter Stripping** (gpt-5/o1/o3/o4 models):
+   - OpenAI's gpt-5, o1, o3, and o4 models return `400 "Only the default (1) value is supported"` when temperature is provided
+   - Automatically removed for models matching prefixes: `openai/gpt-5`, `openai/o1-`, `openai/o3-`, `openai/o4-`, `gpt-5`, `o1-`, `o3-`, `o4-`
+   - Prevents client-side errors from tools that unconditionally set temperature
+
+4. **`response_format` Parameter**:
+   - Not supported by all models; stripped for providers where it causes `TypeError`
+   - Extracted before TTS calls to prevent litellm misrouting through chat/completions path
+
+5. **Kilocode Provider - Unsupported Parameters**:
+   - Free models through Kilocode/OpenRouter reject extra parameters (`n`, `logprobs`, `top_logprobs`, `seed`, `response_format`, `reasoning_effort`, etc.)
+   - All parameters in the `KILOCODE_UNSUPPORTED_PARAMS` set are stripped for `kilocode/` prefixed models
+
+6. **Fireworks AI - Extra Fields**:
+   - Fireworks rejects `chat_template_kwargs` and `reasoning_budget` with "Extra inputs are not permitted"
+   - These are automatically removed for `fireworks/` prefixed models
+
 **Provider-Specific Tool Schema Cleaning:**
 
 Implemented in individual provider classes (`QwenCodeProvider`, `IFlowProvider`):
@@ -382,6 +402,8 @@ class ErrorType(Enum):
    - Searches for keywords like "quota exceeded", "rate limit", "invalid api key"
 
 4. **Provider-Specific Overrides**: Some providers use non-standard error formats
+
+5. **Non-Dict Error Details Guard**: In the streaming retry path, error details from some providers arrive as non-dict types (strings, lists) instead of the expected dict. The retry logic now guards with `isinstance(details, dict)` before attempting dict-specific operations, preventing `AttributeError` crashes mid-stream.
 
 **Usage in Client:**
 - `AUTHENTICATION` → Immediate 5-minute global lockout
@@ -1008,6 +1030,7 @@ QUOTA_GROUPS_GEMINI_CLI_3_FLASH="gemini-3-flash-preview"
 
 *   **Thinking Parameter**: Automatically handles the `thinking` parameter transformation required for Gemini 2.5 models (`thinking` -> `gemini-2.5-pro` reasoning parameter).
 *   **Safety Settings**: Ensures default safety settings (blocking nothing) are applied if not provided, preventing over-sensitive refusals.
+*   **Native TTS via v1beta API**: When a Gemini model is used for text-to-speech (`/v1/audio/speech`), the proxy routes the request through Gemini's native v1beta TTS endpoint rather than litellm's generic `aspeech` path. The response arrives as raw bytes (not an `httpx.Response`), and the audio route handler detects this with `isinstance(response, (bytes, bytearray))` and returns a `Response` directly with the correct `Content-Type` header. This avoids litellm misrouting `response_format` through `get_optional_params` (the chat/completions path), which causes `TypeError` for Gemini TTS.
 
 ### 3.5. NVIDIA NIM (`nvidia_provider.py`)
 
@@ -1756,6 +1779,15 @@ Converts Anthropic Messages API requests to OpenAI Chat Completions format:
 - Injects `[Continue]` prompt for fresh thinking turns
 - Preserves thinking signatures for multi-turn conversations
 
+**`reasoning_content` Preservation:**
+- When translating Anthropic thinking blocks to OpenAI format, the `reasoning_content` field is preserved on all assistant message types:
+  - Messages with `tool_calls` (critical for Moonshot multi-turn tool calls where reasoning was previously lost)
+  - Text-only messages
+  - Mixed content messages
+  - Reasoning-only messages (no text or tool_calls)
+- `thinking_signature` is also preserved alongside `reasoning_content` for multi-turn consistency
+- In the reverse direction (OpenAI → Anthropic), `reasoning_content` is converted back to thinking content blocks
+
 #### Response Translation (`openai_to_anthropic_response`)
 
 Converts OpenAI Chat Completions responses to Anthropic Messages format:
@@ -2040,6 +2072,114 @@ cache/
 
 ---
 
+### 3.6. ZAI (`zai_provider.py`)
+
+The ZAI provider implements OpenAI-compatible API access to z.ai's GLM model family with hourly quota tracking and tier-based credential prioritization.
+
+#### Architecture
+
+- **OpenAI-Compatible API**: Uses the standard chat completions endpoint at `https://api.z.ai/api/coding/paas/v4`
+- **Hourly Quota Tracking**: Quota monitoring via `GET https://api.z.ai/api/monitor/usage/quota/limit` with automatic background refresh
+- **Three Credential Tiers**: lite (100 req/h), pro (1000 req/h), max (4000 req/h) with priority-based selection
+- **Sequential Rotation**: Default rotation mode is sequential (use credentials until quota exhausted)
+
+#### Model Support
+
+**Documented Models:**
+
+| Model | Type |
+|-------|------|
+| glm-5.1, glm-5, glm-5-turbo | Chat (flagship) |
+| glm-4.7, glm-4.6, glm-4.5 | Chat (previous generation) |
+| glm-4-32b-0414-128k | Chat (long context) |
+| glm-5v-turbo, glm-4.6v, glm-4.5v | Vision/multimodal |
+| glm-ocr | OCR |
+| glm-image, cogView-4-250304 | Image generation |
+| cogvideox-3, viduq1-text, viduq1-image, vidu2-image | Video generation |
+| glm-asr-2512 | Speech recognition |
+| autoglm-phone-multilingual | Phone automation |
+
+#### Tier System
+
+| Tier | Hourly Limit | Priority |
+|------|-------------|----------|
+| max | 4000 req/h | 1 (highest) |
+| pro | 1000 req/h | 2 |
+| lite | 100 req/h | 3 (lowest) |
+
+Tier is auto-detected from the quota monitoring API response (`data.level` field).
+
+#### Quota Tracking (`ZaiQuotaTracker`)
+
+Inherits from `LightweightQuotaMixin` for shared cache/pool infrastructure:
+
+- **Monitoring API**: `GET https://api.z.ai/api/monitor/usage/quota/limit` with Bearer token auth
+- **Multi-Metric Tracking**: 5-minute token usage percentage, hourly request count, daily token usage percentage
+- **Background Refresh**: Configurable interval (default: 5 minutes) via `ZAI_QUOTA_REFRESH_INTERVAL`
+- **Reset Time**: Aligned to next hour boundary (hourly quota window)
+
+**API Response Format:**
+```json
+{
+  "code": 200,
+  "data": {
+    "level": "pro",
+    "limits": [
+      {"type": "TOKENS_LIMIT", "unit": 3, "percentage": 45.2},
+      {"type": "TIME_LIMIT", "unit": 5, "used": 120, "total": 1000},
+      {"type": "TOKENS_LIMIT", "unit": 6, "percentage": 12.3}
+    ]
+  }
+}
+```
+
+**ZAI Limit Unit Codes:**
+
+| Unit Code | Meaning |
+|-----------|---------|
+| 3 | 5-minute token usage percentage |
+| 5 | Hourly time-based request count |
+| 6 | Daily token usage percentage |
+
+#### Error Handling
+
+**Quota Error Patterns:**
+
+| Pattern | Cooldown | Reason |
+|---------|----------|--------|
+| `insufficient balance` | 0s (permanent) | `INSUFFICIENT_BALANCE` |
+| `recharge` | 0s (permanent) | `INSUFFICIENT_BALANCE` |
+| `rate` | 3600s | `QUOTA_EXHAUSTED` |
+| `limit` | 3600s | `QUOTA_EXHAUSTED` |
+| `quota` | 3600s | `QUOTA_EXHAUSTED` |
+
+#### Additional Endpoints
+
+Beyond chat completions, the provider supports:
+
+- **Image Generation**: `images/generations` with async task polling via `images/{id}`
+- **Tool Endpoints**: `tools/tokenizer`, `tools/layout-parsing`, `tools/web-reader`
+- **Agent Chat**: `agents/chat` for synchronous agent interactions
+
+#### Configuration
+
+```env
+# Required
+ZAI_API_KEY_1="your-api-key"
+
+# Optional: Override API base URL
+ZAI_API_BASE="https://api.z.ai/api/coding/paas/v4"
+
+# Optional: Quota refresh interval (seconds)
+ZAI_QUOTA_REFRESH_INTERVAL=300
+```
+
+#### Docker Runtime
+
+The Dockerfile sets `PYTHONPATH=/app/src` to ensure the `rotator_library` package is importable at runtime. This is critical for ZAI and other provider modules that use relative imports within the package structure.
+
+---
+
 ### 2.21. Adaptive Rate Limiter (`adaptive_rate_limiter.py`)
 
 Proactive per-provider request pacing using a token bucket with AIMD (Additive Increase / Multiplicative Decrease) rate adjustment. When a provider returns 429, the rate is reduced by a configurable factor; on success, the rate is gradually increased. A ceiling mechanism remembers the rate that caused the last 429 and probes only to 90% of that ceiling until the ceiling expires.
@@ -2203,3 +2343,166 @@ Centralizes all `asyncio.Lock` and `asyncio.Semaphore` instances used across the
 | `weight_cache_lock` | Protects credential weight cache |
 | `pool_lock` | Protects HTTP client pool initialization |
 | `persistence_lock` | Protects batched persistence flush |
+
+### 2.30. Static Model Fallback (`client/_models.py` & `client/bootstrap.py`)
+
+When the provider model discovery API is unreachable (network failure, all credentials exhausted, auth errors), the system falls back to static model list definitions to keep the `/v1/models` endpoint functional.
+
+**Fallback Chain:**
+
+1. **Provider Model Definitions** (`provider_instance.model_definitions`): Provider-specific hardcoded model name-to-ID mappings
+2. **Client Model Definitions** (`self.model_definitions`): Client-level model definitions loaded at initialization
+3. **Provider Static Models** (`provider_instance.get_static_models()`): Provider method returning a hardcoded list of known models
+
+**How It Works:**
+
+The `get_available_models()` method in `ModelsMixin` wraps the live API call in a try/catch for each credential. When all credentials fail:
+
+```python
+def get_static_fallback() -> List[str]:
+    static_fallback = []
+    try:
+        static_fallback = self.model_definitions.get_all_provider_models(provider)
+    except (OSError, IOError, ValueError) as e:
+        lib_logger.error('Failed to get static models for provider %s: %s', provider, ...)
+        static_fallback = []
+    if not static_fallback and provider_instance and hasattr(provider_instance, 'get_static_models'):
+        try:
+            static_fallback = provider_instance.get_static_models()
+        except (OSError, IOError, ValueError, TypeError) as e:
+            lib_logger.error('Failed to get provider static models for %s: %s', provider, ...)
+            static_fallback = []
+    return static_fallback
+```
+
+The static fallback is only used when the live API discovery completely fails. Discovery failure is treated as a degradation (not a hard failure), downgraded to a warning log that includes the static model count.
+
+**Bootstrap Module** (`client/bootstrap.py`):
+
+Extracted from `client.py` into a separate module for maintainability. Provides three initialization functions that must run in order:
+
+1. **`apply_import_time_patches()`**: Applies monkey-patches that must run before importing litellm/aiohttp (DNS fix, finish_reason patch, SSL/TLS 1.2 connector patch). Uses idempotency guards to prevent double-patching.
+2. **`configure_litellm_runtime()`**: Configures LiteLLM globals once per process (sets `LITELLM_LOG=ERROR`, `drop_params=True`, suppresses Pydantic serialization warnings).
+3. **`configure_client_logging(data_dir, configure_logging)`**: Configures rotator_library logging for a client instance (failure logger setup, propagation control, null handler).
+
+### 2.31. Token Calculator max_output Cap (`token_calculator.py`)
+
+The token calculator's `calculate_max_tokens` function previously used `model_max_output` from the model info service as a cap on the maximum output tokens. This cap has been removed because external catalogs (models.dev, OpenRouter) often report stale or incorrect `max_output` values that are lower than the model's actual capability, causing legitimate requests to be rejected.
+
+**What Changed:**
+
+The `model_max_output` parameter is no longer used to cap the output token limit. The remaining guardrails are sufficient and accurate:
+
+1. **Context Window Cap**: Output tokens are capped at `context_window - input_tokens - safety_buffer`
+2. **Input Token Count**: Accurate token counting prevents overflow
+3. **Safety Buffer**: A configurable buffer (default: 512 tokens) ensures room for the response
+
+**Rationale:**
+
+External catalog data is crowdsourced and frequently lags behind provider updates. A model's actual max output may be 2x-4x higher than what models.dev reports. The context window and input token counts are locally verified and accurate, making them sufficient guardrails without the inaccurate external cap.
+
+### 2.32. Chunk Aggregator (`utils/chunk_aggregator.py`)
+
+Centralizes streaming chunk aggregation logic that was previously duplicated across the streaming wrapper and the forced-streaming completion path in the retry layer. Reduces ~140 lines of duplicated aggregation logic into a single reusable class.
+
+**Design:**
+
+- **`__slots__` Optimization**: All internal state uses `__slots__` for memory efficiency and attribute access speed
+- **Bounded Parts Lists**: Content parts are flushed when they exceed `_MAX_CONTENT_PARTS` (50,000) or `_MAX_GENERIC_PARTS` (5,000) to prevent unbounded memory growth on very long streams
+- **Generic String Parts**: Non-standard streaming fields (e.g., `reasoning_content` from Moonshot) are accumulated via `_generic_str_parts` dict and promoted to the final message on `result_dict`
+
+**`reasoning_content` Preservation:**
+
+The aggregator preserves `reasoning_content` from streaming chunks by treating it as a generic string field. Each chunk's `reasoning_content` delta is appended to `_generic_str_parts["reasoning_content"]`, and on `result_dict`, all generic string parts are joined and promoted to the final message:
+
+```python
+# In result_dict property:
+for key, parts in self._generic_str_parts.items():
+    msg[key] = "".join(parts)
+```
+
+This is critical for Moonshot multi-turn tool calls, where `reasoning_content` must survive the aggregation step to be forwarded to the Anthropic compatibility layer.
+
+**Key Methods:**
+
+| Method | Purpose |
+|--------|---------|
+| `add_chunk(chunk_dict)` | Process one streaming chunk dict |
+| `result_dict` | Property returning assembled message dict |
+| `result_model_response(model)` | Return assembled `litellm.ModelResponse` |
+| `raise_if_error()` | Raise if chunk was an error payload |
+
+### 2.33. Moonshot Provider (via litellm)
+
+Moonshot AI (kimi) models are accessed through litellm's built-in Moonshot provider integration, not through a dedicated provider class. The proxy registers Moonshot in `litellm_providers.py` with route prefix `moonshot/` and API base `https://api.moonshot.ai/v1`.
+
+**Configuration:**
+
+```env
+MOONSHOT_API_KEY_1="your-moonshot-api-key"
+```
+
+**`reasoning_content` in Multi-Turn Tool Calls:**
+
+Moonshot's API returns `reasoning_content` in streaming chunks alongside `tool_calls`. Previous handling lost this field during chunk aggregation in multi-turn conversations, causing the Anthropic compatibility layer to drop thinking content. The fix ensures `reasoning_content` is preserved through the `ChunkAggregator`'s `_generic_str_parts` mechanism and forwarded to the `anthropic_compat/translator.py` for correct conversion to Anthropic thinking blocks.
+
+### 2.34. Compatibility Endpoints
+
+The proxy provides endpoints compatible with non-OpenAI clients:
+
+**Ollama Compatibility:**
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/tags` | List models in Ollama format (returns `name`, `model`, `details` with family/quantization fields) |
+
+**LM Studio Compatibility:**
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /v1/props` | Server properties (version, mode, GPU devices) |
+| `GET /props` | Same as above (alternative path) |
+
+**OpenAI Responses API:**
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /v1/responses` | OpenAI Responses API endpoint for Codex CLI, translating to/from Chat Completions format |
+
+The `/v1/responses` endpoint accepts the OpenAI Responses API input format, normalizes it to a Chat Completions request, routes it through the standard `acompletion` pipeline, then translates the result back to Responses API shape. Fields specific to the Responses API (`background`, `include`, `metadata`, `reasoning`, `store`, `truncation`, etc.) are extracted before translation and not forwarded to the provider.
+
+### 2.35. Auto-Updating Launcher (`start_proxy.bat`)
+
+A Windows batch script for one-command proxy startup with automatic updates.
+
+**Features:**
+
+1. **Auto-Update**: Runs `git pull --quiet` before launch if `.git` directory exists
+2. **Local Change Safety**: Skips auto-update if `git diff --quiet` reports uncommitted changes, preventing merge conflicts
+3. **Virtual Environment Activation**: Detects and activates `.venv` or `venv` in the project root
+4. **aiohttp DNS Fix**: Sets `AIOHTTP_NO_EXTENSIONS=1` before Python starts to prevent Domain name not found errors when DNS works at ping level
+5. **Configurable Host/Port**: Uses `PROXY_HOST` (default: `127.0.0.1`) and `PROXY_PORT` (default: `8000`) environment variables
+6. **Python Fallback**: Tries `python` first, then `py` if not found
+
+**Startup Flow:**
+
+```
+start_proxy.bat
+  |
+  +-- Check .git exists?
+  |     +-- git diff --quiet? (local changes?)
+  |     |     +-- Yes: Skip update, warn
+  |     |     +-- No: git pull --quiet
+  |     |           +-- Success: Repository is up to date
+  |     |           +-- Failure: Warning: git pull failed, continuing...
+  |     +-- Not a git repo: Skip update
+  |
+  +-- Set AIOHTTP_NO_EXTENSIONS=1
+  +-- Activate .venv/Scripts/activate.bat (or venv/)
+  +-- Set PROXY_HOST / PROXY_PORT defaults
+  +-- Launch python src/proxy_app/main.py --host --port
+```
+
+**Docker Runtime:**
+
+The Dockerfile sets `PYTHONPATH=/app/src` and `CMD ["python", "src/proxy_app/main.py", "--host", "0.0.0.0", "--port", "8000"]`, ensuring the rotator_library package is importable and the proxy starts correctly in container environments.
