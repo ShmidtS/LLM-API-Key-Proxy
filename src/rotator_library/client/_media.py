@@ -463,6 +463,19 @@ class MediaMixin:
                 pre_request_callback=pre_request_callback,
                 **kwargs,
             )
+        # Mistral TTS models are routed natively because LiteLLM's Mistral
+        # provider only exposes /chat/completions and /embeddings, so
+        # litellm.aspeech() fails with "Unable to map the custom llm provider".
+        if (
+            model.lower().startswith("mistral/")
+            and "tts" in model.lower()
+        ):
+            return self._rate_limited_execute(
+                self._native_mistral_tts,
+                request=request,
+                pre_request_callback=pre_request_callback,
+                **kwargs,
+            )
         return self._media_request(
             litellm.aspeech,
             request=request,
@@ -525,6 +538,48 @@ class MediaMixin:
 
         lib_logger.error("No audio data in Gemini TTS response: %s", list(data.keys()))
         raise ValueError(f"Gemini TTS returned no audio data: {list(data.keys())}")
+
+    async def _native_mistral_tts(self, **kwargs) -> Any:
+        """Call Mistral TTS API directly.
+
+        LiteLLM's Mistral provider does not expose /audio/speech, so
+        litellm.aspeech() fails with provider-mapping errors.  We hit the
+        OpenAI-compatible endpoint directly.
+        """
+        model = normalize_model_string(str(kwargs.pop("model", "")))
+        api_key = kwargs.pop("api_key")
+        input_text = kwargs.pop("input", "")
+        voice = kwargs.pop("voice", "alloy")
+        response_format = kwargs.pop("response_format", "mp3")
+        speed = kwargs.pop("speed", None)
+        timeout = kwargs.pop("timeout", getattr(self, "global_timeout", 60))
+
+        model_name = model.split("/", 1)[1] if "/" in model else model
+        url = "https://api.mistral.ai/v1/audio/speech"
+
+        payload = {
+            "model": model_name,
+            "input": input_text,
+            "voice": voice,
+            "response_format": response_format,
+        }
+        if speed is not None:
+            payload["speed"] = float(speed)
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        http_client = await self._get_http_client_async(streaming=False)
+        resp = await http_client.post(url, json=payload, headers=headers, timeout=timeout)
+        if resp.status_code != 200:
+            lib_logger.error(
+                "Mistral TTS API error %d: %s | payload: %s",
+                resp.status_code, resp.text[:500], str(payload)[:500],
+            )
+        resp.raise_for_status()
+        return resp.content
 
     def atranscription(
         self,
