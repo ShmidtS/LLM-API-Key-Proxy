@@ -7,9 +7,13 @@ from litellm.litellm_core_utils.token_counter import token_counter
 
 from ..error_handler import classify_error
 from ..error_types import mask_credential
+from ..timeout_config import TimeoutConfig
 from ..utils.model_utils import extract_provider_from_model, match_model_pattern
 
 lib_logger = logging.getLogger("rotator_library")
+
+_MODEL_FETCH_DEFAULT_TIMEOUT = TimeoutConfig.model_fetch()
+_MODEL_FETCH_BG_TIMEOUT = TimeoutConfig.model_fetch_background()
 
 
 class ModelsMixin:
@@ -144,75 +148,67 @@ class ModelsMixin:
 
         return base_count
 
-    async def get_available_models(self, provider: str) -> List[str]:
-        """Returns a list of available models for a specific provider, with caching."""
-        lib_logger.info("Getting available models for provider: %s", provider)
+    def _static_fallback(self, provider: str) -> List[str]:
+        """Return static fallback models for a provider (no network calls)."""
         provider_instance = self._get_provider_instance(provider)
-
-        def get_static_fallback() -> List[str]:
+        static_fallback = []
+        try:
+            static_fallback = self.model_definitions.get_all_provider_models(provider)
+        except (OSError, IOError, ValueError) as e:
+            lib_logger.error(
+                "Failed to get static models for provider %s: %s: %s",
+                provider,
+                type(e).__name__,
+                e,
+            )
             static_fallback = []
+        if (
+            not static_fallback
+            and provider_instance
+            and hasattr(provider_instance, "get_static_models")
+        ):
             try:
-                static_fallback = self.model_definitions.get_all_provider_models(provider)
-            except (OSError, IOError, ValueError) as e:
+                static_fallback = provider_instance.get_static_models()
+            except (OSError, IOError, ValueError, TypeError) as e:
                 lib_logger.error(
-                    "Failed to get static models for provider %s: %s: %s",
+                    "Failed to get provider static models for %s: %s: %s",
                     provider,
                     type(e).__name__,
                     e,
                 )
                 static_fallback = []
-            if (
-                not static_fallback
-                and provider_instance
-                and hasattr(provider_instance, "get_static_models")
-            ):
-                try:
-                    static_fallback = provider_instance.get_static_models()
-                except (OSError, IOError, ValueError, TypeError) as e:
-                    lib_logger.error(
-                        "Failed to get provider static models for %s: %s: %s",
-                        provider,
-                        type(e).__name__,
-                        e,
-                    )
-                    static_fallback = []
+        return static_fallback
+
+    async def _fetch_provider_models_inner(self, provider: str) -> List[str]:
+        """Fetch models from a provider via HTTP, apply filters, and cache the result.
+
+        This is the core fetch logic extracted from get_available_models.
+        It performs credential rotation, calls the provider's get_models(),
+        applies whitelist/blacklist, writes to _model_list_cache, and returns final models.
+        """
+        provider_instance = self._get_provider_instance(provider)
+        credentials_for_provider = self.all_credentials.get(provider)
+        if not credentials_for_provider:
+            lib_logger.warning("No credentials for provider: %s", provider)
+            static_fallback = self._static_fallback(provider)
+            lib_logger.warning(
+                "No credentials for provider %s; using %d static models",
+                provider,
+                len(static_fallback),
+            )
             return static_fallback
 
-        lock = await self._lock_manager.get_lock(provider)
-        async with lock:
-            if provider in self._model_list_cache:
-                cached_models, cached_at = self._model_list_cache[provider]
-                if time.monotonic() - cached_at < self._MODEL_LIST_CACHE_TTL:
-                    lib_logger.debug("Returning cached models for provider: %s", provider)
-                    return cached_models
-
-            credentials_for_provider = self.all_credentials.get(provider)
-            if not credentials_for_provider:
-                lib_logger.warning("No credentials for provider: %s", provider)
-                static_fallback = get_static_fallback()
-                lib_logger.warning(
-                    "No credentials for provider %s; using %d static models",
-                    provider,
-                    len(static_fallback),
-                )
-                return static_fallback
-
-            shuffled_credentials = list(credentials_for_provider)
-            offset = self._cred_offset.get(provider, 0)
-            self._cred_offset[provider] = (offset + 1) % len(shuffled_credentials)
-            shuffled_credentials = (
-                shuffled_credentials[offset:] + shuffled_credentials[:offset]
-            )
+        shuffled_credentials = list(credentials_for_provider)
+        offset = self._cred_offset.get(provider, 0)
+        self._cred_offset[provider] = (offset + 1) % len(shuffled_credentials)
+        shuffled_credentials = (
+            shuffled_credentials[offset:] + shuffled_credentials[:offset]
+        )
 
         if provider_instance:
-            # For providers with hardcoded models (like gemini_cli), we only need to call once.
-            # For others, we might need to try multiple keys if one is invalid.
-            # The current logic of iterating works for both, as the credential is not
-            # always used in get_models.
             consecutive_auth_errors = 0
             for credential in shuffled_credentials:
                 try:
-                    # Display last 6 chars for API keys, or the filename for OAuth paths
                     cred_display = mask_credential(credential)
                     lib_logger.debug(
                         f"Attempting to get models for {provider} with credential {cred_display}"
@@ -245,6 +241,8 @@ class ModelsMixin:
                             f"Filtered out {len(models) - len(final_models)} models for provider {provider}."
                         )
 
+                    # Write to cache under lock to prevent race conditions
+                    lock = await self._lock_manager.get_lock(provider)
                     async with lock:
                         self._model_list_cache[provider] = (final_models, time.monotonic())
                     return final_models
@@ -273,7 +271,7 @@ class ModelsMixin:
 
         # Discovery failure is a degradation (static models still usable),
         # not a hard failure; downgrade to warning and include static count.
-        static_fallback = get_static_fallback()
+        static_fallback = self._static_fallback(provider)
         lib_logger.warning(
             "Failed to get models for provider %s after trying all credentials; "
             "provider unreachable, using %d static models",
@@ -282,10 +280,117 @@ class ModelsMixin:
         )
         return static_fallback
 
-    async def get_all_available_models(
-        self, grouped: bool = True
+    async def _fetch_provider_models(
+        self, provider: str, *, timeout: float | None = None
+    ) -> List[str]:
+        """Fetch models for a provider with a bounded timeout.
+
+        On timeout, logs a warning and returns static fallback models.
+        """
+        effective_timeout = timeout or _MODEL_FETCH_DEFAULT_TIMEOUT
+        try:
+            return await asyncio.wait_for(
+                self._fetch_provider_models_inner(provider),
+                timeout=effective_timeout,
+            )
+        except asyncio.TimeoutError:
+            lib_logger.warning(
+                "Model fetch timed out for %s (%.1fs)", provider, effective_timeout
+            )
+            return self._static_fallback(provider)
+
+    async def get_available_models(
+        self, provider: str, *, timeout: float | None = None
+    ) -> List[str]:
+        """Returns a list of available models for a specific provider, with caching.
+
+        Uses task deduplication: concurrent callers share the same in-flight fetch.
+        On cache miss, starts a background fetch task and awaits it.
+        """
+        # 1. Check cache (no lock needed - dict read is atomic in asyncio)
+        if provider in self._model_list_cache:
+            cached_models, cached_at = self._model_list_cache[provider]
+            if time.monotonic() - cached_at < self._MODEL_LIST_CACHE_TTL:
+                lib_logger.debug("Returning cached models for provider: %s", provider)
+                return cached_models
+
+        # 2. Deduplicate: if a fetch is already in-flight, await that task
+        existing_task = self._model_fetch_tasks.get(provider)
+        if existing_task is not None and not existing_task.done():
+            try:
+                return await asyncio.wait_for(existing_task, timeout=60.0)
+            except asyncio.TimeoutError:
+                return self._static_fallback(provider)
+            except Exception:
+                return self._static_fallback(provider)
+
+        # 3. No in-flight task -> start one
+        task = asyncio.create_task(
+            self._fetch_provider_models(provider, timeout=timeout)
+        )
+        self._model_fetch_tasks[provider] = task
+        task.add_done_callback(
+            lambda t, p=provider: self._model_fetch_tasks.pop(p, None)
+        )
+
+        try:
+            return await task
+        except Exception:
+            return self._static_fallback(provider)
+
+    async def get_all_available_models_nonblocking(
+        self, grouped: bool = True, *, timeout: float = _MODEL_FETCH_DEFAULT_TIMEOUT
     ) -> Union[Dict[str, List[str]], List[str]]:
-        """Returns a list of all available models, either grouped by provider or as a flat list."""
+        """Return models for all providers. Never blocks on slow providers.
+
+        - Cached providers: return instantly from cache.
+        - Uncached providers: start background fetch with timeout, return static fallback.
+        - Subsequent calls will see freshly cached providers.
+        """
+        all_providers = list(self.all_credentials.keys())
+        result: dict[str, list[str]] = {}
+
+        for provider in all_providers:
+            # Check cache first (fast path)
+            if provider in self._model_list_cache:
+                cached_models, cached_at = self._model_list_cache[provider]
+                if time.monotonic() - cached_at < self._MODEL_LIST_CACHE_TTL:
+                    result[provider] = cached_models
+                    continue
+
+            # Uncached: trigger background fetch if not already in-flight
+            if provider not in self._model_fetch_tasks or self._model_fetch_tasks[provider].done():
+                task = asyncio.create_task(
+                    self._fetch_provider_models(provider, timeout=timeout)
+                )
+                self._model_fetch_tasks[provider] = task
+                task.add_done_callback(
+                    lambda t, p=provider: self._model_fetch_tasks.pop(p, None)
+                )
+
+            # Return static fallback for now (next request will have cached data)
+            result[provider] = self._static_fallback(provider)
+
+        if grouped:
+            return result
+        flat = []
+        for models in result.values():
+            flat.extend(models)
+        return flat
+
+    async def get_all_available_models(
+        self, grouped: bool = True, *, quick: bool = False
+    ) -> Union[Dict[str, List[str]], List[str]]:
+        """Returns a list of all available models, either grouped by provider or as a flat list.
+
+        Args:
+            grouped: If True, return dict keyed by provider. If False, return flat list.
+            quick: If True, use non-blocking fetch (returns cached/fallback immediately).
+                   If False (default), use blocking gather for complete results.
+        """
+        if quick:
+            return await self.get_all_available_models_nonblocking(grouped=grouped)
+
         lib_logger.info("Getting all available models...")
 
         all_providers = list(self.all_credentials.keys())

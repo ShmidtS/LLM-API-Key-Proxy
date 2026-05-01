@@ -22,6 +22,7 @@ import orjson
 
 from fastapi import FastAPI
 from rotator_library import PROVIDER_PLUGINS, RotatingClient
+from rotator_library.client._models import _MODEL_FETCH_BG_TIMEOUT
 from rotator_library.credential_manager import CredentialManager
 from rotator_library.dns_fix import close_doh_client, close_dns_executor
 from rotator_library.model_info_service import init_model_info_service
@@ -463,10 +464,13 @@ def create_lifespan(config: LifespanConfig):
                 "Model info service started (fetching pricing data in background)."
             )
 
-        # Pre-warm model list cache in background
+        # Pre-warm model list cache in background (non-blocking, bounded timeout)
         async def _prewarm_models():
             try:
-                await client.get_all_available_models(grouped=True)
+                await client.get_all_available_models_nonblocking(
+                    grouped=True, timeout=_MODEL_FETCH_BG_TIMEOUT
+                )
+                logger.info("Model prewarm completed (slow providers fetching in background)")
             except Exception as e:
                 logger.exception("Model prewarm failed: %s", e)
 

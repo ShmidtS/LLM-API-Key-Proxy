@@ -54,6 +54,10 @@ class TimeoutConfig:
     _MODEL_FILTER_FETCH = 30.0  # Fetching model lists from providers
     _PROVIDER_REQUEST = 30.0  # Provider metadata/request helper calls
 
+    # Model discovery timeouts (per-provider model list fetch)
+    _MODEL_FETCH = 10.0  # Interactive request (bounded, non-blocking)
+    _MODEL_FETCH_BG = 30.0  # Background prefetch (more patient)
+
     # Cached httpx.Timeout instances
     _STREAMING_TIMEOUT: Optional[httpx.Timeout] = None
     _DEFAULT_TIMEOUT: Optional[httpx.Timeout] = None
@@ -95,6 +99,16 @@ class TimeoutConfig:
     def provider_request(cls) -> float:
         """Provider metadata/request helper timeout."""
         return cls._get_env_float("TIMEOUT_PROVIDER_REQUEST", cls._PROVIDER_REQUEST)
+
+    @classmethod
+    def model_fetch(cls) -> float:
+        """Timeout for per-provider model list fetch during interactive requests."""
+        return cls._get_env_float("TIMEOUT_MODEL_FETCH", cls._MODEL_FETCH)
+
+    @classmethod
+    def model_fetch_background(cls) -> float:
+        """Timeout for per-provider model list fetch in background tasks."""
+        return cls._get_env_float("TIMEOUT_MODEL_FETCH_BG", cls._MODEL_FETCH_BG)
 
     @classmethod
     def dns_query(cls) -> float:

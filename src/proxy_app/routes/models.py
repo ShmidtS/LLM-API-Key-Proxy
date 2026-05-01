@@ -45,7 +45,7 @@ async def list_models(
     if _models_cache["bytes"] is not None and _models_cache["expires"] > now:
         return Response(content=_models_cache["bytes"], media_type="application/json", headers={"Cache-Control": "max-age=60"})
 
-    model_ids = await client.get_all_available_models(grouped=False)
+    model_ids = await client.get_all_available_models_nonblocking(grouped=False)
 
     if enriched and hasattr(request.app.state, "model_info_service"):
         model_info_service = request.app.state.model_info_service
@@ -140,7 +140,7 @@ async def list_models_ollama(
     _=Depends(verify_api_key),
 ) -> Response:
     """Ollama-compatible /api/tags endpoint."""
-    model_ids = await client.get_all_available_models(grouped=False)
+    model_ids = await client.get_all_available_models_nonblocking(grouped=False)
     ollama_models = [
         {
             "name": mid,

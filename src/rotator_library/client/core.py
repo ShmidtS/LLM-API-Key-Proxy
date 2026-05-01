@@ -261,6 +261,7 @@ class RotatingClient(
             credential_to_provider=self._build_credential_to_provider_map(),
         )
         self._model_list_cache: dict[str, tuple[list[str], float]] = {}
+        self._model_fetch_tasks: dict[str, asyncio.Task] = {}
         self._provider_method_cache: dict[tuple[str, str], Any] = {}
         # Use HttpClientPool singleton for optimized connection management
         self._http_pool: Optional[HttpClientPool] = None
