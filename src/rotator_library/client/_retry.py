@@ -1812,7 +1812,7 @@ class RetryMixin(RetryBaseMixin):
         )
 
         # Collect dict chunks and assemble into a non-streaming response
-        aggregator = ChunkAggregator()
+        aggregator = ChunkAggregator(model=model, llm_provider=provider)
 
         async for chunk in stream_generator:
             # STREAM_DONE sentinel: stream is complete
