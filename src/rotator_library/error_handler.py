@@ -153,6 +153,8 @@ _UPSTREAM_ERROR_PATTERNS = (
 )
 
 _ACCOUNT_BILLING_ERROR_PATTERNS = (
+    "account_overdue",
+    "overdue account",
     "arrearage",
     "overdue payment",
     "account in good standing",
@@ -166,6 +168,8 @@ _ACCOUNT_BILLING_ERROR_PATTERNS = (
 )
 
 _LITELLM_API_CREDIT_PATTERNS = (
+    "account_overdue",
+    "overdue account",
     "add credits to continue",
     "credits required",
     "usage_limit_exceeded",
@@ -173,6 +177,11 @@ _LITELLM_API_CREDIT_PATTERNS = (
     "out of credit",
     "payment required",
     "quota",
+)
+
+_AUTHENTICATION_ERROR_PATTERNS = (
+    "invalid_iam_token",
+    "invalid iam token",
 )
 
 _NON_ROTATABLE_ERRORS = frozenset(
@@ -1396,6 +1405,13 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
         )
 
     if isinstance(e, (InvalidRequestError, BadRequestError)):
+        if any(pattern in error_str_lower for pattern in _AUTHENTICATION_ERROR_PATTERNS):
+            return ClassifiedError(
+                error_type="authentication",
+                original_exception=e,
+                status_code=401,
+            )
+
         if any(pattern in error_str_lower for pattern in _UPSTREAM_ERROR_PATTERNS):
             return ClassifiedError(
                 error_type="server_error",
@@ -1535,7 +1551,11 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                 retry_after=300,
                 reason="litellm_api_credits",
             )
-        if "invalid api key" in error_str_lower or "invalid_api_key" in error_str_lower:
+        if (
+            "invalid api key" in error_str_lower
+            or "invalid_api_key" in error_str_lower
+            or any(pattern in error_str_lower for pattern in _AUTHENTICATION_ERROR_PATTERNS)
+        ):
             return ClassifiedError(
                 error_type="authentication",
                 original_exception=e,
