@@ -47,7 +47,7 @@ async def web_search(
 
     log_request_to_console(
         url=str(request.url),
-        client_info=(request.client.host, request.client.port),
+        client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
         request_data=request_data,
     )
 
@@ -90,12 +90,12 @@ async def web_search(
     if is_streaming:
         from proxy_app.streaming import streaming_response_wrapper, make_sse_response
 
-        response_generator = client.acompletion(request=request, **completion_kwargs)
+        response_generator = client.acompletion(request=request, **completion_kwargs)  # type: ignore[arg-type]
         return make_sse_response(
-            streaming_response_wrapper(request, response_generator)
+            streaming_response_wrapper(request, response_generator)  # type: ignore[arg-type]
         )
     else:
-        response = await client.acompletion(request=request, **completion_kwargs)
+        response = await client.acompletion(request=request, **completion_kwargs)  # type: ignore[reportGeneralTypeIssues]
         return response
 
 

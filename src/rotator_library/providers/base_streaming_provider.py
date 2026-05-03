@@ -8,13 +8,13 @@ LightweightQuotaMixin is in utilities/lightweight_quota_mixin.py.
 
 import asyncio
 import logging
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Union
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Union, cast
 
 import json
 import copy
 
 from ..utils.json_utils import json_loads
-import litellm
+import litellm  # type: ignore[import-untyped]
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -166,7 +166,7 @@ class StreamingResponseMixin:
                 continue
 
             choice = chunk.choices[0]
-            delta = choice.get("delta", {})
+            delta = choice.get("delta") or {}
 
             # Aggregate content
             if "content" in delta and delta["content"] is not None:
@@ -217,7 +217,7 @@ class StreamingResponseMixin:
             # Aggregate function calls (legacy format)
             if "function_call" in delta and delta["function_call"] is not None:
                 if "function_call" not in final_message:
-                    final_message["function_call"] = {"_name_chunks": [], "_args_chunks": []}
+                    final_message["function_call"] = {"_name_chunks": [], "_args_chunks": []}  # type: ignore[assignment]
                 if (
                     "name" in delta["function_call"]
                     and delta["function_call"]["name"] is not None
@@ -255,7 +255,7 @@ class StreamingResponseMixin:
 
         # Resolve function_call chunks
         if "function_call" in final_message:
-            fc = final_message["function_call"]
+            fc = cast(Dict[str, Any], final_message["function_call"])
             if "_name_chunks" in fc:
                 fc["name"] = "".join(fc.pop("_name_chunks"))
             if "_args_chunks" in fc:
@@ -264,7 +264,7 @@ class StreamingResponseMixin:
         # Ensure standard fields are present for consistent logging
         for field in ["content", "tool_calls", "function_call"]:
             if field not in final_message:
-                final_message[field] = None
+                final_message[field] = None  # type: ignore[assignment]
 
         # Determine finish_reason based on accumulated state
         # Priority: tool_calls wins if present, then chunk's finish_reason, then default to "stop"

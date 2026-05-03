@@ -304,10 +304,12 @@ class GoogleProjectDiscoveryMixin:
             )
 
             if data is None:
+                placeholder_request = httpx.Request("GET", "https://placeholder.local")
+                placeholder_response = httpx.Response(502, request=placeholder_request)
                 raise httpx.HTTPStatusError(
                     "All loadCodeAssist endpoints failed",
-                    request=None,
-                    response=None,
+                    request=placeholder_request,
+                    response=placeholder_response,
                 )
 
             lib_logger.debug(

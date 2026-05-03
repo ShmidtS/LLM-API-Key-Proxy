@@ -157,7 +157,7 @@ class UsageManagerCore(
         self._grouped_models_cache: "OrderedDict[str, OrderedDict[str, Tuple[List[str], int]]]" = OrderedDict()
 
         # Resilient writer for usage data persistence
-        self._state_writer = ResilientStateWriter(file_path, lib_logger)
+        self._state_writer = ResilientStateWriter(file_path or "", lib_logger)
 
         # Batch persistence manager for high-throughput scenarios
         # Enabled via USAGE_PERSISTENCE_ENABLE=true environment variable

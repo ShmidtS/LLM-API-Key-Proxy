@@ -118,7 +118,7 @@ def _patch_litellm_ssl(disable_tls_verify=None):
         return
 
     try:
-        import litellm
+        import litellm  # type: ignore[import-untyped]
         import httpx
         from rotator_library.timeout_config import TimeoutConfig
 

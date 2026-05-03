@@ -47,7 +47,7 @@ class SingletonMeta(type):
     - ``is_initialized()`` classmethod to check if singleton exists
     """
 
-    _instances: Dict[Type, Any] = {}
+    _instances: Dict[Any, Any] = {}
     _lock: threading.Lock = threading.Lock()
 
     def __call__(cls, *args: Any, **kwargs: Any) -> Any:

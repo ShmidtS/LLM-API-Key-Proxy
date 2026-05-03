@@ -17,7 +17,7 @@ from typing import Dict, Any, Optional, Tuple
 
 from .utils.json_utils import json_dumps_str
 
-from litellm.litellm_core_utils.token_counter import token_counter
+from litellm.litellm_core_utils.token_counter import token_counter  # type: ignore[import-untyped]
 
 logger = logging.getLogger("rotator_library")
 

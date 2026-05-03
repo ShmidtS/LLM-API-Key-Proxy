@@ -102,10 +102,11 @@ _start_time = time.time()
 
 # Load all .env files from root folder (main .env first, then any additional *.env files)
 try:
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv as _load_dotenv_impl
 except ImportError:
-    load_dotenv = None
+    _load_dotenv_impl = None
     logger.warning("python-dotenv not installed; .env files will not be loaded")
+load_dotenv = _load_dotenv_impl
 
 # Get the application root directory (EXE dir if frozen, else CWD)
 # Inlined here to avoid triggering heavy rotator_library imports before loading screen
@@ -169,7 +170,7 @@ with _console.status("[dim]Loading core dependencies...", spinner="dots"):
 
 logger.info("Loading LiteLLM library...")
 with _console.status("[dim]Loading LiteLLM library...", spinner="dots"):
-    import litellm
+    import litellm  # type: ignore[import-untyped]
     import httpx
 
     # CRITICAL: Apply SSL patches IMMEDIATELY after litellm import
@@ -514,11 +515,12 @@ if __name__ == "__main__":
     # Check if user explicitly wants to add credentials
     if args.add_credential:
         # Import and call ensure_env_defaults to create .env and PROXY_API_KEY if needed
-        from rotator_library.credential_tool import ensure_env_defaults
+        from rotator_library.credential_tool import ensure_env_defaults, run_credential_tool
 
         ensure_env_defaults()
         # Reload environment variables after ensure_env_defaults creates/updates .env
-        load_dotenv(ENV_FILE, override=True)
+        if load_dotenv is not None:
+            load_dotenv(ENV_FILE, override=True)
         run_credential_tool()
     else:
         # Check if onboarding is needed
@@ -533,14 +535,16 @@ if __name__ == "__main__":
             show_onboarding_message()
 
             # Launch credential tool automatically
-            from rotator_library.credential_tool import ensure_env_defaults
+            from rotator_library.credential_tool import ensure_env_defaults, run_credential_tool
 
             ensure_env_defaults()
-            load_dotenv(ENV_FILE, override=True)
+            if load_dotenv is not None:
+                load_dotenv(ENV_FILE, override=True)
             run_credential_tool()
 
             # After credential tool exits, reload and re-check
-            load_dotenv(ENV_FILE, override=True)
+            if load_dotenv is not None:
+                load_dotenv(ENV_FILE, override=True)
             # Re-read PROXY_API_KEY from environment (may have changed after credential tool)
             _early_proxy_api_key = os.getenv("PROXY_API_KEY")
             PROXY_API_KEY = _early_proxy_api_key

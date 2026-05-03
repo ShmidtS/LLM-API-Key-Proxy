@@ -23,8 +23,8 @@ from .provider_interface import strip_provider_prefix, build_bearer_headers
 from .base_streaming_provider import StreamingResponseMixin, parse_sse_stream
 from ..timeout_config import TimeoutConfig
 from ..transaction_logger import ProviderLogger
-import litellm
-from litellm.exceptions import RateLimitError
+import litellm  # type: ignore[import-untyped]
+from litellm.exceptions import RateLimitError  # type: ignore[import-untyped]
 
 lib_logger = logging.getLogger("rotator_library")
 

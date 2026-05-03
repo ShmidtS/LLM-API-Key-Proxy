@@ -179,7 +179,7 @@ class ModelDefinitionManager:
     def __init__(self, settings: AdvancedSettings):
         self.settings = settings
 
-    def get_current_provider_models(self, provider: str) -> Optional[Dict]:
+    def get_current_provider_models(self, provider: str) -> Optional[Dict | List]:
         """Get currently configured models for a provider"""
         key = f"{provider.upper()}_MODELS"
         value = os.getenv(key)

@@ -2,7 +2,7 @@
 # Copyright (c) 2026 ShmidtS
 
 import httpx
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
 from .provider_interface import ProviderInterface
 from .utilities import (
     DEFAULT_GEMINI_SAFETY_SETTINGS_MAP,
@@ -30,7 +30,7 @@ class GeminiProvider(ProviderInterface):
             ],
         )
 
-    def convert_safety_settings(self, settings: Dict[str, str]) -> List[Dict[str, Any]]:
+    def convert_safety_settings(self, settings: Union[Dict[str, str], List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
         """
         Converts generic safety settings to the Gemini-specific format.
         """
@@ -44,7 +44,7 @@ class GeminiProvider(ProviderInterface):
         # If the caller already provided Gemini-style list, merge defaults without overwriting
         if isinstance(settings, list):
             existing = {item.get("category"): item for item in settings if isinstance(item, dict) and item.get("category")}
-            merged = list(settings)
+            merged: List[Dict[str, Any]] = [dict(item) for item in settings if isinstance(item, dict)]
             for cat, thr in default_gemini.items():
                 if cat not in existing:
                     merged.append({"category": cat, "threshold": thr})

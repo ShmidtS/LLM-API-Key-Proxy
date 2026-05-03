@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
-from typing import Any
+from typing import Any, Literal, cast
 
-import litellm
+import litellm  # type: ignore[import-untyped]
 from fastapi import APIRouter, Depends, UploadFile, File, Form
 
 from proxy_app.dependencies import verify_api_key
@@ -26,7 +26,7 @@ async def upload_file(
     with a file and purpose parameter.
     """
     file_tuple = (file.filename or "upload.jsonl", file.file)
-    response = await litellm.acreate_file(file=file_tuple, purpose=purpose)
+    response = await litellm.acreate_file(file=file_tuple, purpose=cast(Literal["assistants", "batch", "fine-tune"], purpose))
     return response
 
 

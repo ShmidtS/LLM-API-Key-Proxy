@@ -57,12 +57,12 @@ def configure_litellm_runtime() -> None:
     if _LITELLM_RUNTIME_CONFIGURED:
         return
 
-    import litellm
+    import litellm  # type: ignore[import-untyped]
 
     from ..utils.litellm_patches import suppress_litellm_serialization_warnings
 
     os.environ["LITELLM_LOG"] = "ERROR"
-    litellm.set_verbose = False
+    litellm.set_verbose = False  # type: ignore[attr-defined]
     litellm.drop_params = True
 
     # Suppress harmless Pydantic serialization warnings from litellm.

@@ -1285,7 +1285,8 @@ async def setup_api_key():
         }
 
     # Add custom providers from PROVIDER_PLUGINS
-    for provider_key, provider_class in PROVIDER_PLUGINS.items():
+    provider_plugins = PROVIDER_PLUGINS or {}
+    for provider_key, provider_class in provider_plugins.items():
         # Skip OAuth-only providers
         if provider_key in oauth_only_providers:
             continue
@@ -2763,7 +2764,7 @@ def run_credential_tool(from_launcher=False):
 
         _elapsed = time.time() - _start_time
         _, _plugins = _ensure_providers_loaded()
-        print(f"✓ Tool ready in {_elapsed:.2f}s ({len(_plugins)} providers available)")
+        print(f"✓ Tool ready in {_elapsed:.2f}s ({len(_plugins) if _plugins is not None else 0} providers available)")
 
         # Small delay to let user see the ready message
         time.sleep(0.5)

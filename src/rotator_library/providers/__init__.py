@@ -17,7 +17,6 @@ __all__ = [
     "ProviderInterface",
     "PROVIDER_PLUGINS",
     "PROVIDER_AUTH_MAP",
-    "OpenAICompatibleProvider",
     "get_provider",
     "list_providers",
     "get_all_providers",
@@ -30,14 +29,14 @@ _ProviderEntry = Union[Type[_ProviderInterface], _LazyEntry]
 
 
 class _LazyProviderPlugins(dict):
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> _ProviderEntry:
         value = super().__getitem__(key)
         if isinstance(value, tuple):
             value = _resolve_lazy_entry(value)
             super().__setitem__(key, value)
         return value
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: _ProviderEntry | None = None) -> _ProviderEntry | None:
         if key not in self:
             return default
         return self[key]

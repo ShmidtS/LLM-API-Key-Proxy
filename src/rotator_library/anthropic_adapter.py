@@ -4,7 +4,7 @@
 import logging
 from .config.defaults import TRACE
 
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Callable, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .anthropic_compat.models import AnthropicMessagesRequest, AnthropicCountTokensRequest
@@ -26,7 +26,7 @@ class AnthropicAdapter:
         self,
         request: "AnthropicMessagesRequest",
         raw_request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         raw_body_data: Optional[dict] = None,
     ) -> Any:
         """

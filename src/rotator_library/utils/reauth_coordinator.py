@@ -243,4 +243,4 @@ def get_reauth_coordinator() -> ReauthCoordinator:
         with _coordinator_lock:
             if _coordinator is None:
                 _coordinator = ReauthCoordinator()
-    return _coordinator
+    return _coordinator  # type: ignore[return-value]

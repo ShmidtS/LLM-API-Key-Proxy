@@ -373,14 +373,14 @@ class BaseQuotaTracker:
 
             # Check learned values first (stored as max_requests integers)
             if tier in self._learned_costs and clean_model in self._learned_costs[tier]:
-                return self._learned_costs[tier][clean_model]
+                return int(self._learned_costs[tier][clean_model])
 
             # Fall back to defaults
             tier_max = self.default_max_requests.get(tier)
             if tier_max and clean_model in tier_max:
                 return tier_max[clean_model]
 
-            return self.default_max_requests_unknown
+            return int(self.default_max_requests_unknown)
 
         cost = self.get_quota_cost(model, tier)
         if cost <= 0:
@@ -539,7 +539,9 @@ class BaseQuotaTracker:
                 lib_logger.warning(f"Baseline fetch failed: {result}")
                 continue
 
-            cred_path, quota_data = result
+            if not isinstance(result, tuple):
+                continue
+            cred_path, quota_data = result  # type: ignore[misc]
             if quota_data["status"] == "success":
                 success_count += 1
             results[cred_path] = quota_data

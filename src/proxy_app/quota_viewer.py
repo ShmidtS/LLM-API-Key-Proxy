@@ -407,7 +407,10 @@ class QuotaViewer:
         Updates both 'summary' and 'global_summary' based on current
         provider stats.
         """
-        providers = self.cached_stats.get("providers", {})
+        stats = self.cached_stats
+        if not stats:
+            return
+        providers = stats.get("providers", {})
         if not providers:
             return
 
@@ -441,7 +444,7 @@ class QuotaViewer:
             round(total_input_cached / total_input * 100, 1) if total_input > 0 else 0
         )
 
-        self.cached_stats["summary"] = {
+        stats["summary"] = {
             "total_providers": len(providers),
             "total_credentials": total_creds,
             "active_credentials": active_creds,
@@ -457,7 +460,7 @@ class QuotaViewer:
         }
 
         # Also recalculate global_summary if it exists
-        if "global_summary" in self.cached_stats:
+        if "global_summary" in stats:
             global_total_requests = 0
             global_input_cached = 0
             global_input_uncached = 0
@@ -484,7 +487,7 @@ class QuotaViewer:
                 else 0
             )
 
-            self.cached_stats["global_summary"] = {
+            stats["global_summary"] = {
                 "total_providers": len(providers),
                 "total_credentials": total_creds,
                 "total_requests": global_total_requests,
@@ -1310,10 +1313,11 @@ class QuotaViewer:
             "Enter API key (or press Enter to cancel)", default=""
         ).strip()
 
-        if api_key:
-            self.current_remote["api_key"] = api_key
+        if api_key and self.current_remote:
+            remote = self.current_remote
+            remote["api_key"] = api_key
             # Update config with new API key
-            self.config.update_remote(self.current_remote["name"], api_key=api_key)
+            self.config.update_remote(remote["name"], api_key=api_key)
 
             # Try again
             with self.console.status("[bold]Reconnecting...", spinner="dots"):

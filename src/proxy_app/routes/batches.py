@@ -4,7 +4,7 @@
 from typing import Any
 
 import orjson
-import litellm
+import litellm  # type: ignore[import-untyped]
 from fastapi import APIRouter, Request, Depends
 
 from proxy_app.dependencies import verify_api_key
@@ -29,7 +29,7 @@ async def create_batch(
     request_data = orjson.loads(await request.body())
     log_request_to_console(
         url=str(request.url),
-        client_info=(request.client.host, request.client.port),
+        client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
         request_data=request_data,
     )
     response = await litellm.acreate_batch(**request_data)

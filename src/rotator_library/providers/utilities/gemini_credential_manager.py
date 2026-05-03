@@ -210,6 +210,8 @@ class GeminiCredentialManager:
         for result in results:
             if isinstance(result, Exception):
                 continue
+            if not isinstance(result, tuple):
+                continue
             path, data = result
             if isinstance(data, Exception):
                 lib_logger.debug(f"Could not load persisted tier from {path}: {data}")

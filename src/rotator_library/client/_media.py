@@ -1,10 +1,12 @@
 import logging
 import re
 from collections.abc import Mapping
+from typing import Callable
 from typing import Any, Optional
 
-import litellm
-from litellm.llms.openai.common_utils import OpenAIError
+import litellm  # type: ignore[import-untyped]
+from litellm.exceptions import BadRequestError as LiteBadRequestError, NotFoundError as LiteNotFoundError, APIError as LiteAPIError  # type: ignore[import-untyped]
+from litellm.llms.openai.common_utils import OpenAIError  # type: ignore[import-untyped]
 
 from ..error_types import NoAvailableKeysError
 from ..config.defaults import MEDIA_GLOBAL_TIMEOUT
@@ -109,9 +111,9 @@ class MediaMixin:
 
     def _media_request(
         self,
-        endpoint_fn: callable,
+        endpoint_fn: Callable,
         request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         **kwargs,
     ) -> Any:
         return self._rate_limited_execute(
@@ -124,7 +126,7 @@ class MediaMixin:
     async def aimage_generation(
         self,
         request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         **kwargs,
     ) -> Any:
         """Generate an image via the image generation endpoint."""
@@ -206,9 +208,9 @@ class MediaMixin:
                 )
             return response
         except (
-            litellm.BadRequestError,
-            litellm.NotFoundError,
-            litellm.APIError,
+            LiteBadRequestError,
+            LiteNotFoundError,
+            LiteAPIError,
             OpenAIError,
         ) as e:
             err_lower = str(e).lower()
@@ -235,7 +237,7 @@ class MediaMixin:
                     pre_request_callback=pre_request_callback,
                     **kwargs,
                 )
-            except (litellm.NotFoundError, OpenAIError) as chat_e:
+            except (LiteNotFoundError, OpenAIError) as chat_e:
                 chat_err_lower = str(chat_e).lower()
                 if (
                     isinstance(chat_e, OpenAIError)
@@ -345,7 +347,7 @@ class MediaMixin:
     async def _image_via_chat_completion(
         self,
         request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         **kwargs,
     ) -> Any:
         """Route image generation through /chat/completions as fallback."""
@@ -418,7 +420,7 @@ class MediaMixin:
     def aimage_edit(
         self,
         request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         **kwargs,
     ) -> Any:
         """Edit an image via the image edit endpoint."""
@@ -432,7 +434,7 @@ class MediaMixin:
     def aimage_variation(
         self,
         request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         **kwargs,
     ) -> Any:
         """Create a variation of an image via the image variation endpoint."""
@@ -446,7 +448,7 @@ class MediaMixin:
     def aspeech(
         self,
         request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         **kwargs,
     ) -> Any:
         """Generate speech audio via the speech endpoint.
@@ -584,7 +586,7 @@ class MediaMixin:
     def atranscription(
         self,
         request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         **kwargs,
     ) -> Any:
         """Transcribe audio via the transcription endpoint."""

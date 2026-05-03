@@ -1,0 +1,10 @@
+{
+  "include": ["src"],
+  "exclude": ["tests", "logs", "dist", "build"],
+  "enableTypeIgnoreComments": true,
+  "reportAttributeAccessIssue": "none",
+  "reportMissingTypeStubs": "none",
+  "reportPrivateImportUsage": "none",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic"
+}

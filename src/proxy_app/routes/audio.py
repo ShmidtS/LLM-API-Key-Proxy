@@ -19,13 +19,13 @@ from proxy_app.routes.error_handler import handle_route_errors
 router = APIRouter(tags=["audio"])
 
 
-@router.post("/v1/audio/speech")
+@router.post("/v1/audio/speech", response_model=None)
 @handle_route_errors(error_format="openai", log_context="TTS request failed")
 async def audio_speech(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_api_key),
-) -> StreamingResponse:
+) -> StreamingResponse | Response:
     """
     OpenAI-compatible TTS (text-to-speech) endpoint.
 
@@ -36,7 +36,7 @@ async def audio_speech(
 
     log_request_to_console(
         url=str(request.url),
-        client_info=(request.client.host, request.client.port),
+        client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
         request_data=request_data,
     )
 
@@ -127,11 +127,11 @@ async def audio_transcriptions(
     for key in ("language", "prompt", "response_format", "temperature"):
         value = form.get(key)
         if value is not None:
-            kwargs[key] = value if key != "temperature" else float(value)
+            kwargs[key] = value if key != "temperature" else float(str(value))  # type: ignore[arg-type]
 
     log_request_to_console(
         url=str(request.url),
-        client_info=(request.client.host, request.client.port),
+        client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
         request_data={"model": model, "file": file_filename, **{k: v for k, v in kwargs.items() if k not in ("file",)}},
     )
 

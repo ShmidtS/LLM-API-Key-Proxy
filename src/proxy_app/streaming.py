@@ -5,7 +5,20 @@ import asyncio
 import logging
 from typing import AsyncGenerator, Any, Optional
 
-import litellm
+import litellm  # type: ignore[import-untyped]
+from litellm.exceptions import (  # type: ignore[import-untyped]
+    InvalidRequestError,
+    BadRequestError,
+    ContextWindowExceededError,
+    AuthenticationError,
+    NotFoundError,
+    RateLimitError,
+    ServiceUnavailableError,
+    APIConnectionError,
+    Timeout,
+    InternalServerError,
+    OpenAIError,
+)
 
 _GENERIC_STREAM_ERROR_MESSAGE = "An unexpected error occurred during the stream"
 
@@ -25,26 +38,26 @@ def _get_litellm_error_map():
     return [
         (
             (
-                litellm.InvalidRequestError,
-                litellm.BadRequestError,
+                InvalidRequestError,
+                BadRequestError,
                 ValueError,
-                litellm.ContextWindowExceededError,
+                ContextWindowExceededError,
             ),
             400,
             "Invalid Request",
             "invalid_request_error",
         ),
-        ((litellm.AuthenticationError,), 401, "Authentication Error", "authentication_error"),
-        ((litellm.NotFoundError,), 404, "Not Found", "invalid_request_error"),
-        ((litellm.RateLimitError,), 429, "Rate Limit Exceeded", "rate_limit_error"),
+        ((AuthenticationError,), 401, "Authentication Error", "authentication_error"),
+        ((NotFoundError,), 404, "Not Found", "invalid_request_error"),
+        ((RateLimitError,), 429, "Rate Limit Exceeded", "rate_limit_error"),
         (
-            (litellm.ServiceUnavailableError, litellm.APIConnectionError),
+            (ServiceUnavailableError, APIConnectionError),
             503,
             "Service Unavailable",
             "api_error",
         ),
-        ((litellm.Timeout,), 504, "Gateway Timeout", "api_error"),
-        ((litellm.InternalServerError, litellm.OpenAIError), 502, "Bad Gateway", "api_error"),
+        ((Timeout,), 504, "Gateway Timeout", "api_error"),
+        ((InternalServerError, OpenAIError), 502, "Bad Gateway", "api_error"),
     ]
 
 
@@ -208,7 +221,7 @@ async def streaming_response_wrapper(
                 logging.debug("stream_response: request lacks stream counter attribute on decrement")
         if logger and aggregator is not None:
             try:
-                logger.log_final_response(
+                await logger.log_final_response(
                     status_code=final_status_code,
                     headers=None,
                     body=aggregator.build_response_dict() if final_status_code == 200 else {"error": {"message": _GENERIC_STREAM_ERROR_MESSAGE, "type": final_error_log_context["type"] if final_error_log_context else "proxy_internal_error", "code": final_status_code}},
@@ -235,26 +248,26 @@ def make_sse_response(generator) -> StreamingResponse:
 LITELLM_ERROR_MAP = [
     (
         (
-            litellm.InvalidRequestError,
-            litellm.BadRequestError,
+            InvalidRequestError,
+            BadRequestError,
             ValueError,
-            litellm.ContextWindowExceededError,
+            ContextWindowExceededError,
         ),
         400,
         "Invalid Request",
         "invalid_request_error",
     ),
-    ((litellm.AuthenticationError,), 401, "Authentication Error", "authentication_error"),
-    ((litellm.NotFoundError,), 404, "Not Found", "invalid_request_error"),
-    ((litellm.RateLimitError,), 429, "Rate Limit Exceeded", "rate_limit_error"),
+    ((AuthenticationError,), 401, "Authentication Error", "authentication_error"),
+    ((NotFoundError,), 404, "Not Found", "invalid_request_error"),
+    ((RateLimitError,), 429, "Rate Limit Exceeded", "rate_limit_error"),
     (
-        (litellm.ServiceUnavailableError, litellm.APIConnectionError),
+        (ServiceUnavailableError, APIConnectionError),
         503,
         "Service Unavailable",
         "api_error",
     ),
-    ((litellm.Timeout,), 504, "Gateway Timeout", "api_error"),
-    ((litellm.InternalServerError, litellm.OpenAIError), 502, "Bad Gateway", "api_error"),
+    ((Timeout,), 504, "Gateway Timeout", "api_error"),
+    ((InternalServerError, OpenAIError), 502, "Bad Gateway", "api_error"),
 ]
 
 
@@ -265,7 +278,7 @@ def handle_litellm_error(e: Exception, error_format: str = "openai") -> HTTPExce
             if error_format == "openai":
                 detail = f"{openai_label}: {str(e)}"
             else:
-                message = f"Request timed out: {str(e)}" if isinstance(e, litellm.Timeout) else str(e)
+                message = f"Request timed out: {str(e)}" if isinstance(e, Timeout) else str(e)
                 detail = {
                     "type": "error",
                     "error": {"type": anthropic_error_type, "message": message},

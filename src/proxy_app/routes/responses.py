@@ -77,7 +77,7 @@ async def create_response(
     enable_raw_logging = getattr(request.app.state, "enable_raw_logging", False)
     raw_logger = RawIOLogger() if enable_raw_logging else None
     if raw_logger:
-        await raw_logger.log_request(headers=request.headers, body=request_data)
+        await raw_logger.log_request(headers=dict(request.headers), body=request_data)
 
     logger.info(
         "Responses request normalized: model=%s stream=%s max_tokens=%s max_completion_tokens=%s has_max_output_tokens=%s tools=%s input_type=%s",
@@ -92,7 +92,7 @@ async def create_response(
 
     log_request_to_console(
         url=str(request.url),
-        client_info=(request.client.host, request.client.port),
+        client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
         request_data=chat_request_data,
     )
 
@@ -109,11 +109,11 @@ async def create_response(
                 )
             )
 
-        response = await client.acompletion(request=request, **chat_request_data)
+        response = await client.acompletion(request=request, **chat_request_data)  # type: ignore[reportGeneralTypeIssues]
         if raw_logger:
             response_headers = response.headers if hasattr(response, "headers") else None
             status_code = response.status_code if hasattr(response, "status_code") else 200
-            raw_logger.log_final_response(
+            await raw_logger.log_final_response(
                 status_code=status_code,
                 headers=response_headers,
                 body=response.model_dump(),
@@ -124,7 +124,7 @@ async def create_response(
         )
     except Exception:
         if getattr(request.app.state, "enable_request_logging", False) and raw_logger:
-            raw_logger.log_final_response(
+            await raw_logger.log_final_response(
                 status_code=500, headers=None, body={"error": "Internal server error"}
             )
         raise
@@ -441,6 +441,8 @@ async def _chat_sse_to_responses_sse(
                     yield b"data: [DONE]\n\n"
                     return
 
+                if not isinstance(payload, dict):
+                    continue
                 for response_event in _chat_chunk_to_response_stream_events(payload, state):
                     yield _responses_sse_event(response_event)
 

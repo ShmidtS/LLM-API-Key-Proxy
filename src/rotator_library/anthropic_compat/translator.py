@@ -175,13 +175,13 @@ def anthropic_to_openai_messages(
             openai_messages.append({"role": "system", "content": system})
         elif isinstance(system, list):
             # System can be list of text blocks in Anthropic format
-            system_text: str = " ".join(
+            sys_text: str = " ".join(
                 block.get("text", "")
                 for block in system
                 if isinstance(block, dict) and block.get("type") == "text"
             )
-            if system_text:
-                openai_messages.append({"role": "system", "content": system_text})
+            if sys_text:
+                openai_messages.append({"role": "system", "content": sys_text})
 
     for msg in anthropic_messages:
         role: str = msg.get("role", "user")
@@ -231,13 +231,13 @@ def anthropic_to_openai_messages(
                     elif block_type == "document":
                         # Convert Anthropic document format (e.g. PDF) to OpenAI
                         # Documents are treated similarly to images with appropriate mime type
-                        source: Dict[str, Any] = block.get("source", {})
-                        if source.get("type") == "base64":
+                        doc_source: Dict[str, Any] = block.get("source", {})
+                        if doc_source.get("type") == "base64":
                             openai_content.append(
                                 {
                                     "type": "image_url",
                                     "image_url": {
-                                        "url": f"data:{source.get('media_type', 'application/pdf')};base64,{source.get('data', '')}"
+                                        "url": f"data:{doc_source.get('media_type', 'application/pdf')};base64,{doc_source.get('data', '')}"
                                     },
                                 }
                             )
@@ -259,12 +259,12 @@ def anthropic_to_openai_messages(
                         ):
                             thinking_signature = signature
                     elif block_type == "redacted_thinking":
-                        signature: str = block.get("signature", "")
+                        redacted_sig: str = block.get("signature", "")
                         if (
-                            signature
-                            and len(signature) >= MIN_THINKING_SIGNATURE_LENGTH
+                            redacted_sig
+                            and len(redacted_sig) >= MIN_THINKING_SIGNATURE_LENGTH
                         ):
-                            thinking_signature = signature
+                            thinking_signature = redacted_sig
                     elif block_type == "tool_use":
                         # Anthropic tool_use -> OpenAI tool_calls
                         tool_calls.append(
@@ -303,22 +303,22 @@ def anthropic_to_openai_messages(
                                     )
                                 elif b_type == "image":
                                     # Convert Anthropic image format to OpenAI format
-                                    source: Dict[str, Any] = b.get("source", {})
-                                    if source.get("type") == "base64":
+                                    tool_source: Dict[str, Any] = b.get("source", {})
+                                    if tool_source.get("type") == "base64":
                                         tool_content_parts.append(
                                             {
                                                 "type": "image_url",
                                                 "image_url": {
-                                                    "url": f"data:{source.get('media_type', 'image/png')};base64,{source.get('data', '')}"
+                                                    "url": f"data:{tool_source.get('media_type', 'image/png')};base64,{tool_source.get('data', '')}"
                                                 },
                                             }
                                         )
-                                    elif source.get("type") == "url":
+                                    elif tool_source.get("type") == "url":
                                         tool_content_parts.append(
                                             {
                                                 "type": "image_url",
                                                 "image_url": {
-                                                    "url": source.get("url", "")
+                                                    "url": tool_source.get("url", "")
                                                 },
                                             }
                                         )
@@ -609,23 +609,23 @@ def translate_anthropic_request(request: AnthropicMessagesRequest) -> Dict[str, 
     Returns:
         Dictionary containing the OpenAI-compatible request parameters
     """
-    messages: List[Dict[str, Any]] = request.messages
+    messages: List[Dict[str, Any]] = [m.model_dump(exclude_none=True) for m in request.messages]  # type: ignore[assignment]
     if messages and not isinstance(messages[0], dict):
-        messages = [m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else m for m in messages]
+        messages = [m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else m for m in messages]  # type: ignore[assignment]
 
     system: Optional[Union[str, List[Dict[str, Any]]]] = request.system
     if system is not None and hasattr(system, "model_dump"):
-        system = system.model_dump(exclude_none=True)
+        system = system.model_dump(exclude_none=True)  # type: ignore[union-attr]
 
     openai_messages: List[Dict[str, Any]] = anthropic_to_openai_messages(messages, system)
 
-    tools: Optional[List[Dict[str, Any]]] = request.tools
+    tools: Optional[List[Dict[str, Any]]] = request.tools  # type: ignore[assignment]
     if tools and not isinstance(tools[0], dict):
-        tools = [t.model_dump(exclude_none=True) if hasattr(t, "model_dump") else t for t in tools]
+        tools = [t.model_dump(exclude_none=True) if hasattr(t, "model_dump") else t for t in tools]  # type: ignore[assignment]
 
     tool_choice: Optional[Dict[str, Any]] = request.tool_choice
     if tool_choice is not None and hasattr(tool_choice, "model_dump"):
-        tool_choice = tool_choice.model_dump(exclude_none=True)
+        tool_choice = tool_choice.model_dump(exclude_none=True)  # type: ignore[union-attr]
 
     openai_tools: Optional[List[Dict[str, Any]]] = anthropic_to_openai_tools(tools)
     openai_tool_choice: Optional[Union[str, Dict[str, Any]]] = anthropic_to_openai_tool_choice(tool_choice)

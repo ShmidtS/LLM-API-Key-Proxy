@@ -6,7 +6,7 @@ import time
 import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
-import litellm
+import litellm  # type: ignore[import-untyped]
 from ..config.defaults import TRACE
 from ..config import (
     COOLDOWN_BACKOFF_TIERS,
@@ -687,7 +687,7 @@ class UsageManagerRecordingMixin:
                     max_requests = plugin_instance.get_max_requests_for_model(
                         clean_model, tier
                     )
-                    used_requests = int((1.0 - remaining_fraction) * max_requests)
+                    used_requests = int((1.0 - remaining_fraction) * (max_requests or 0))
                 else:
                     # Fallback: keep existing count if we can't calculate
                     used_requests = model_data.get("request_count", 0)
@@ -744,7 +744,7 @@ class UsageManagerRecordingMixin:
                 )
                 if should_update:
                     model_cooldowns[model] = reset_timestamp
-                    hours_until_reset = (reset_timestamp - now_ts) / 3600
+                    hours_until_reset = (reset_timestamp - now_ts) / 3600  # type: ignore[operator]
                     # Determine group or model name for logging
                     group = self._get_model_quota_group(credential, model)
                     cooldown_set_info = {
@@ -756,7 +756,7 @@ class UsageManagerRecordingMixin:
                 # BUT only if this is a FRESH exhaustion (wasn't already on cooldown)
                 # This prevents re-marking after cycle reset when quota refresh sees existing cooldown
                 if not was_already_on_cooldown:
-                    cooldown_duration = reset_timestamp - now_ts
+                    cooldown_duration = reset_timestamp - now_ts  # type: ignore[operator]
                     provider = self._get_provider_from_credential(credential)
                     if provider:
                         threshold = self._get_exhaustion_cooldown_threshold(provider)

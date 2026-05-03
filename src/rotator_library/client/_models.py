@@ -3,7 +3,7 @@ import logging
 import time
 from typing import Dict, List, Optional, Union
 
-from litellm.litellm_core_utils.token_counter import token_counter
+from litellm.litellm_core_utils.token_counter import token_counter  # type: ignore[import-untyped]
 
 from ..error_handler import classify_error
 from ..error_types import mask_credential

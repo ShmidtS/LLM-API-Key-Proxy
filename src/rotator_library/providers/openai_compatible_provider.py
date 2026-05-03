@@ -64,7 +64,7 @@ class OpenAICompatibleProvider(ProviderInterface):
 
         # Then, try dynamic discovery to get additional models
         try:
-            models_url = f"{self.api_base.rstrip('/')}/models"
+            models_url = f"{(self.api_base or '').rstrip('/')}/models"
             # Prefer the class-provided auth header so subclasses/custom schemes work
             auth_headers = await self.get_auth_header(api_key)
             response = await client.get(models_url, headers=auth_headers)

@@ -8,7 +8,7 @@ import logging
 from typing import TYPE_CHECKING, Optional, Dict, Tuple
 import httpx
 
-from litellm.exceptions import (
+from litellm.exceptions import (  # type: ignore[import-untyped]
     APIConnectionError,
     APIError as LiteLLMAPIError,
     RateLimitError,
@@ -21,7 +21,7 @@ from litellm.exceptions import (
     Timeout,
     ContextWindowExceededError,
 )
-from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.openai.common_utils import OpenAIError  # type: ignore[import-untyped]
 
 from .ip_throttle_detector import (
     ThrottleScope,
@@ -611,7 +611,7 @@ def classify_stream_error(raw_response: Dict) -> "ClassifiedError":
                 error_type="server_error",
                 status_code=503,
                 original_exception=None,
-                retry_after=5.0,
+                retry_after=int(5.0),
             )
 
     if is_provider_abort(raw_response):
@@ -889,8 +889,7 @@ async def handle_429_error(
             await cooldown_manager.start_cooldown(credential, action.cooldown_seconds)
     """
     # Get or create detector
-    if ip_throttle_detector is None:
-        ip_throttle_detector = IPThrottleDetector()
+    detector = ip_throttle_detector if ip_throttle_detector is not None else IPThrottleDetector()
 
     # Step 1: Check for explicit IP throttle indicators in error body
     ip_throttle_from_body = _detect_ip_throttle(error_body, provider=provider)
@@ -946,7 +945,7 @@ async def handle_429_error(
         return action
 
     # Step 3: Record 429 and correlate with other credentials
-    assessment = await ip_throttle_detector.record_429(
+    assessment = await detector.record_429(
         provider=provider,
         credential=mask_credential(credential),
         error_body=error_body,
@@ -1033,13 +1032,16 @@ def _try_parse_provider_quota_error(
 
         # Get error body if available
         error_body = None
-        if hasattr(e, "response") and hasattr(e.response, "text"):
+        _resp = getattr(e, "response", None)
+        if _resp is not None and hasattr(_resp, "text"):
             try:
-                error_body = e.response.text
+                error_body = _resp.text
             except (AttributeError, OSError):
                 lib_logger.debug("Could not read error response text", exc_info=True)
-        elif hasattr(e, "body"):
-            error_body = str(e.body)
+        else:
+            _body = getattr(e, "body", None)
+            if _body is not None:
+                error_body = str(_body)
         # Fallback to full exception string
         if not error_body:
             error_body = str(e)
@@ -1169,7 +1171,7 @@ def validate_response_quality(response, provider: str = "", model: str = ""):
             token_counts[wl] = token_counts.get(wl, 0) + 1
     if token_counts:
         max_count = max(token_counts.values())
-        max_token = max(token_counts, key=token_counts.get)
+        max_token = max(token_counts, key=lambda k: token_counts[k])
         if max_count >= 8 and max_count / max(len(words), 1) > 0.15:
             raise GarbageResponseError(
                 provider=provider, model=model,
@@ -1422,13 +1424,16 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                 provider_class = get_provider(provider)
                 if provider_class and hasattr(provider_class, "parse_quota_error"):
                     error_body = None
-                    if hasattr(e, "response") and hasattr(e.response, "text"):
+                    _resp = getattr(e, "response", None)
+                    if _resp is not None and hasattr(_resp, "text"):
                         try:
-                            error_body = e.response.text
+                            error_body = _resp.text
                         except (AttributeError, OSError):
                             lib_logger.debug("Could not read error response text for quota parse", exc_info=True)
-                    elif hasattr(e, "body"):
-                        error_body = str(e.body)
+                    else:
+                        _body = getattr(e, "body", None)
+                        if _body is not None:
+                            error_body = str(_body)
                     # Also try the full string as body fallback
                     if not error_body:
                         error_body = error_str

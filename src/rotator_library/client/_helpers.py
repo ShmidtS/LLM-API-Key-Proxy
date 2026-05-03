@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
-import litellm
+import litellm  # type: ignore[import-untyped]
 from ..utils.json_utils import json_deep_copy, json_loads
 
 if TYPE_CHECKING:
@@ -281,7 +281,7 @@ class HelpersMixin:
                 lib_logger.debug("Cleared LiteLLM async client cache")
 
             # Also clear any provider-specific client caches
-            from litellm.llms import custom_httpx
+            from litellm.llms import custom_httpx  # type: ignore[import-untyped]
 
             if hasattr(custom_httpx, "httpx_handler"):
                 handler = custom_httpx.httpx_handler

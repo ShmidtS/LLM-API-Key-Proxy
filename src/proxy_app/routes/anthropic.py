@@ -6,10 +6,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 import orjson
-import litellm
+import litellm  # type: ignore[import-untyped]
 from typing import Any, AsyncGenerator
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from rotator_library import RotatingClient
 from rotator_library.anthropic_compat import (
@@ -26,13 +26,13 @@ router = APIRouter(tags=["anthropic"])
 
 
 
-@router.post("/v1/messages")
+@router.post("/v1/messages", response_model=None)
 @handle_route_errors(error_format="anthropic", log_context="Anthropic messages endpoint error")
 async def anthropic_messages(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
     _=Depends(verify_anthropic_api_key),
-) -> JSONResponse:
+) -> JSONResponse | StreamingResponse:
     """
     Anthropic-compatible Messages API endpoint.
 
@@ -79,7 +79,7 @@ async def anthropic_messages(
     else:
         # Non-streaming response
         if logger:
-            logger.log_final_response(
+            await logger.log_final_response(
                 status_code=200,
                 headers=None,
                 body=result,
@@ -108,8 +108,8 @@ async def anthropic_count_tokens(
         return JSONResponse(content=result)
 
     except (
-        litellm.InvalidRequestError,
-        litellm.ContextWindowExceededError,
+        litellm.InvalidRequestError,  # type: ignore[attr-defined]
+        litellm.ContextWindowExceededError,  # type: ignore[attr-defined]
         ValueError,
     ) as e:
         error_response = {
@@ -117,7 +117,7 @@ async def anthropic_count_tokens(
             "error": {"type": "invalid_request_error", "message": str(e)},
         }
         raise HTTPException(status_code=400, detail=error_response)
-    except litellm.AuthenticationError as e:
+    except litellm.AuthenticationError as e:  # type: ignore[attr-defined]
         error_response = {
             "type": "error",
             "error": {"type": "authentication_error", "message": str(e)},

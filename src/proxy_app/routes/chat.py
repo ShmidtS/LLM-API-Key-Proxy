@@ -66,7 +66,7 @@ async def chat_completions(
 
         # If raw logging is enabled, capture the unmodified request data.
         if raw_logger:
-            await raw_logger.log_request(headers=request.headers, body=request_data)
+            await raw_logger.log_request(headers=dict(request.headers), body=request_data)
 
         # Extract and log specific reasoning parameters for monitoring.
         model = request_data.get("model")
@@ -88,7 +88,7 @@ async def chat_completions(
         # Log basic request info to console (this is a separate, simpler logger).
         log_request_to_console(
             url=str(request.url),
-            client_info=(request.client.host, request.client.port),
+            client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
             request_data=request_data,
         )
         is_streaming = request_data.get("stream", False)
@@ -99,7 +99,7 @@ async def chat_completions(
                 streaming_response_wrapper(request, response_generator, raw_logger)
             )
         else:
-            response = await client.acompletion(request=request, **request_data)
+            response = await client.acompletion(request=request, **request_data)  # type: ignore[reportGeneralTypeIssues]
             if raw_logger:
                 # Assuming response has status_code and headers attributes
                 # This might need adjustment based on the actual response object
@@ -109,7 +109,7 @@ async def chat_completions(
                 status_code = (
                     response.status_code if hasattr(response, "status_code") else 200
                 )
-                raw_logger.log_final_response(
+                await raw_logger.log_final_response(
                     status_code=status_code,
                     headers=response_headers,
                     body=response.model_dump(),
@@ -118,7 +118,7 @@ async def chat_completions(
     except Exception as e:
         # Raw I/O logger: log the failed response if request logging is enabled
         if getattr(request.app.state, "enable_request_logging", False) and raw_logger:
-            raw_logger.log_final_response(
+            await raw_logger.log_final_response(
                 status_code=500, headers=None, body={"error": "Internal server error"}
             )
         logger.exception("Chat completions error: %s", e)

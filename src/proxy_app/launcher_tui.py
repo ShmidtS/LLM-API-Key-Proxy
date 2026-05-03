@@ -649,9 +649,9 @@ class LauncherTUI:
         if not confirmed:
             return
 
-        new_port = IntPrompt.ask(
+        new_port = int(IntPrompt.ask(
             "Enter new port", default=self.config.config["port"]
-        )
+        ))
         if 1 <= new_port <= 65535:
             self.config.update(port=new_port)
             self.console.print(
@@ -927,7 +927,7 @@ class LauncherTUI:
 
         _elapsed = time.time() - _start_time
         self.console.print(
-            f"✓ Tool ready in {_elapsed:.2f}s ({len(PROVIDER_PLUGINS)} providers available)"
+            f"✓ Tool ready in {_elapsed:.2f}s ({len(PROVIDER_PLUGINS) if PROVIDER_PLUGINS is not None else 0} providers available)"
         )
 
         # Small delay to let user see the ready message

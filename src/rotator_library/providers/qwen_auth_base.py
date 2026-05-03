@@ -336,7 +336,7 @@ class QwenAuthBase(GoogleOAuthBase):
         # [HEADLESS DETECTION] Check if running in headless environment
         is_headless = is_headless_environment()
 
-        code_verifier, code_challenge = self._generate_pkce_pair()
+        code_verifier, code_challenge = self._generate_pkce()
 
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -347,7 +347,7 @@ class QwenAuthBase(GoogleOAuthBase):
         client = await pool.get_client_async()
         request_data = {
             "client_id": self.CLIENT_ID,
-            "scope": " ".join(self.OAUTH_SCOPES),
+            "scope": " ".join(self.OAUTH_SCOPES or []),
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
         }
@@ -505,17 +505,24 @@ class QwenAuthBase(GoogleOAuthBase):
         Overrides parent to avoid Google UserInfo API call (Qwen uses metadata only).
         """
         try:
-            path = creds_or_path if isinstance(creds_or_path, str) else None
-            creds = (
-                await self._load_credentials(creds_or_path) if path else creds_or_path
-            )
+            path: Optional[str] = None
+            creds: Dict[str, Any]
+            if isinstance(creds_or_path, str):
+                creds = await self._load_credentials(creds_or_path)
+                path = creds_or_path
+            else:
+                creds = creds_or_path
+            if not isinstance(creds, dict):
+                raise ValueError(f"Expected dict credentials, got {type(creds).__name__}")
 
             # This will ensure the token is valid and metadata exists if the flow was just run
             if path:
                 await self.initialize_token(path)
-                creds = await self._load_credentials(
+                loaded = await self._load_credentials(
                     path
                 )  # Re-load after potential init
+                if isinstance(loaded, dict):
+                    creds = loaded
 
             metadata = creds.get("_proxy_metadata", {"email": None})
             email = metadata.get("email")

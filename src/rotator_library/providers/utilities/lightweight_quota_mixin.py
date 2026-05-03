@@ -40,7 +40,7 @@ class LightweightQuotaMixin:
     """
 
     _virtual_model_name: str = ""
-    _quota_cache: Dict[str, Dict[str, Any]] = None
+    _quota_cache: Optional[Dict[str, Dict[str, Any]]] = None
     _quota_refresh_interval: int = 300
     provider_name: str = ""
     _include_max_requests: bool = True
@@ -209,7 +209,8 @@ class LightweightQuotaMixin:
                     usage_data = await self.fetch_quota_usage(api_key, client)
 
                     if usage_data.get("status") == "success":
-                        self._quota_cache[api_key] = usage_data
+                        if self._quota_cache is not None:
+                            self._quota_cache[api_key] = usage_data
                         counters["success"] += 1
 
                         remaining_fraction = usage_data.get("remaining_fraction", 0.0)
@@ -237,7 +238,8 @@ class LightweightQuotaMixin:
                         )
                     else:
                         counters["failed"] += 1
-                        self._quota_cache[api_key] = usage_data
+                        if self._quota_cache is not None:
+                            self._quota_cache[api_key] = usage_data
                         await usage_manager.update_quota_baseline(
                             api_key,
                             self._virtual_model_name,

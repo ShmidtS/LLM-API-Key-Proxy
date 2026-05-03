@@ -21,7 +21,7 @@ import os
 
 lib_logger = logging.getLogger("rotator_library")
 import httpx
-import litellm
+import litellm  # type: ignore[import-untyped]
 
 
 from ..config import (
@@ -196,7 +196,7 @@ class ProviderInterface(ABC):
         """Called at startup to initialize provider with all available credentials."""
         pass
 
-    async def run_background_job(self, usage_manager: Any = None, credentials: List[str] = None) -> None:
+    async def run_background_job(self, usage_manager: Any = None, credentials: List[str] | None = None) -> None:
         """Periodic background refresh job (quota checks, token refresh, etc.).
 
         Called by BackgroundRefresher with usage_manager and credentials.
@@ -233,7 +233,8 @@ class ProviderInterface(ABC):
             return body
         if hasattr(error, "response") and hasattr(error.response, "text"):
             try:
-                return error.response.text
+                text: str = error.response.text  # type: ignore[union-attr,misc]
+                return text
             except (AttributeError, RuntimeError) as e:
                 logging.debug("Failed to extract error response text: %s", e)
         if hasattr(error, "body") and error.body:

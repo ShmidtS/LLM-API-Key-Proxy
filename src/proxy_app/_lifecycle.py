@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import orjson
 
@@ -207,7 +207,7 @@ def create_lifespan(config: LifespanConfig):
 
         # The CredentialManager now handles all discovery, including .env overrides.
         # We pass all environment variables to it for this purpose.
-        cred_manager = CredentialManager(os.environ)
+        cred_manager = CredentialManager(dict(os.environ))  # type: ignore[arg-type]
         oauth_credentials = cred_manager.discover_and_prepare()
 
         if not skip_oauth_init and oauth_credentials:
@@ -265,10 +265,14 @@ def create_lifespan(config: LifespanConfig):
                     continue
 
                 provider_plugin_class = PROVIDER_PLUGINS.get(provider)
-                if not provider_plugin_class:
+                if provider_plugin_class is None:
+                    continue
+                if isinstance(provider_plugin_class, tuple):
+                    continue  # Skip unresolved lazy entries
+                if not isinstance(provider_plugin_class, type):
                     continue
 
-                provider_instance = provider_plugin_class()
+                provider_instance = provider_plugin_class()  # type: ignore[call-non-callable]
 
                 if hasattr(provider_instance, "preload_credentials"):
                     await provider_instance.preload_credentials(paths)
@@ -284,7 +288,7 @@ def create_lifespan(config: LifespanConfig):
             # --- Pass 3: Sequential Deduplication and Final Assembly ---
             for result in results:
                 # Handle exceptions from gather
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException):
                     logger.error(
                         f"Credential processing raised exception: {result}"
                     )
@@ -444,10 +448,10 @@ def create_lifespan(config: LifespanConfig):
             )
             logger.warning("=" * 70)
 
-        import litellm
+        import litellm  # type: ignore[import-untyped]
 
         os.environ["LITELLM_LOG"] = "ERROR"
-        litellm.set_verbose = False
+        litellm.set_verbose = False  # type: ignore[reportPrivateImportUsage]
         if config.use_embedding_batcher:
             batcher = EmbeddingBatcher(client=client)
             app.state.embedding_batcher = batcher
@@ -534,11 +538,11 @@ def create_lifespan(config: LifespanConfig):
 
             # Close litellm's internal aiohttp/httpx sessions to prevent
             # "Unclosed client session" warnings on shutdown
-            await _safe_close_async(litellm.close_litellm_async_clients, "litellm async clients")
+            await _safe_close_async(litellm.close_litellm_async_clients, "litellm async clients")  # type: ignore[reportPrivateImportUsage]
 
             # Clear litellm's internal httpx handler cache (creates unclosed sessions)
             try:
-                from litellm.llms import custom_httpx as _custom_httpx
+                from litellm.llms import custom_httpx as _custom_httpx  # type: ignore[import-untyped]
 
                 _handler = getattr(_custom_httpx, "httpx_handler", None)
                 if _handler is not None:

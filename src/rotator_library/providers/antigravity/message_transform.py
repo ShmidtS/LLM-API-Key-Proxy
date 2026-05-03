@@ -202,7 +202,7 @@ class MessageTransformMixin:
                 func_name = GEMINI3_TOOL_RENAMES.get(func_name, func_name)
                 func_name = f"{self._gemini3_tool_prefix}{func_name}"
 
-            func_part = {
+            func_part: Dict[str, Any] = {
                 "functionCall": {"name": func_name, "args": args, "id": tool_id}
             }
 

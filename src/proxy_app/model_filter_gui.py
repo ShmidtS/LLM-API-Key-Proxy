@@ -29,7 +29,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
-from typing import List, Dict, Tuple, Optional, Callable, Set
+from typing import Any, List, Dict, Tuple, Optional, Callable, Set
 from dotenv import load_dotenv, set_key, unset_key
 from rotator_library.timeout_config import TimeoutConfig
 
@@ -646,7 +646,8 @@ class ModelFetcher:
 
             # Fetch models
             async with httpx.AsyncClient(timeout=TimeoutConfig.model_filter_fetch()) as client:
-                instance = provider_class()
+                from typing import cast
+                instance = cast(Any, provider_class)()
                 models = await instance.get_models(credential, client)
                 return models, None
 
@@ -1451,7 +1452,7 @@ class VirtualModelList:
         parent,
         show_status_indicator: bool = False,
         on_click: Optional[Callable[[str], None]] = None,
-        on_right_click: Optional[Callable[[str, any], None]] = None,
+        on_right_click: Optional[Callable[[str, Any], None]] = None,
     ):
         self.parent = parent
         self.show_status_indicator = show_status_indicator
@@ -1751,7 +1752,7 @@ class VirtualSyncModelLists(ctk.CTkFrame):
         self,
         master,
         on_model_click: Callable[[str], None],
-        on_model_right_click: Callable[[str, any], None],
+        on_model_right_click: Callable[[str, Any], None],
     ):
         super().__init__(master, fg_color="transparent")
 
@@ -2627,7 +2628,7 @@ class RulePanel(ctk.CTkFrame):
         if hasattr(self, "_add_pattern_callback"):
             self._add_pattern_callback(pattern)
 
-    def set_add_callback(self, callback: Callable[[str], None]):
+    def set_add_callback(self, callback: Callable[[str], Any]):
         """Set the callback for adding patterns."""
         self._add_pattern_callback = callback
 
@@ -2980,7 +2981,7 @@ class ModelFilterGUI(ctk.CTk):
             on_input_changed=self._on_rule_input_changed,
         )
         self.ignore_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
-        self.ignore_panel.set_add_callback(self._add_ignore_pattern)
+        self.ignore_panel.set_add_callback(lambda p: self._add_ignore_pattern(p))
         self.ignore_panel.set_delete_callback(self._remove_ignore_pattern)
         self.ignore_panel.set_clear_all_callback(self._clear_all_ignore_rules)
         self.ignore_panel.set_replace_add_callback(
@@ -2997,7 +2998,7 @@ class ModelFilterGUI(ctk.CTk):
             on_input_changed=self._on_rule_input_changed,
         )
         self.whitelist_panel.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
-        self.whitelist_panel.set_add_callback(self._add_whitelist_pattern)
+        self.whitelist_panel.set_add_callback(lambda p: self._add_whitelist_pattern(p))
         self.whitelist_panel.set_delete_callback(self._remove_whitelist_pattern)
         self.whitelist_panel.set_clear_all_callback(self._clear_all_whitelist_rules)
         self.whitelist_panel.set_replace_add_callback(

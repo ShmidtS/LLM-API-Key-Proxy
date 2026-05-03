@@ -213,7 +213,7 @@ class ModelMetadata:
         then debug/meta fields prefixed with underscore.
         """
         # === Core OpenAI-compatible fields ===
-        response = {
+        response: Dict[str, Any] = {
             "id": self.model_id,
             "object": "model",
             "created": self.timestamp,
@@ -242,7 +242,7 @@ class ModelMetadata:
             "output_modalities": self.output_types,
         }
         if self.info.tokenizer:
-            response["architecture"]["tokenizer"] = self.info.tokenizer
+            response["architecture"]["tokenizer"] = self.info.tokenizer  # type: ignore[assignment]
 
         # === Capabilities (extended) ===
         response["capabilities"] = {
@@ -1016,10 +1016,10 @@ class ModelRegistry(metaclass=SingletonMeta):
 
                 if adapter.source_name == "openrouter":
                     self._openrouter_store = result
-                    logger.info("OpenRouter: %d models loaded", len(result))
+                    logger.info("OpenRouter: %d models loaded", len(result) if isinstance(result, dict) else 0)
                 elif adapter.source_name == "modelsdev":
                     self._modelsdev_store = result
-                    logger.info("Models.dev: %d models loaded", len(result))
+                    logger.info("Models.dev: %d models loaded", len(result) if isinstance(result, dict) else 0)
 
             self._rebuild_index()
             self._last_refresh = time.time()

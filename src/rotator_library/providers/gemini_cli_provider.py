@@ -35,8 +35,8 @@ from .utilities.gemini_credential_manager import GeminiCredentialManager
 from ..model_definitions import ModelDefinitions
 from ..timeout_config import TimeoutConfig
 from ..utils.paths import get_cache_dir
-import litellm
-from litellm.exceptions import RateLimitError
+import litellm  # type: ignore[import-untyped]
+from litellm.exceptions import RateLimitError  # type: ignore[import-untyped]
 from ..error_handler import extract_retry_after_from_body
 import os
 from pathlib import Path
@@ -198,7 +198,7 @@ class GeminiCliProvider(
         if not body:
             return None
 
-        result = {
+        result: Dict[str, Any] = {
             "retry_after": None,
             "reason": None,
             "reset_timestamp": None,
@@ -1053,8 +1053,8 @@ class GeminiCliProvider(
                         if e.response is not None:
                             try:
                                 error_body = e.response.text
-                            except (RuntimeError, ValueError, OSError) as e:
-                                lib_logger.debug("Failed to extract error body from HTTPStatusError response: %s", e)
+                            except (RuntimeError, ValueError, OSError) as exc:
+                                lib_logger.debug("Failed to extract error body from HTTPStatusError response: %s", exc)
 
                         # Only log to file logger (for detailed logging)
                         if error_body:
@@ -1096,10 +1096,10 @@ class GeminiCliProvider(
                                 )
                                 continue
                             # No more endpoints to try
-                            raise e
+                            raise
 
                         # Other 4xx errors - don't fallback, re-raise
-                        raise e
+                        raise
 
                     except (httpx.ConnectError, httpx.TimeoutException) as e:
                         # Connection/timeout errors - try next endpoint if available
@@ -1240,7 +1240,7 @@ class GeminiCliProvider(
         contents = self._fix_tool_response_grouping(contents)
 
         # Build request payload matching native gemini-cli structure
-        request_payload = {
+        request_payload: Dict[str, Any] = {
             "model": model_name,
             "project": project_id,
             "user_prompt_id": self._generate_user_prompt_id(),
@@ -1317,7 +1317,7 @@ class GeminiCliProvider(
         return {"prompt_tokens": 0, "total_tokens": 0}
 
     # Use the shared GeminiAuthBase for auth logic
-    async def get_models(self, credential: str, client: httpx.AsyncClient) -> List[str]:
+    async def get_models(self, api_key: str, client: httpx.AsyncClient) -> List[str]:
         """
         Returns a merged list of Gemini CLI models from three sources:
         1. Environment variable models (via model definitions) - ALWAYS included, take priority
@@ -1376,7 +1376,7 @@ class GeminiCliProvider(
         # Source 3: Try dynamic discovery from Gemini API (only if ID not already in env vars)
         try:
             # Get access token for API calls
-            auth_header = await self.get_auth_header(credential)
+            auth_header = await self.get_auth_header(api_key)
             access_token = auth_header["Authorization"].split(" ")[1]
 
             # Try Vertex AI models endpoint

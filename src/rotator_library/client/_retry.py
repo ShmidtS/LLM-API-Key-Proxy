@@ -11,7 +11,7 @@ import codecs
 import logging
 import re
 import time
-from typing import Any, AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Callable, Optional
 
 import httpx
 
@@ -26,8 +26,8 @@ from .retry_base import (
 
 lib_logger = logging.getLogger("rotator_library")
 
-import litellm
-from litellm.exceptions import APIConnectionError, BadRequestError, InvalidRequestError
+import litellm  # type: ignore[import-untyped]
+from litellm.exceptions import APIConnectionError, BadRequestError, InternalServerError, InvalidRequestError, RateLimitError, ServiceUnavailableError  # type: ignore[import-untyped]
 
 from ..config.defaults import MAX_TOTAL_ATTEMPTS, RETRY_SAME_KEY_MAX_WAIT
 from ..error_handler import (
@@ -803,9 +803,9 @@ class RetryMixin(RetryBaseMixin):
 
     async def _execute_with_retry(
         self,
-        api_call: callable,
+        api_call: Callable,
         request: Optional[Any],
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         **kwargs,
     ) -> Any:
         """A generic retry mechanism for non-streaming API calls."""
@@ -899,7 +899,7 @@ class RetryMixin(RetryBaseMixin):
                             return response
 
                         except (
-                            litellm.RateLimitError,
+                            RateLimitError,
                             httpx.HTTPStatusError,
                         ) as e:
                             last_exception = e
@@ -917,8 +917,8 @@ class RetryMixin(RetryBaseMixin):
 
                         except (
                             APIConnectionError,
-                            litellm.InternalServerError,
-                            litellm.ServiceUnavailableError,
+                            InternalServerError,
+                            ServiceUnavailableError,
                             RuntimeError,  # "Cannot send a request, as the client has been closed"
                         ) as e:
                             last_exception = e
@@ -1012,7 +1012,7 @@ class RetryMixin(RetryBaseMixin):
                             _cb_slot_held = False  # record_success already released the slot
                             return response
 
-                        except litellm.RateLimitError as e:
+                        except RateLimitError as e:
                             last_exception = e
                             dec = await self._handle_rate_limit_error(
                                 e, provider, current_cred, model,
@@ -1028,8 +1028,8 @@ class RetryMixin(RetryBaseMixin):
 
                         except (
                             APIConnectionError,
-                            litellm.InternalServerError,
-                            litellm.ServiceUnavailableError,
+                            InternalServerError,
+                            ServiceUnavailableError,
                             RuntimeError,  # "Cannot send a request, as the client has been closed"
                         ) as e:
                             last_exception = e
@@ -1108,7 +1108,7 @@ class RetryMixin(RetryBaseMixin):
                             async with HalfOpenSlot(self._resilience, provider):
                                 break
             finally:
-                await self._release_cred(current_cred, model, key_acquired, provider, _cb_slot_held)
+                await self._release_cred(current_cred if current_cred is not None else "", model, key_acquired, provider, _cb_slot_held)
 
         # Check if we exhausted all credentials or timed out
         error_accumulator.timeout_occurred = time.monotonic() >= deadline
@@ -1131,7 +1131,7 @@ class RetryMixin(RetryBaseMixin):
     async def _streaming_acompletion_with_retry(
         self,
         request: Optional[Any],
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         **kwargs,
     ) -> AsyncGenerator[Any, None]:
         """A dedicated generator for retrying streaming completions with full request preparation and per-key retries."""
@@ -1305,7 +1305,7 @@ class RetryMixin(RetryBaseMixin):
 
                             except (
                                 _StreamedException,
-                                litellm.RateLimitError,
+                                RateLimitError,
                                 httpx.HTTPStatusError,
                                 BadRequestError,
                                 InvalidRequestError,
@@ -1325,8 +1325,8 @@ class RetryMixin(RetryBaseMixin):
 
                             except (
                                 APIConnectionError,
-                                litellm.InternalServerError,
-                                litellm.ServiceUnavailableError,
+                                InternalServerError,
+                                ServiceUnavailableError,
                                 RuntimeError,  # "Cannot send a request, as the client has been closed"
                             ) as e:
                                 last_exception = e
@@ -1486,7 +1486,7 @@ class RetryMixin(RetryBaseMixin):
 
                         except (
                             _StreamedException,
-                            litellm.RateLimitError,
+                            RateLimitError,
                             httpx.HTTPStatusError,
                             BadRequestError,
                             InvalidRequestError,
@@ -1550,7 +1550,7 @@ class RetryMixin(RetryBaseMixin):
                                 attempt=attempt + 1,
                                 error=e,
                                 request_headers=_cached_request_headers,
-                                raw_response_text=cleaned_str,
+                                raw_response_text=cleaned_str or "",
                             )
 
                             error_details = error_payload.get("error", {})
@@ -1648,8 +1648,8 @@ class RetryMixin(RetryBaseMixin):
 
                         except (
                             APIConnectionError,
-                            litellm.InternalServerError,
-                            litellm.ServiceUnavailableError,
+                            InternalServerError,
+                            ServiceUnavailableError,
                             RuntimeError,  # "Cannot send a request, as the client has been closed"
                         ) as e:
                             consecutive_quota_failures.pop(current_cred, None)
@@ -1708,7 +1708,7 @@ class RetryMixin(RetryBaseMixin):
                                 break
 
                 finally:
-                    await self._release_cred(current_cred, model, key_acquired, provider, _cb_slot_held)
+                    await self._release_cred(current_cred if current_cred is not None else "", model, key_acquired, provider, _cb_slot_held)
 
             # Build detailed error response using error accumulator
             error_accumulator.timeout_occurred = time.monotonic() >= deadline
@@ -1791,7 +1791,7 @@ class RetryMixin(RetryBaseMixin):
     async def _forced_streaming_acompletion(
         self,
         request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         **kwargs,
     ) -> Any:
         """

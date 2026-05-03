@@ -380,7 +380,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         ssl_context = self._ssl_context
 
         # Build client kwargs
-        client_kwargs = {
+        client_kwargs: Dict[str, Any] = {
             "timeout": timeout,
             "limits": self._create_limits(streaming=streaming),
             "follow_redirects": True,
@@ -541,12 +541,12 @@ class HttpClientPool(metaclass=SingletonMeta):
         Valid httpx.AsyncClient instance
         """
         client = self._streaming_client if streaming else self._non_streaming_client
-        if not self._is_client_closed(client):
+        if client is not None and not self._is_client_closed(client):
             return client
 
         async with self._client_lock:
             client = self._streaming_client if streaming else self._non_streaming_client
-            if not self._is_client_closed(client):
+            if client is not None and not self._is_client_closed(client):
                 return client
 
         # Slow path: recreate outside lock so other requests aren't blocked
@@ -565,6 +565,7 @@ class HttpClientPool(metaclass=SingletonMeta):
                     self._stats["reconnects"] += 1
                 else:
                     self._schedule_orphan_close(new_client)
+                assert self._streaming_client is not None
                 return self._streaming_client
             else:
                 if self._is_client_closed(self._non_streaming_client):
@@ -572,6 +573,7 @@ class HttpClientPool(metaclass=SingletonMeta):
                     self._stats["reconnects"] += 1
                 else:
                     self._schedule_orphan_close(new_client)
+                assert self._non_streaming_client is not None
                 return self._non_streaming_client
 
     def get_client(self, streaming: bool = False) -> httpx.AsyncClient:
@@ -641,7 +643,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         )
 
         # Build client kwargs consistent with _create_client()
-        client_kwargs = {
+        client_kwargs: Dict[str, Any] = {
             "timeout": timeout,
             "limits": self._create_limits(streaming=streaming),
             "follow_redirects": True,

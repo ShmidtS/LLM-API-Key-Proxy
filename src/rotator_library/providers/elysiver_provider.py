@@ -19,9 +19,9 @@ import logging
 from typing import List, Dict, Any, AsyncGenerator, Union
 import aiohttp
 import httpx
-import litellm
+import litellm  # type: ignore[import-untyped]
 import orjson
-from litellm.types.utils import Delta as DeltaType, ChatCompletionMessageToolCall
+from litellm.types.utils import Delta as DeltaType, ChatCompletionMessageToolCall  # type: ignore[import-untyped]
 
 from .provider_interface import ProviderInterface, strip_provider_prefix, build_bearer_headers
 from .base_streaming_provider import parse_sse_stream

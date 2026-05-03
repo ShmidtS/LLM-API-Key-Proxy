@@ -132,7 +132,7 @@ class OAuthCallbackServer:
         if "error" in query:
             error = query.get("error", "unknown_error")
             lib_logger.error(f"iFlow OAuth callback received error: {error}")
-            if not self.result_future.done():
+            if self.result_future is not None and not self.result_future.done():
                 self.result_future.set_exception(ValueError(f"OAuth error: {error}"))
             return web.Response(
                 status=302, headers={"Location": IFLOW_ERROR_REDIRECT_URL}
@@ -142,7 +142,7 @@ class OAuthCallbackServer:
         code = query.get("code")
         if not code:
             lib_logger.error("iFlow OAuth callback missing authorization code")
-            if not self.result_future.done():
+            if self.result_future is not None and not self.result_future.done():
                 self.result_future.set_exception(
                     ValueError("Missing authorization code")
                 )
@@ -156,14 +156,14 @@ class OAuthCallbackServer:
             lib_logger.error(
                 f"iFlow OAuth state mismatch. Expected: {self.expected_state}, Got: {state}"
             )
-            if not self.result_future.done():
+            if self.result_future is not None and not self.result_future.done():
                 self.result_future.set_exception(ValueError("State parameter mismatch"))
             return web.Response(
                 status=302, headers={"Location": IFLOW_ERROR_REDIRECT_URL}
             )
 
         # Success - set result and redirect to success page
-        if not self.result_future.done():
+        if self.result_future is not None and not self.result_future.done():
             self.result_future.set_result(code)
 
         return web.Response(
@@ -173,6 +173,8 @@ class OAuthCallbackServer:
     async def wait_for_callback(self, timeout: float = 300.0) -> str:
         """Waits for the OAuth callback and returns the authorization code."""
         try:
+            if self.result_future is None:
+                raise RuntimeError("result_future not initialized")
             code = await asyncio.wait_for(self.result_future, timeout=timeout)
             return code
         except asyncio.TimeoutError:
@@ -324,7 +326,7 @@ class IFlowAuthBase(GoogleOAuthBase):
         except (httpx.HTTPStatusError, json.JSONDecodeError, ValueError) as e:
             body_preview = response.text[:200] if response.text else "<empty>"
             lib_logger.warning("OAuth/HTTP error in user info: %s — body: %s", e, body_preview)
-            return None
+            raise ValueError(f"OAuth/HTTP error fetching user info: {e}") from e
 
         if not result.get("success"):
             raise ValueError("iFlow user info request not successful")
@@ -386,7 +388,7 @@ class IFlowAuthBase(GoogleOAuthBase):
         except (json.JSONDecodeError, ValueError) as e:
             body_preview = response.text[:200] if response.text else "<empty>"
             lib_logger.warning("OAuth/HTTP error in token exchange: %s — body: %s", e, body_preview)
-            return None
+            raise ValueError(f"OAuth/HTTP error in token exchange: {e}") from e
 
         access_token = token_data.get("access_token")
         if not access_token:
@@ -399,6 +401,8 @@ class IFlowAuthBase(GoogleOAuthBase):
 
         # Fetch user info to get API key
         user_info = await self._fetch_user_info(access_token)
+        if user_info is None:
+            raise ValueError("Failed to fetch user info during token exchange")
 
         # Calculate expiry date
         expiry_date = (
@@ -639,14 +643,14 @@ class IFlowAuthBase(GoogleOAuthBase):
             try:
                 cached_api_key = self._api_key_cache.get(path)
                 if cached_api_key and (time.time() - cached_api_key[0]) < 86400:
-                    user_info = {"api_key": cached_api_key[1]}
+                    user_info: Optional[Dict[str, Any]] = {"api_key": cached_api_key[1]}
                 else:
                     user_info = await self._fetch_user_info(access_token)
-                    if user_info.get("api_key"):
+                    if user_info is not None and user_info.get("api_key"):
                         self._api_key_cache[path] = (time.time(), user_info["api_key"])
-                if user_info.get("api_key"):
+                if user_info is not None and user_info.get("api_key"):
                     creds_from_file["api_key"] = user_info["api_key"]
-                if user_info.get("email"):
+                if user_info is not None and user_info.get("email"):
                     creds_from_file["email"] = user_info["email"]
             except (httpx.HTTPError, ValueError, KeyError) as e:
                 lib_logger.warning(
@@ -810,6 +814,8 @@ class IFlowAuthBase(GoogleOAuthBase):
 
             # Exchange code for tokens and API key
             token_data = await self._exchange_code_for_tokens(code, redirect_uri)
+            if token_data is None:
+                raise ValueError("Token exchange returned no data")
 
             # Update credentials
             creds.update(
@@ -855,10 +861,12 @@ class IFlowAuthBase(GoogleOAuthBase):
         Overrides parent to avoid Google UserInfo API call (iFlow uses metadata only).
         """
         try:
-            path = creds_or_path if isinstance(creds_or_path, str) else None
-            creds = (
-                await self._load_credentials(creds_or_path) if path else creds_or_path
+            path: Optional[str] = creds_or_path if isinstance(creds_or_path, str) else None
+            creds: Dict[str, Any] = (
+                await self._load_credentials(path) if path else creds_or_path  # type: ignore[arg-type]
             )
+            if not isinstance(creds, dict):
+                raise ValueError(f"Expected dict credentials, got {type(creds).__name__}")
 
             # Ensure the token is valid
             if path:

@@ -294,8 +294,10 @@ def build_custom_caps(
             if env_key.startswith(cap_prefix) and not env_key.startswith(cooldown_prefix):
                 remainder = env_key[len(cap_prefix):]
                 tier_key, model_key = parse_custom_cap_env_key(remainder)
-                if tier_key is None:
+                if tier_key is None or model_key is None:
                     continue
+                assert isinstance(tier_key, str)
+                assert isinstance(model_key, str)
 
                 custom_caps.setdefault(provider, {})
                 custom_caps[provider].setdefault(tier_key, {})
@@ -305,8 +307,10 @@ def build_custom_caps(
             elif env_key.startswith(cooldown_prefix):
                 remainder = env_key[len(cooldown_prefix):]
                 tier_key, model_key = parse_custom_cap_env_key(remainder)
-                if tier_key is None:
+                if tier_key is None or model_key is None:
                     continue
+                assert isinstance(tier_key, str)
+                assert isinstance(model_key, str)
 
                 if ":" in env_value:
                     mode, value_str = env_value.split(":", 1)

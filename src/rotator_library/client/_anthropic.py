@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from ..anthropic_adapter import AnthropicAdapter
 from ..utils.model_utils import extract_provider_from_model
@@ -27,7 +27,7 @@ class AnthropicCompatibilityMixin:
         self,
         request: "AnthropicMessagesRequest",
         raw_request: Optional[Any] = None,
-        pre_request_callback: Optional[callable] = None,
+        pre_request_callback: Optional[Callable] = None,
         raw_body_data: Optional[dict] = None,
     ) -> Any:
         return await self.anthropic_adapter.anthropic_messages(

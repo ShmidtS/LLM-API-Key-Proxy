@@ -575,15 +575,17 @@ class OAuthFlowMixin:
         creds_or_path: Union[Dict[str, Any], str],
         force_interactive: bool = False,
     ) -> Dict[str, Any]:
-        path = creds_or_path if isinstance(creds_or_path, str) else None
+        path: Optional[str] = creds_or_path if isinstance(creds_or_path, str) else None
 
         display_name = self._get_display_name(creds_or_path)
 
         lib_logger.debug(f"Initializing {self.ENV_PREFIX} token for '{display_name}'...")
         try:
-            creds = (
-                await self._load_credentials(creds_or_path) if path else creds_or_path
+            creds: Dict[str, Any] = (
+                await self._load_credentials(creds_or_path) if path else creds_or_path  # type: ignore[arg-type]
             )
+            if not isinstance(creds, dict):
+                raise ValueError(f"Expected dict credentials, got {type(creds).__name__}")
             token_expired = self._is_token_expired(creds)
             needs_interactive, reason = self._should_force_interactive(
                 creds, force_interactive=force_interactive
@@ -596,6 +598,8 @@ class OAuthFlowMixin:
             if needs_interactive:
                 if reason == "token is expired" and creds.get("refresh_token"):
                     try:
+                        if not path:
+                            raise ValueError("path required for token refresh")
                         return await self._refresh_token(path, creds)
                     except (httpx.HTTPError, httpx.TimeoutException, KeyError, ValueError) as e:
                         lib_logger.warning(
@@ -607,7 +611,7 @@ class OAuthFlowMixin:
                 )
 
                 return await self._execute_interactive_oauth(
-                    path=path,
+                    path=path or "",
                     creds=creds,
                     display_name=display_name,
                     provider_name=self.ENV_PREFIX,

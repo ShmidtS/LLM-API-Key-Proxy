@@ -5,10 +5,10 @@
 
 import os
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Optional, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Union, cast
 
 import httpx
-import litellm
+import litellm  # type: ignore[import-untyped]
 import json
 from ...utils.json_utils import json_loads
 
@@ -194,7 +194,7 @@ class AntigravityProvider(
         error_obj = data.get("error", data)
         details = error_obj.get("details", [])
 
-        result = {
+        result: Dict[str, Any] = {
             "retry_after": None,
             "reason": None,
             "reset_timestamp": None,
@@ -602,7 +602,7 @@ class AntigravityProvider(
         credential_path = kwargs.pop("credential_identifier", kwargs.get("api_key", ""))
         tools = kwargs.get("tools")
         tool_choice = kwargs.get("tool_choice")
-        reasoning_effort = kwargs.get("reasoning_effort")
+        reasoning_effort = cast(Optional[str], kwargs.get("reasoning_effort"))
         top_p = kwargs.get("top_p")
         temperature = kwargs.get("temperature")
         max_tokens = kwargs.get("max_tokens")
@@ -677,7 +677,7 @@ class AntigravityProvider(
             )
 
         # Build payload
-        gemini_payload = {"contents": gemini_contents}
+        gemini_payload: Dict[str, Any] = {"contents": gemini_contents}
 
         if system_instruction:
             gemini_payload["system_instruction"] = system_instruction
@@ -728,7 +728,7 @@ class AntigravityProvider(
             # Gemini 3 performs better with temperature=1 for tool use
             gen_config["temperature"] = 1.0
 
-        thinking_config = self._get_thinking_config(reasoning_effort, model)
+        thinking_config = self._get_thinking_config(cast(Optional[str], reasoning_effort), model)
         if thinking_config:
             gen_config.setdefault("thinkingConfig", {}).update(thinking_config)
 
@@ -819,7 +819,7 @@ class AntigravityProvider(
                     gemini_payload,
                     project_id,
                     max_tokens,
-                    reasoning_effort,
+                    cast(Optional[str], reasoning_effort),
                     tool_choice,
                 )
 

@@ -200,7 +200,7 @@ def inline_schema_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
             return {k: resolve(v, seen) for k, v in node.items() if k != "$ref"}
         return {k: resolve(v, seen) for k, v in node.items()}
 
-    return resolve(schema)
+    return resolve(schema)  # type: ignore[return-value]
 
 
 def normalize_type_arrays(schema: Any) -> Any:

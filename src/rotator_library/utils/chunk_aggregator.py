@@ -12,7 +12,7 @@ import time
 from itertools import chain
 from typing import Any
 
-import litellm
+import litellm  # type: ignore[import-untyped]
 
 
 class ChunkAggregator:
@@ -111,7 +111,7 @@ class ChunkAggregator:
                 if isinstance(error_info, dict)
                 else str(error_info)
             )
-            raise litellm.InternalServerError(
+            raise litellm.InternalServerError(  # type: ignore[attr-defined]
                 msg, llm_provider=self._llm_provider, model=self._model
             )
 

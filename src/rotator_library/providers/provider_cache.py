@@ -92,7 +92,7 @@ class ProviderCache:
         max_entries: int = 10000,
     ) -> None:
         # In-memory cache (OrderedDict for O(1) LRU eviction): {cache_key: {"value", "timestamp", "accessed"}}
-        self._cache: OrderedDict[str, Dict[str, float | str]] = OrderedDict()
+        self._cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self._memory_ttl = memory_ttl_seconds
         self._disk_ttl = disk_ttl_seconds
         self._rw_lock = ReadWriteLock()   # Read-write lock for cache access (read-heavy optimization)
@@ -460,7 +460,7 @@ class ProviderCache:
         # Mutation (move_to_end, del) requires async lock — defer to cleanup.
         entry = self._cache.get(key)
         if entry is not None:
-            if time.time() - entry["timestamp"] <= self._memory_ttl:
+            if time.time() - float(entry["timestamp"]) <= self._memory_ttl:
                 self._stats["memory_hits"] += 1
                 # Schedule LRU re-order and expiry cleanup asynchronously
                 try:
@@ -469,7 +469,7 @@ class ProviderCache:
                     lib_logger.warning(
                         f"ProviderCache[{self._cache_name}]: retrieve() called outside event loop; touch skipped"
                     )
-                return entry["value"]
+                return str(entry["value"])
             else:
                 # Entry expired — schedule removal via async path (no race)
                 try:
@@ -492,9 +492,9 @@ class ProviderCache:
         async with self._rw_lock.read():
             if key in self._cache:
                 entry = self._cache[key]
-                if time.time() - entry["timestamp"] <= self._memory_ttl:
+                if time.time() - float(entry["timestamp"]) <= self._memory_ttl:
                     self._stats["memory_hits"] += 1
-                    return entry["value"]
+                    return str(entry["value"])
                 # Entry expired — need write-lock to remove; fall through below
             else:
                 # Key not in cache at all — skip write-lock, go to disk
@@ -505,11 +505,11 @@ class ProviderCache:
             # Re-check: another task may have updated or removed the key
             if key in self._cache:
                 entry = self._cache[key]
-                if time.time() - entry["timestamp"] <= self._memory_ttl:
+                if time.time() - float(entry["timestamp"]) <= self._memory_ttl:
                     # Another task refreshed it while we waited
                     self._stats["memory_hits"] += 1
                     entry["accessed"] = time.time()
-                    return entry["value"]
+                    return str(entry["value"])
                 # Still expired — remove from memory only
                 # Don't set dirty flag: disk copy should persist until disk_ttl
                 del self._cache[key]

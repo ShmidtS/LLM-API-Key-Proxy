@@ -92,10 +92,10 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
     """
 
     # Subclasses MUST override these
-    CLIENT_ID: str = None
-    CLIENT_SECRET: str = None
-    OAUTH_SCOPES: list = None
-    ENV_PREFIX: str = None
+    CLIENT_ID: Optional[str] = None
+    CLIENT_SECRET: Optional[str] = None
+    OAUTH_SCOPES: Optional[List[str]] = None
+    ENV_PREFIX: Optional[str] = None
 
     # Subclasses MAY override these
     BUFFER_ON_FAILURE: ClassVar[bool] = True
@@ -639,7 +639,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
 
     async def _perform_interactive_oauth(
         self, path: str, creds: Dict[str, Any], display_name: str
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """
         Perform interactive OAuth flow (browser-based authentication).
 
@@ -715,7 +715,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                 {
                     "client_id": self.CLIENT_ID,
                     "redirect_uri": f"http://localhost:{self.callback_port}{self.CALLBACK_PATH}",
-                    "scope": " ".join(self.OAUTH_SCOPES),
+                    "scope": " ".join(self.OAUTH_SCOPES or []),
                     "access_type": "offline",
                     "response_type": "code",
                     "prompt": "consent",
@@ -1018,9 +1018,14 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
 
     async def get_user_info(
         self, creds_or_path: Union[Dict[str, Any], str]
-    ) -> Dict[str, Any]:
-        path = creds_or_path if isinstance(creds_or_path, str) else None
-        creds = await self._load_credentials(creds_or_path) if path else creds_or_path
+    ) -> Optional[Dict[str, Any]]:
+        path: Optional[str] = None
+        creds: Dict[str, Any]
+        if isinstance(creds_or_path, str):
+            path = creds_or_path
+            creds = await self._load_credentials(creds_or_path)
+        else:
+            creds = creds_or_path
 
         if path and self._is_token_expired(creds):
             creds = await self._refresh_token(path, creds)
@@ -1065,7 +1070,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
         Override in subclasses if the prefix differs from ENV_PREFIX.
         Default: lowercase ENV_PREFIX with underscores (e.g., "gemini_cli")
         """
-        return self.ENV_PREFIX.lower()
+        return (self.ENV_PREFIX or "").lower()
 
     def _get_oauth_base_dir(self) -> Path:
         """
@@ -1191,7 +1196,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
 
             # Step 2: Get user info for deduplication
             user_info = await self.get_user_info(new_creds)
-            email = user_info.get("email")
+            email = user_info.get("email") if user_info else None
 
             if not email:
                 return CredentialSetupResult(

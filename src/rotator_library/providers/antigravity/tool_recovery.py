@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional, Tuple
 
-import litellm
+import litellm  # type: ignore[import-untyped]
 import json
 from ...utils.json_utils import json_loads, json_dumps_str
 from .constants import (

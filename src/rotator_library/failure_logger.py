@@ -158,8 +158,8 @@ def _extract_response_body(error: Exception) -> str:
                 return result
 
     # Try to get response body from httpx errors
-    if hasattr(error, "response") and error.response is not None:
-        response = error.response
+    response = getattr(error, "response", None)
+    if response is not None:
         # Try .text first (decoded)
         if hasattr(response, "text") and response.text:
             return response.text
@@ -172,14 +172,15 @@ def _extract_response_body(error: Exception) -> str:
                 return str(response.content)
 
     # Check for litellm's body attribute
-    if hasattr(error, "body") and error.body:
-        return str(error.body)
+    body = getattr(error, "body", None)
+    if body:
+        return str(body)
 
     # Check for message attribute that might contain response
     if hasattr(error, "message") and error.message:
         return str(error.message)
 
-    return None
+    return ""
 
 
 def log_failure(
@@ -188,7 +189,7 @@ def log_failure(
     attempt: int,
     error: Exception,
     request_headers: dict,
-    raw_response_text: str = None,
+    raw_response_text: Optional[str] = None,
 ):
     """
     Logs a detailed failure message to a file and a concise summary to the main logger.

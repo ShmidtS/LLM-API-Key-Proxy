@@ -114,7 +114,7 @@ def _patch_litellm_choices():
     global _original_litellm_choices_init
 
     try:
-        from litellm.types.utils import Choices
+        from litellm.types.utils import Choices  # type: ignore[import-untyped]
 
         _original_litellm_choices_init = Choices.__init__
 
@@ -126,7 +126,9 @@ def _patch_litellm_choices():
                 if normalized != original:
                     logger.debug(f"Choices: normalized finish_reason {original} -> {normalized}")
                 kwargs["finish_reason"] = normalized
-            return _original_litellm_choices_init(self, **kwargs)
+            if _original_litellm_choices_init is not None:
+                return _original_litellm_choices_init(self, **kwargs)
+            return None
 
         Choices.__init__ = patched_choices_init
         logger.info("Applied finish_reason patch to litellm.types.utils.Choices")
@@ -161,7 +163,9 @@ def patch_litellm_finish_reason():
 
         def patched_model_validate(obj, *args, **kwargs):
             obj = _normalize_chunk_data(obj)
-            return _original_chat_completion_chunk_model_validate(obj, *args, **kwargs)
+            if _original_chat_completion_chunk_model_validate is not None:
+                return _original_chat_completion_chunk_model_validate(obj, *args, **kwargs)
+            return None
 
         ChatCompletionChunk.model_validate = staticmethod(patched_model_validate)
         logger.info("Applied finish_reason patch to ChatCompletionChunk.model_validate")

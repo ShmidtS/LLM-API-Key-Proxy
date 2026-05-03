@@ -4,7 +4,7 @@
 import asyncio
 from typing import Optional, Any
 
-import litellm
+import litellm  # type: ignore[import-untyped]
 from fastapi import APIRouter, Request, Depends
 
 from rotator_library import RotatingClient
@@ -36,7 +36,7 @@ async def embeddings(
     request_data = body.model_dump(exclude_none=True)
     log_request_to_console(
         url=str(request.url),
-        client_info=(request.client.host, request.client.port),
+        client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
         request_data=request_data,
     )
     if getattr(request.app.state, "use_embedding_batcher", False) and batcher:

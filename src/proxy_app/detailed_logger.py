@@ -43,6 +43,8 @@ from rotator_library.utils.json_utils import extract_reasoning
 from rotator_library.utils.log_sanitizer import sanitize_for_log
 import aiofiles
 
+_logger: logging.Logger = logging.getLogger(__name__)
+
 
 _SENSITIVE_HEADER_KEYS = frozenset({
     "authorization", "proxy_authorization",
@@ -97,12 +99,12 @@ class RawIOLogger:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_dir = _get_raw_io_logs_dir() / f"{timestamp}_{self.request_id}"
         self.streaming = False
-        self._dir_available = safe_mkdir(self.log_dir, logging)
+        self._dir_available = safe_mkdir(self.log_dir, _logger)
 
     async def _write_json(self, filename: str, data: dict[str, Any]) -> None:
         """Helper to write data to a JSON file in the log directory."""
         if not self._dir_available:
-            self._dir_available = safe_mkdir(self.log_dir, logging)
+            self._dir_available = safe_mkdir(self.log_dir, _logger)
             if not self._dir_available:
                 return
 
@@ -131,7 +133,7 @@ class RawIOLogger:
         except (orjson.JSONEncodeError, TypeError) as e:
             logging.warning(f"Failed to serialize log entry: {e}")
             return
-        await asyncio.to_thread(safe_log_write, self.log_dir / "streaming_chunks.jsonl", content, logging)
+        await asyncio.to_thread(safe_log_write, self.log_dir / "streaming_chunks.jsonl", content, _logger)
 
     async def log_final_response(
         self, status_code: int, headers: Optional[Dict[str, Any]], body: Dict[str, Any]

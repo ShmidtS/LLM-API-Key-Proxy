@@ -21,7 +21,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Mapping
 import httpx
-import litellm
+import litellm  # type: ignore[import-untyped]
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional, Union, TYPE_CHECKING
 
@@ -68,7 +68,7 @@ _PROVIDER_METHOD_NO_METHOD = object()
 
 from ..usage_manager import UsageManager
 from ..failure_logger import configure_failure_logger
-from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.openai.common_utils import OpenAIError  # type: ignore[import-untyped]
 
 from ..error_types import (
     mask_credential,
@@ -202,7 +202,7 @@ class RotatingClient(
             self.oauth_credentials = oauth_credentials
         else:
             self.credential_manager = CredentialManager(
-                os.environ, oauth_dir=get_oauth_dir(self.data_dir)
+                dict(os.environ), oauth_dir=get_oauth_dir(self.data_dir)
             )
             self.oauth_credentials = self.credential_manager.discover_and_prepare()
         self.background_refresher = BackgroundRefresher(self)
@@ -718,7 +718,9 @@ class RotatingClient(
 
         for credential in credentials:
             try:
-                return await method(credential, http_client, **kwargs)
+                if method is not None:
+                    return await method(credential, http_client, **kwargs)
+                raise ValueError(f"Provider method '{method_name}' not found for '{provider_name}'")
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:
                     if lib_logger.isEnabledFor(logging.WARNING):

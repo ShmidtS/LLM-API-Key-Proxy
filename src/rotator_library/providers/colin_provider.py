@@ -23,8 +23,8 @@ import os
 import logging
 from typing import List, Dict, Any, AsyncGenerator, Union
 import httpx
-import litellm
-from litellm.types.utils import Delta as DeltaType, ChatCompletionMessageToolCall
+import litellm  # type: ignore[import-untyped]
+from litellm.types.utils import Delta as DeltaType, ChatCompletionMessageToolCall  # type: ignore[import-untyped]
 
 from .provider_interface import ProviderInterface, strip_provider_prefix, build_bearer_headers
 from .base_streaming_provider import parse_sse_stream
@@ -124,7 +124,7 @@ class ColinProvider(ProviderInterface):
         # Extract the conversation into a single input
         input_text = self._messages_to_input(messages)
 
-        payload = {
+        payload: Dict[str, Any] = {
             "model": model,
             "input": input_text,
         }
@@ -141,11 +141,11 @@ class ColinProvider(ProviderInterface):
 
         # Handle response format for JSON mode
         if kwargs.get("response_format", {}).get("type") == "json_object":
-            payload["text"] = {"format": {"type": "json_object"}}
+            payload["text"] = {"format": {"type": "json_object"}}  # type: ignore
 
         # Handle tools (function calling)
         if kwargs.get("tools"):
-            payload["tools"] = kwargs["tools"]
+            payload["tools"] = kwargs["tools"]  # type: ignore[assignment]
             lib_logger.info(
                 f"COLIN: tools parameter present, count={len(kwargs['tools'])}"
             )
@@ -157,7 +157,7 @@ class ColinProvider(ProviderInterface):
         headers = build_bearer_headers(credential_identifier)
 
         if stream:
-            payload["stream"] = True
+            payload["stream"] = True  # type: ignore
             return self._stream_response(client, url, headers, payload, model)
         else:
             return await self._non_stream_response(client, url, headers, payload, model)

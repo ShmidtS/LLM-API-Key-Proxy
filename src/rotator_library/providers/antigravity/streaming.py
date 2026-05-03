@@ -9,7 +9,7 @@ import uuid
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 import httpx
-import litellm
+import litellm  # type: ignore[import-untyped]
 import json
 from ...utils.json_utils import json_loads
 from ...error_handler import EmptyResponseError, TransientQuotaError
@@ -481,7 +481,7 @@ class AntigravityStreamingMixin:
 
                         # Log the auto-fix details
                         if file_logger:
-                            file_logger.log_malformed_autofix(
+                            await file_logger.log_malformed_autofix(
                                 parsed["tool_name"],
                                 parsed["raw_args"],
                                 error_info["fixed_json"],
@@ -545,7 +545,7 @@ class AntigravityStreamingMixin:
 
                         # Log the retry request in the same folder
                         if file_logger:
-                            file_logger.log_malformed_retry_request(
+                            await file_logger.log_malformed_retry_request(
                                 malformed_retry_count, current_payload
                             )
 

@@ -6,7 +6,7 @@ import logging
 import time
 
 import orjson
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Request, HTTPException, Depends
 
@@ -22,8 +22,8 @@ router = APIRouter()
 async def get_quota_stats(
     request: Request,
     client: RotatingClient = Depends(get_rotating_client),
-    _=Depends(verify_api_key),
-    provider: str = None,
+    _: Any = Depends(verify_api_key),
+    provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Returns quota and usage statistics for all credentials.
@@ -235,14 +235,14 @@ async def cost_estimate(request: Request, _=Depends(verify_api_key)) -> Dict[str
 
     # Fallback to litellm
     try:
-        import litellm
+        import litellm  # type: ignore[import-untyped]
 
         # Create a mock response for cost calculation
         model_info = litellm.get_model_info(model)
-        input_cost = model_info.get("input_cost_per_token", 0)
-        output_cost = model_info.get("output_cost_per_token", 0)
-        cache_read_cost = model_info.get("cache_read_input_token_cost", 0) or input_cost * 0.1
-        cache_creation_cost = model_info.get("cache_creation_input_token_cost", 0) or input_cost * 1.25
+        input_cost = model_info.get("input_cost_per_token", 0) or 0
+        output_cost = model_info.get("output_cost_per_token", 0) or 0
+        cache_read_cost: float = model_info.get("cache_read_input_token_cost", 0) or input_cost * 0.1
+        cache_creation_cost: float = model_info.get("cache_creation_input_token_cost", 0) or input_cost * 1.25
 
         if input_cost or output_cost:
             non_cached_input = max(prompt_tokens - cache_read_tokens - cache_creation_tokens, 0)
