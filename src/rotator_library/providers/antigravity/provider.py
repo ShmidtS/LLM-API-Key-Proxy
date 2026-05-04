@@ -213,7 +213,7 @@ class AntigravityProvider(
 
             elif "ErrorInfo" in detail_type:
                 result["reason"] = detail.get("reason")
-                metadata = detail.get("metadata", {})
+                metadata = detail.get("metadata") or {}
 
                 if result["retry_after"] is None:
                     quota_delay = metadata.get("quotaResetDelay")

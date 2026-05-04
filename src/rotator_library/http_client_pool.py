@@ -565,7 +565,8 @@ class HttpClientPool(metaclass=SingletonMeta):
                     self._stats["reconnects"] += 1
                 else:
                     self._schedule_orphan_close(new_client)
-                assert self._streaming_client is not None
+                if self._streaming_client is None:
+                    raise RuntimeError("Streaming client unexpectedly None after reconnect")
                 return self._streaming_client
             else:
                 if self._is_client_closed(self._non_streaming_client):
@@ -573,7 +574,8 @@ class HttpClientPool(metaclass=SingletonMeta):
                     self._stats["reconnects"] += 1
                 else:
                     self._schedule_orphan_close(new_client)
-                assert self._non_streaming_client is not None
+                if self._non_streaming_client is None:
+                    raise RuntimeError("Non-streaming client unexpectedly None after reconnect")
                 return self._non_streaming_client
 
     def get_client(self, streaming: bool = False) -> httpx.AsyncClient:

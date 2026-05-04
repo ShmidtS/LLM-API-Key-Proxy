@@ -276,9 +276,9 @@ def handle_litellm_error(e: Exception, error_format: str = "openai") -> HTTPExce
     for exc_types, status_code, openai_label, anthropic_error_type in LITELLM_ERROR_MAP:
         if isinstance(e, exc_types):
             if error_format == "openai":
-                detail = f"{openai_label}: {str(e)}"
+                detail = f"{openai_label}: {e!s}"
             else:
-                message = f"Request timed out: {str(e)}" if isinstance(e, Timeout) else str(e)
+                message = f"Request timed out: {e!s}" if isinstance(e, Timeout) else f"{e!s}"
                 detail = {
                     "type": "error",
                     "error": {"type": anthropic_error_type, "message": message},

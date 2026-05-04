@@ -144,6 +144,29 @@ jobs:
         uv pip install --python .venv pyinstaller
         uv pip install --python .venv -e src/rotator_library
 
+    - name: Install dev dependencies
+      shell: bash
+      run: |
+        uv pip install --python .venv pytest pytest-asyncio basedpyright
+
+    - name: Run tests
+      shell: bash
+      run: |
+        if [ "${{ runner.os }}" == "Windows" ]; then
+          .venv/Scripts/python -m pytest tests/ -x -q --tb=short
+        else
+          .venv/bin/python -m pytest tests/ -x -q --tb=short
+        fi
+
+    - name: Run type checker
+      shell: bash
+      run: |
+        if [ "${{ runner.os }}" == "Windows" ]; then
+          .venv/Scripts/python -m basedpyright src/
+        else
+          .venv/bin/python -m basedpyright src/
+        fi
+
     - name: Get PyInstaller cache directory
       id: pyinstaller-cache-dir
       shell: bash

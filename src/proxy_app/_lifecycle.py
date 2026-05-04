@@ -125,7 +125,7 @@ async def process_credential(provider: str, path: str, provider_instance):
             return (provider, path, None, None)
 
         user_info = await provider_instance.get_user_info(path)
-        email = user_info.get("email")
+        email = user_info.get("email") if user_info else None
         return (provider, path, email, None)
 
     except asyncio.CancelledError:

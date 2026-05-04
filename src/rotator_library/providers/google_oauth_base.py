@@ -836,7 +836,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
         except (httpx.HTTPStatusError, json.JSONDecodeError, ValueError) as e:
             body_preview = response.text[:200] if response.text else "<empty>"
             lib_logger.warning("OAuth/HTTP error in token exchange: %s — body: %s", e, body_preview)
-            return None
+            return {}
         # Start with the full token data from the exchange
         new_creds = token_data.copy()
 
@@ -1048,7 +1048,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
         except (httpx.HTTPStatusError, json.JSONDecodeError, ValueError) as e:
             body_preview = response.text[:200] if response.text else "<empty>"
             lib_logger.warning("OAuth/HTTP error in user info: %s — body: %s", e, body_preview)
-            return None
+            return {}
 
         # Save the retrieved info for future use
         creds["_proxy_metadata"] = {
@@ -1194,6 +1194,11 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             }
             new_creds = await self.initialize_token(temp_creds)
 
+            if not new_creds or not new_creds.get("access_token"):
+                return CredentialSetupResult(
+                    success=False, error="OAuth token exchange failed — no credentials returned"
+                )
+
             # Step 2: Get user info for deduplication
             user_info = await self.get_user_info(new_creds)
             email = user_info.get("email") if user_info else None
@@ -1207,7 +1212,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             existing_path = self._find_existing_credential_by_email(email, base_dir)
             is_update = existing_path is not None
 
-            if is_update:
+            if is_update and existing_path is not None:
                 file_path = existing_path
                 lib_logger.info(
                     f"Found existing credential for {email}, updating {file_path.name}"

@@ -1,6 +1,6 @@
 {
   "include": ["src"],
-  "exclude": ["tests", "logs", "dist", "build"],
+  "exclude": ["tests", "logs", "dist", "build", "**/node_modules", "**/__pycache__", "**/.*"],
   "enableTypeIgnoreComments": true,
   "reportAttributeAccessIssue": "none",
   "reportMissingTypeStubs": "none",

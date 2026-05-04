@@ -284,7 +284,7 @@ class UsageManagerRecordingMixin:
                             ):
                                 model_info = litellm.get_model_info(model)
                                 input_cost = model_info.get("input_cost_per_token")
-                                if input_cost:
+                                if input_cost and hasattr(completion_response, "usage") and completion_response.usage:
                                     cost = (
                                         completion_response.usage.prompt_tokens
                                         * input_cost

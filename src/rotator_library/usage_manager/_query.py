@@ -10,8 +10,13 @@ from ..utils.model_utils import get_or_create_provider_instance
 from ..error_types import mask_credential
 
 
-_OAUTH_PATH_RE = re.compile(r"/([a-z_]+)_oauth_\d+\.json$", re.IGNORECASE)
-_OAUTH_CREDS_RE = re.compile(r"oauth_creds/([a-z_]+)_", re.IGNORECASE)
+# Combined regex for the two OAuth path patterns (previously two separate regexes):
+#   /provider_oauth_N.json$   or   oauth_creds/provider_oauth_N.json$
+# The _oauth_\d+\.json$ anchor forces correct backtracking so [a-z_]+ captures
+# only the provider name (e.g., "antigravity") not the full stem ("antigravity_oauth").
+_OAUTH_PROVIDER_RE = re.compile(
+    r"(?:/|oauth_creds/)([a-z_]+)_oauth_\d+\.json$", re.IGNORECASE
+)
 _OAUTH_FILENAME_RE = re.compile(r"([a-z_]+)_oauth_\d+\.json$", re.IGNORECASE)
 
 
@@ -62,22 +67,25 @@ class UsageManagerQueryMixin:
             )
             return None
 
-        # Normalize path separators
-        normalized = credential.replace("\\", "/")
+        # Normalize path separators only when backslashes are present
+        normalized = credential.replace("\\", "/") if "\\" in credential else credential
 
-        # Pattern: path ending with {provider}_oauth_{number}.json
-        match = _OAUTH_PATH_RE.search(normalized)
+        # Combined pattern: /provider_oauth_N.json$ or oauth_creds/provider_oauth_N.json$
+        match = _OAUTH_PROVIDER_RE.search(normalized)
         if match:
             provider = match.group(1).lower()
             self._cache_provider_resolution(credential, provider)
             return provider
 
-        # Pattern: oauth_creds/{provider}_...
-        match = _OAUTH_CREDS_RE.search(normalized)
-        if match:
-            provider = match.group(1).lower()
-            self._cache_provider_resolution(credential, provider)
-            return provider
+        # Fallback: oauth_creds/provider_ without filename suffix
+        if "oauth_creds/" in normalized:
+            idx = normalized.index("oauth_creds/") + len("oauth_creds/")
+            rest = normalized[idx:]
+            underscore = rest.rfind("_")
+            if underscore > 0:
+                provider = rest[:underscore].lower()
+                self._cache_provider_resolution(credential, provider)
+                return provider
 
         # Pattern: filename only {provider}_oauth_{number}.json (no path)
         match = _OAUTH_FILENAME_RE.match(normalized)
