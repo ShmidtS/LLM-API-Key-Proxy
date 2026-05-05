@@ -90,29 +90,6 @@ class CooldownManager:
         if now - self._last_cleanup >= 30.0:
             await self._cleanup_expired()
 
-    def get_available_credentials(self, credentials: list[str]) -> list[str]:
-        """Return credentials not currently in cooldown. Single-pass O(N)."""
-        now = time.monotonic()
-        with self._cooldowns_lock:
-            return [c for c in credentials if self._cooldowns.get(c, 0.0) <= now]
-
-    def is_cooling_down_sync(self, credential: str) -> bool:
-        """Synchronous check if a credential is cooling down. Safe in asyncio single-thread."""
-        provider = self._extract_provider(credential)
-        with self._get_provider_lock(provider):
-            with self._cooldowns_lock:
-                expiry = self._cooldowns.get(credential)
-                if expiry is None:
-                    return False
-                if time.monotonic() < expiry:
-                    return True
-                self._cooldowns.pop(credential, None)
-                return False
-
-    async def is_cooling_down(self, credential: str) -> bool:
-        """Checks if a credential is currently in a cooldown period."""
-        return self.is_cooling_down_sync(credential)
-
     async def start_cooldown(self, credential: str, duration: int):
         """
         Initiates or extends a cooldown period for a credential.
@@ -126,19 +103,3 @@ class CooldownManager:
                 existing = self._cooldowns.get(credential, 0)
                 self._cooldowns[credential] = max(existing, new_expiry)
 
-    async def get_cooldown_remaining(self, credential: str) -> float:
-        """
-        Returns the remaining cooldown time in seconds for a credential.
-        Returns 0 if the credential is not in a cooldown period.
-        """
-        provider = self._extract_provider(credential)
-        with self._get_provider_lock(provider):
-            with self._cooldowns_lock:
-                expiry = self._cooldowns.get(credential)
-                if expiry is None:
-                    return 0
-                remaining = expiry - time.monotonic()
-                if remaining > 0:
-                    return remaining
-                self._cooldowns.pop(credential, None)
-                return 0
