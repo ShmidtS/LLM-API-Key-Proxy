@@ -29,47 +29,6 @@ class _ShutdownDetected(Exception):
     pass
 
 
-async def _poll_shutdown(request, interval: float = 1.0):
-    """Poll for server shutdown signal."""
-    while True:
-        await asyncio.sleep(interval)
-        if (
-            request
-            and hasattr(request, "app")
-            and hasattr(request.app, "state")
-            and getattr(request.app.state, "_shutting_down", False)
-        ):
-            return
-
-
-async def _anext_with_shutdown(anext_coro, request):
-    """
-    Race anext() against a shutdown poll so streams finish promptly
-    during Uvicorn graceful shutdown instead of hanging on idle connections.
-    """
-    stream_task = asyncio.create_task(anext_coro())
-    poll_task = asyncio.create_task(_poll_shutdown(request))
-    done, pending = await asyncio.wait(
-        {stream_task, poll_task},
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-    for task in pending:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-    if poll_task in done:
-        if not stream_task.done():
-            stream_task.cancel()
-            try:
-                await stream_task
-            except asyncio.CancelledError:
-                pass
-        raise _ShutdownDetected()
-    return stream_task.result()
-
-
 class StreamingMixin:
     """Mixin with streaming wrapper methods for RotatingClient."""
 
@@ -115,11 +74,19 @@ class StreamingMixin:
                             mask_credential(key),
                         )
                         break
+                    # Check shutdown signal at same amortized frequency as disconnect check
+                    if (
+                        request
+                        and hasattr(request, 'app')
+                        and hasattr(request.app, 'state')
+                        and getattr(request.app.state, '_shutting_down', False)
+                    ):
+                        raise _ShutdownDetected()
                     disconnect_check_countdown = 200
                 disconnect_check_countdown -= 1
 
                 try:
-                    chunk = await _anext_with_shutdown(stream_anext, request)
+                    chunk = await stream_anext()
                     chunk_index += 1
 
                     # Convert chunk to dict, handling both litellm.ModelResponse and raw dicts
