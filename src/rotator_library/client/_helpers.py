@@ -161,15 +161,21 @@ class HelpersMixin:
         Apply cooldown for quota_exceeded errors using retry_after from
         the provider-specific parse_quota_error result.
 
-        For ZAI INSUFFICIENT_BALANCE (reason='INSUFFICIENT_BALANCE'), this is
-        an account-level error — all credentials of the provider share the same
-        balance, so cooldown is propagated to every credential.
+        For ZAI INSUFFICIENT_BALANCE, this is an account-level error —
+        all credentials of the provider share the same balance, so cooldown
+        is propagated to every credential.
+
+        For account_billing_issue (overdue, insufficient balance, etc.),
+        each credential may belong to a different account, so we only
+        cool down the specific credential. The retry loop continues
+        rotating past billing errors rather than fast-failing.
         """
         retry_after = classified_error.retry_after
         if not retry_after:
             return
 
-        is_account_level = getattr(classified_error, "reason", None) == "INSUFFICIENT_BALANCE"
+        reason = getattr(classified_error, "reason", None)
+        is_account_level = reason == "INSUFFICIENT_BALANCE"
 
         if is_account_level:
             provider_creds = self.all_credentials.get(provider, [])

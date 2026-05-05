@@ -1421,12 +1421,14 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
 
         # Account/billing errors (e.g. Aliyun "Arrearage", "Access denied...account in good standing")
         # These are per-key/account issues — rotating to another credential may succeed.
+        # Cooldown is 2h because overdue Aliyun accounts don't self-heal in 5 minutes;
+        # a short cooldown just causes the same bad key to be re-selected.
         if any(pattern in error_str_lower for pattern in _ACCOUNT_BILLING_ERROR_PATTERNS):
             return ClassifiedError(
                 error_type="quota_exceeded",
                 original_exception=e,
                 status_code=status_code or 402,
-                retry_after=300,
+                retry_after=7200,
                 reason="account_billing_issue",
             )
 
@@ -1541,8 +1543,21 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
             reason="model_not_found",
         )
 
-    # litellm.APIError wraps upstream errors (402 credits, etc.) without exposing httpx status
+    # litellm.APIError wraps upstream errors (402 credits, 403 overdue, etc.) without exposing httpx status
     if isinstance(e, LiteLLMAPIError):
+        # Account-level billing errors (overdue, insufficient balance, etc.) — all credentials
+        # from the same provider/account are affected, so use account_billing_issue reason
+        # to trigger provider-wide cooldown in _apply_quota_cooldown.
+        # 2h cooldown: overdue accounts don't self-heal in minutes.
+        if any(p in error_str_lower for p in _ACCOUNT_BILLING_ERROR_PATTERNS):
+            return ClassifiedError(
+                error_type="quota_exceeded",
+                original_exception=e,
+                status_code=status_code or 402,
+                retry_after=7200,
+                reason="account_billing_issue",
+            )
+        # Per-credential credit/quota errors (e.g. daily "quota" limit on one key)
         if any(p in error_str_lower for p in _LITELLM_API_CREDIT_PATTERNS):
             return ClassifiedError(
                 error_type="quota_exceeded",
@@ -1550,6 +1565,13 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
                 status_code=status_code or 402,
                 retry_after=300,
                 reason="litellm_api_credits",
+            )
+        # 403 Forbidden from litellm-wrapped errors (e.g. PermissionDeniedError)
+        if status_code == 403:
+            return ClassifiedError(
+                error_type="forbidden",
+                original_exception=e,
+                status_code=status_code,
             )
         if (
             "invalid api key" in error_str_lower

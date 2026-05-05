@@ -69,7 +69,22 @@ class ClassifyErrorTests(unittest.TestCase):
 
         self.assertEqual(classified.error_type, "quota_exceeded")
         self.assertEqual(classified.status_code, 403)
-        self.assertEqual(classified.reason, "litellm_api_credits")
+        self.assertEqual(classified.reason, "account_billing_issue")
+        self.assertEqual(classified.retry_after, 7200)
+
+    def test_arrearage_bad_request_is_quota_exceeded(self):
+        exc = BadRequestError(
+            message="This is an arrearage account, please recharge before using",
+            model="qwen-vl-max",
+            llm_provider="openai",
+        )
+
+        classified = classify_error(exc, provider="qwen")
+
+        self.assertEqual(classified.error_type, "quota_exceeded")
+        self.assertEqual(classified.reason, "account_billing_issue")
+        self.assertEqual(classified.retry_after, 7200)
+        self.assertTrue(should_rotate_on_error(classified))
 
 
 if __name__ == "__main__":
