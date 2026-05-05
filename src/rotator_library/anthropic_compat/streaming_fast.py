@@ -187,6 +187,41 @@ def _make_message_stop_event() -> str:
     return 'event: message_stop\ndata: {"type": "message_stop"}\n\n'
 
 
+_ANTHROPIC_ERROR_TYPE_MAP = {
+    "authentication": "authentication_error",
+    "forbidden": "permission_error",
+    "invalid_request": "invalid_request_error",
+    "context_window_exceeded": "invalid_request_error",
+    "not_found": "not_found_error",
+    "model_not_found": "not_found_error",
+    "quota_exceeded": "rate_limit_error",
+    "rate_limit": "rate_limit_error",
+    "ip_rate_limit": "rate_limit_error",
+    "server_error": "api_error",
+    "api_connection": "api_error",
+    "proxy_account_billing_error": "api_error",
+    "proxy_busy": "api_error",
+    "proxy_internal_error": "api_error",
+}
+
+
+def _make_error_event(error_details: Any) -> str:
+    """Build an Anthropic SSE error event from an internal OpenAI-style error."""
+    if isinstance(error_details, dict):
+        message = str(error_details.get("message") or "Stream failed")
+        raw_error_type = str(error_details.get("type") or "api_error")
+    else:
+        message = str(error_details or "Stream failed")
+        raw_error_type = "api_error"
+
+    error_type = _ANTHROPIC_ERROR_TYPE_MAP.get(raw_error_type, "api_error")
+    error_event = {
+        "type": "error",
+        "error": {"type": error_type, "message": message},
+    }
+    return f"event: error\ndata: {json_dumps(error_event)}\n\n"
+
+
 async def _finalize_anthropic_stream(
     batcher: ChunkBatcher,
     thinking_block_started: bool,
@@ -365,6 +400,15 @@ async def anthropic_streaming_wrapper_fast(
             if current_time - last_event_time > HEARTBEAT_INTERVAL:
                 yield ": heartbeat\n\n"
                 last_event_time = current_time
+
+            # Internal retry pipeline reports terminal failures as OpenAI-style
+            # error payloads. Convert them to Anthropic SSE errors instead of
+            # treating them as empty successful messages.
+            if "error" in chunk:
+                if remaining := batcher.flush():
+                    yield remaining
+                yield _make_error_event(chunk.get("error"))
+                return
 
             # Extract usage if present
             if "usage" in chunk and chunk["usage"]:

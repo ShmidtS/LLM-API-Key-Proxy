@@ -27,7 +27,7 @@ from .retry_base import (
 lib_logger = logging.getLogger("rotator_library")
 
 import litellm  # type: ignore[import-untyped]
-from litellm.exceptions import APIConnectionError, BadRequestError, InternalServerError, InvalidRequestError, RateLimitError, ServiceUnavailableError  # type: ignore[import-untyped]
+from litellm.exceptions import APIConnectionError, APIError as LiteLLMAPIError, BadRequestError, InternalServerError, InvalidRequestError, RateLimitError, ServiceUnavailableError  # type: ignore[import-untyped]
 
 from ..config.defaults import MAX_TOTAL_ATTEMPTS, RETRY_SAME_KEY_MAX_WAIT
 from ..error_handler import (
@@ -825,6 +825,7 @@ class RetryMixin(RetryBaseMixin):
         max_retries = self.max_retries
         global_semaphore = self._global_semaphore
         _cached_request_headers = self._build_request_headers(request)
+        account_billing_error_count = 0
         total_api_attempts = 0
         remaining_budget = deadline - time.monotonic()
 
@@ -1100,6 +1101,17 @@ class RetryMixin(RetryBaseMixin):
                                 _cached_request_headers,
                                 request=request,
                             )
+                            # Track account billing errors for logging, but don't fast-fail:
+                            # each credential may belong to a different account, so hitting
+                            # N bad keys doesn't mean ALL keys are bad. Per-credential
+                            # cooldown already prevents re-selecting the same bad key.
+                            if getattr(dec.classified_error, "reason", None) == "account_billing_issue":
+                                account_billing_error_count += 1
+                                lib_logger.warning(
+                                    "Account billing error #%d for '%s' on cred %s; rotating to next key.",
+                                    account_billing_error_count, provider,
+                                    mask_credential(current_cred),
+                                )
                             if dec.action == "fail":
                                 _cb_slot_held = False
                                 async with HalfOpenSlot(self._resilience, provider):
@@ -1175,6 +1187,7 @@ class RetryMixin(RetryBaseMixin):
             }
 
         consecutive_quota_failures: dict[str, int] = {}
+        account_billing_error_count = 0
         total_api_attempts = 0
         remaining_budget = deadline - time.monotonic()
 
@@ -1490,6 +1503,7 @@ class RetryMixin(RetryBaseMixin):
                             httpx.HTTPStatusError,
                             BadRequestError,
                             InvalidRequestError,
+                            LiteLLMAPIError,
                         ) as e:
                             last_exception = e
 
@@ -1506,6 +1520,18 @@ class RetryMixin(RetryBaseMixin):
                                 provider=provider,
                                 credential=current_cred,
                             )
+
+                            # Track account billing errors for logging, but don't fast-fail:
+                            # each credential may belong to a different account, so hitting
+                            # N bad keys doesn't mean ALL keys are bad. Per-credential
+                            # cooldown already prevents re-selecting the same bad key.
+                            if getattr(classified_error, "reason", None) == "account_billing_issue":
+                                account_billing_error_count += 1
+                                lib_logger.warning(
+                                    "Account billing error #%d for '%s' on cred %s; rotating to next key.",
+                                    account_billing_error_count, provider,
+                                    mask_credential(current_cred),
+                                )
 
                             # Check if this error should trigger rotation
                             if not should_rotate_on_error(classified_error):
