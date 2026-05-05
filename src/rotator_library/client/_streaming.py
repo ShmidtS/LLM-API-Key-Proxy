@@ -24,6 +24,52 @@ class _StreamedException(Exception):
     pass
 
 
+class _ShutdownDetected(Exception):
+    """Raised when server shutdown is detected during a blocking stream read."""
+    pass
+
+
+async def _poll_shutdown(request, interval: float = 1.0):
+    """Poll for server shutdown signal."""
+    while True:
+        await asyncio.sleep(interval)
+        if (
+            request
+            and hasattr(request, "app")
+            and hasattr(request.app, "state")
+            and getattr(request.app.state, "_shutting_down", False)
+        ):
+            return
+
+
+async def _anext_with_shutdown(anext_coro, request):
+    """
+    Race anext() against a shutdown poll so streams finish promptly
+    during Uvicorn graceful shutdown instead of hanging on idle connections.
+    """
+    stream_task = asyncio.create_task(anext_coro())
+    poll_task = asyncio.create_task(_poll_shutdown(request))
+    done, pending = await asyncio.wait(
+        {stream_task, poll_task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    for task in pending:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    if poll_task in done:
+        if not stream_task.done():
+            stream_task.cancel()
+            try:
+                await stream_task
+            except asyncio.CancelledError:
+                pass
+        raise _ShutdownDetected()
+    return stream_task.result()
+
+
 class StreamingMixin:
     """Mixin with streaming wrapper methods for RotatingClient."""
 
@@ -73,7 +119,7 @@ class StreamingMixin:
                 disconnect_check_countdown -= 1
 
                 try:
-                    chunk = await stream_anext()
+                    chunk = await _anext_with_shutdown(stream_anext, request)
                     chunk_index += 1
 
                     # Convert chunk to dict, handling both litellm.ModelResponse and raw dicts
@@ -167,6 +213,19 @@ class StreamingMixin:
                 except StopAsyncIteration:
                     # Stream ended normally
                     stream_completed = True
+                    break
+
+                except _ShutdownDetected:
+                    stream_completed = False
+                    lib_logger.info(
+                        "Server shutdown detected. Aborting stream for credential %s.",
+                        mask_credential(key),
+                    )
+                    try:
+                        if hasattr(stream, "aclose"):
+                            await asyncio.wait_for(stream.aclose(), timeout=1.0)
+                    except Exception:
+                        pass
                     break
 
                 except _StreamedException:

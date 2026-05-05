@@ -40,34 +40,42 @@ async def parse_sse_stream(
     Yields:
         Parsed JSON dicts from each SSE ``data`` line.
     """
-    async for line in response.aiter_lines():
-        if on_line is not None:
-            result = on_line(line)
-            if asyncio.iscoroutine(result):
-                await result
+    try:
+        async for line in response.aiter_lines():
+            if on_line is not None:
+                result = on_line(line)
+                if asyncio.iscoroutine(result):
+                    await result
 
-        # Skip non-data lines (event:, comments, empty lines)
-        if not line.startswith("data:"):
-            continue
+            # Skip non-data lines (event:, comments, empty lines)
+            if not line.startswith("data:"):
+                continue
 
-        # Extract data after "data:" prefix, handling both "data: " and "data:"
-        if line.startswith("data: "):
-            data_str = line[6:]
-        else:
-            data_str = line[5:]
+            # Extract data after "data:" prefix, handling both "data: " and "data:"
+            if line.startswith("data: "):
+                data_str = line[6:]
+            else:
+                data_str = line[5:]
 
-        # Check for [DONE] sentinel (with optional surrounding whitespace)
-        if data_str.strip() == "[DONE]":
-            break
+            # Check for [DONE] sentinel (with optional surrounding whitespace)
+            if data_str.strip() == "[DONE]":
+                break
 
+            try:
+                chunk = json_loads(data_str)
+                yield chunk
+            except json.JSONDecodeError:
+                name = provider_name or "unknown"
+                lib_logger.warning(
+                    f"Could not decode JSON from {name}: {line}"
+                )
+    except GeneratorExit:
+        # Ensure the HTTP response stream is closed when the generator is shut down
         try:
-            chunk = json_loads(data_str)
-            yield chunk
-        except json.JSONDecodeError:
-            name = provider_name or "unknown"
-            lib_logger.warning(
-                f"Could not decode JSON from {name}: {line}"
-            )
+            await response.aclose()
+        except Exception:
+            pass
+        raise
 
 
 class StreamingResponseMixin:

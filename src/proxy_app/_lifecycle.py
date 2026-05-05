@@ -514,7 +514,13 @@ def create_lifespan(config: LifespanConfig):
                         for stream_gen in list(active_stream_gens):
                             try:
                                 if hasattr(stream_gen, "aclose"):
-                                    await stream_gen.aclose()
+                                    await asyncio.wait_for(
+                                        stream_gen.aclose(), timeout=2.0
+                                    )
+                            except asyncio.TimeoutError:
+                                logger.warning(
+                                    "Timeout closing stream generator during shutdown"
+                                )
                             except asyncio.CancelledError:
                                 raise
                             except Exception as e:
