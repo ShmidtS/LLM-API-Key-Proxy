@@ -33,6 +33,8 @@ import logging
 import os
 import sys
 import warnings
+
+from ..config.defaults import PATCH_LITELLM_FINISH_REASON, SUPPRESS_LITELLM_SERIALIZATION_WARNINGS
 from contextlib import contextmanager
 from io import StringIO
 from typing import Optional
@@ -147,7 +149,7 @@ def patch_litellm_finish_reason():
     """
     global _original_chat_completion_chunk_model_validate, _patched
 
-    if os.getenv("PATCH_LITELLM_FINISH_REASON", "1") == "0":
+    if not PATCH_LITELLM_FINISH_REASON:
         logger.info("finish_reason patch disabled by environment variable")
         return
 
@@ -194,7 +196,7 @@ def suppress_litellm_serialization_warnings():
 
     Can be disabled by setting SUPPRESS_LITELLM_SERIALIZATION_WARNINGS=0
     """
-    if os.getenv("SUPPRESS_LITELLM_SERIALIZATION_WARNINGS", "1") == "1":
+    if SUPPRESS_LITELLM_SERIALIZATION_WARNINGS:
         warnings.filterwarnings(
             "ignore",
             category=UserWarning,

@@ -381,8 +381,8 @@ IP_THROTTLE_DETECTION_DISABLED: bool = False
 
 # Kilocode provider backoff settings
 # Override via environment: KILOCODE_BACKOFF_BASE, KILOCODE_MAX_BACKOFF
-KILOCODE_BACKOFF_BASE: float = 1.0  # Base multiplier for server errors
-KILOCODE_MAX_BACKOFF: float = 30.0  # Maximum backoff in seconds
+KILOCODE_BACKOFF_BASE: float = env_float("KILOCODE_BACKOFF_BASE", 1.0)
+KILOCODE_MAX_BACKOFF: float = env_float("KILOCODE_MAX_BACKOFF", 30.0)
 
 # =============================================================================
 # ADAPTIVE RATE LIMITER DEFAULTS
@@ -441,6 +441,96 @@ PROXY_DEFAULT_HOST: str = os.getenv("PROXY_DEFAULT_HOST", "127.0.0.1")
 # Default proxy port
 # Override: PROXY_DEFAULT_PORT=<port>
 PROXY_DEFAULT_PORT: int = env_int("PROXY_DEFAULT_PORT", 8000)
+
+# =============================================================================
+# PROXY PROVIDERS DEFAULTS
+# =============================================================================
+
+# Comma-separated list of providers that route through multiple backends.
+# IP throttle detection is unreliable for these providers.
+# Override: PROXY_PROVIDERS=<provider1,provider2,...>
+_PROXY_PROVIDERS_DEFAULT = frozenset(
+    {
+        "kilocode",
+        "openrouter",
+        "requesty",
+        "opencode",
+        "inception",
+        "nvidia",
+        "zai",
+        "friendli",
+    }
+)
+_env_providers = os.getenv("PROXY_PROVIDERS")
+PROXY_PROVIDERS: frozenset = (
+    frozenset(p.strip() for p in _env_providers.split(",") if p.strip())
+    if _env_providers is not None
+    else _PROXY_PROVIDERS_DEFAULT
+)
+
+# =============================================================================
+# INCEPTION PROVIDER BACKOFF DEFAULTS
+# =============================================================================
+
+# Override via environment: INCEPTION_BACKOFF_BASE, INCEPTION_MAX_BACKOFF
+INCEPTION_BACKOFF_BASE: float = env_float("INCEPTION_BACKOFF_BASE", 2.0)
+INCEPTION_MAX_BACKOFF: float = env_float("INCEPTION_MAX_BACKOFF", 60.0)
+
+# =============================================================================
+# BACKGROUND REFRESHER DEFAULTS
+# =============================================================================
+
+# OAuth token refresh interval in seconds
+# Override: OAUTH_REFRESH_INTERVAL=<seconds>
+OAUTH_REFRESH_INTERVAL: int = env_int("OAUTH_REFRESH_INTERVAL", 600)
+
+# =============================================================================
+# BATCH PERSISTENCE DEFAULTS
+# =============================================================================
+
+# Enable batch persistence for high-throughput usage data writes
+# Override: USAGE_BATCH_PERSISTENCE=true/false
+USAGE_BATCH_PERSISTENCE: bool = env_bool("USAGE_BATCH_PERSISTENCE", True)
+
+# =============================================================================
+# DNS RESOLVER DEFAULTS
+# =============================================================================
+
+# Custom DNS resolver host or DoH URL
+# Override: HTTP_DNS_RESOLVER=<ip_or_url>
+HTTP_DNS_RESOLVER: str = os.getenv("HTTP_DNS_RESOLVER", "")
+
+# =============================================================================
+# SSL DEFAULTS
+# =============================================================================
+
+# Force TLS 1.2 for compatibility with Azure and other legacy servers
+# Override: SSL_FORCE_TLS12=true/false
+SSL_FORCE_TLS12: bool = env_bool("SSL_FORCE_TLS12", False)
+
+# Per-host SSL verification bypass (comma-separated host list)
+# Override: HTTP_SSL_VERIFY_HOSTS=<host1,host2>
+HTTP_SSL_VERIFY_HOSTS: str = os.getenv("HTTP_SSL_VERIFY_HOSTS", "")
+
+# =============================================================================
+# LITELLM PATCH DEFAULTS
+# =============================================================================
+
+# Enable finish_reason normalization patch (disable with "0")
+# Override: PATCH_LITELLM_FINISH_REASON=0/1
+PATCH_LITELLM_FINISH_REASON: bool = env_bool("PATCH_LITELLM_FINISH_REASON", True)
+
+# Suppress Pydantic serialization warnings from litellm internals
+# Override: SUPPRESS_LITELLM_SERIALIZATION_WARNINGS=0/1
+SUPPRESS_LITELLM_SERIALIZATION_WARNINGS: bool = env_bool("SUPPRESS_LITELLM_SERIALIZATION_WARNINGS", True)
+
+# =============================================================================
+# HTTP CLIENT MISC DEFAULTS
+# =============================================================================
+
+# HTTP/2 enablement (disabled on Windows by default due to SelectorEventLoop)
+# Override: HTTP2_ENABLED=true/false
+HTTP2_ENABLED: bool = env_bool("HTTP2_ENABLED", os.name != "nt")
 
 # =============================================================================
 # COOLDOWN DISABLE FLAGS (from theblazehen fork)

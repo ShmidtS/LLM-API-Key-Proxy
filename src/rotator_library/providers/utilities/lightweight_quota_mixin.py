@@ -21,13 +21,13 @@ Optional:
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
 import json
 
 from ...http_client_pool import get_http_pool
+from .quota_utils import parse_iso_timestamp, make_bearer_header
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -152,32 +152,21 @@ class LightweightQuotaMixin:
 
     @staticmethod
     def _make_bearer_header(api_key: str) -> Dict[str, str]:
-        """Build a standard Bearer auth header."""
-        return {
-            "accept": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
+        """Build a standard Bearer auth header.
+
+        Delegates to quota_utils.make_bearer_header.
+        Kept as static method for backward compatibility.
+        """
+        return make_bearer_header(api_key)
 
     @staticmethod
     def _parse_iso_timestamp(iso_string: str) -> Optional[float]:
         """Parse ISO 8601 timestamp to Unix timestamp.
 
-        Args:
-            iso_string: ISO 8601 formatted timestamp (e.g., "2026-01-20T18:12:03.000Z")
-
-        Returns:
-            Unix timestamp in seconds, or None if parsing fails
+        Delegates to quota_utils.parse_iso_timestamp for the actual implementation.
+        Kept as static method for backward compatibility.
         """
-        try:
-            if iso_string.endswith("Z"):
-                iso_string = iso_string.replace("Z", "+00:00")
-            dt = datetime.fromisoformat(iso_string)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.timestamp()
-        except (ValueError, TypeError, KeyError) as e:
-            lib_logger.warning(f"Failed to parse ISO timestamp '{iso_string}': {e}", exc_info=True)
-            return None
+        return parse_iso_timestamp(iso_string)
 
     def _error_result(self, **overrides) -> Dict[str, Any]:
         """Build a standardized error result dict. Subclasses can override defaults."""

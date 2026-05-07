@@ -12,7 +12,6 @@ from ._selection import UsageManagerSelectionMixin
 from ._acquire import UsageManagerAcquireMixin
 from ._recording import UsageManagerRecordingMixin
 from ._statistics import UsageManagerStatisticsMixin
-import os
 import asyncio
 from datetime import timezone, time as dt_time
 from pathlib import Path
@@ -23,6 +22,7 @@ from ..async_locks import ReadWriteLock
 from ..utils.resilient_io import ResilientStateWriter
 from ..utils.provider_locks import ProviderLockManager
 from ..batched_persistence import UsagePersistenceManager
+from ..config.defaults import USAGE_BATCH_PERSISTENCE
 from ..utils.paths import get_data_file
 from ..utils.provider_registry import get_provider_registry
 
@@ -160,11 +160,9 @@ class UsageManagerCore(
         self._state_writer = ResilientStateWriter(file_path or "", lib_logger)
 
         # Batch persistence manager for high-throughput scenarios
-        # Enabled via USAGE_PERSISTENCE_ENABLE=true environment variable
+        # Enabled via USAGE_BATCH_PERSISTENCE=true environment variable
         self._batch_persistence: Optional[UsagePersistenceManager] = None
-        self._use_batch_persistence = os.getenv(
-            "USAGE_BATCH_PERSISTENCE", "true"
-        ).lower() in ("true", "1", "yes")
+        self._use_batch_persistence = USAGE_BATCH_PERSISTENCE
 
         if daily_reset_time_utc:
             hour, minute = map(int, daily_reset_time_utc.split(":"))

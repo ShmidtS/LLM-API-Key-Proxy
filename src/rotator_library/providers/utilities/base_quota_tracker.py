@@ -40,6 +40,7 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from ...utils.paths import get_cache_dir
 from ...utils.json_utils import json_loads
+from .quota_utils import parse_iso_timestamp
 
 if TYPE_CHECKING:
     from ...usage_manager import UsageManager
@@ -186,22 +187,16 @@ class BaseQuotaTracker:
     def _parse_iso_timestamp(iso_string: str) -> Optional[float]:
         """Parse ISO 8601 timestamp to Unix timestamp.
 
+        Delegates to quota_utils.parse_iso_timestamp for the actual implementation.
+        Kept as static method for backward compatibility.
+
         Args:
             iso_string: ISO 8601 formatted timestamp (e.g., "2026-01-20T18:12:03.000Z")
 
         Returns:
             Unix timestamp in seconds, or None if parsing fails
         """
-        try:
-            if iso_string.endswith("Z"):
-                iso_string = iso_string.replace("Z", "+00:00")
-            dt = datetime.fromisoformat(iso_string)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.timestamp()
-        except (ValueError, TypeError, KeyError) as e:
-            lib_logger.warning(f"Failed to parse ISO timestamp '{iso_string}': {e}", exc_info=True)
-            return None
+        return parse_iso_timestamp(iso_string)
 
     @staticmethod
     def _clean_model_name(model: str) -> str:

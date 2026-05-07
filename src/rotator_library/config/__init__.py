@@ -49,6 +49,27 @@ from .defaults import (
     HTTP_WARMUP_CONNECTIONS,
     HTTP_WARMUP_HOST_LIMIT,
     RETRY_SAME_KEY_MAX_WAIT,
+    # Provider Backoff
+    KILOCODE_BACKOFF_BASE,
+    KILOCODE_MAX_BACKOFF,
+    INCEPTION_BACKOFF_BASE,
+    INCEPTION_MAX_BACKOFF,
+    # Proxy Providers
+    PROXY_PROVIDERS,
+    # Background Refresher
+    OAUTH_REFRESH_INTERVAL,
+    # Batch Persistence
+    USAGE_BATCH_PERSISTENCE,
+    # DNS Resolver
+    HTTP_DNS_RESOLVER,
+    # SSL
+    SSL_FORCE_TLS12,
+    HTTP_SSL_VERIFY_HOSTS,
+    # LiteLLM Patches
+    PATCH_LITELLM_FINISH_REASON,
+    SUPPRESS_LITELLM_SERIALIZATION_WARNINGS,
+    # HTTP Client Misc
+    HTTP2_ENABLED,
 )
 from .defaults import env_bool, env_float, env_int
 
@@ -95,6 +116,27 @@ __all__ = [
     "HTTP_WARMUP_CONNECTIONS",
     "HTTP_WARMUP_HOST_LIMIT",
     "RETRY_SAME_KEY_MAX_WAIT",
+    # Provider Backoff
+    "KILOCODE_BACKOFF_BASE",
+    "KILOCODE_MAX_BACKOFF",
+    "INCEPTION_BACKOFF_BASE",
+    "INCEPTION_MAX_BACKOFF",
+    # Proxy Providers
+    "PROXY_PROVIDERS",
+    # Background Refresher
+    "OAUTH_REFRESH_INTERVAL",
+    # Batch Persistence
+    "USAGE_BATCH_PERSISTENCE",
+    # DNS Resolver
+    "HTTP_DNS_RESOLVER",
+    # SSL
+    "SSL_FORCE_TLS12",
+    "HTTP_SSL_VERIFY_HOSTS",
+    # LiteLLM Patches
+    "PATCH_LITELLM_FINISH_REASON",
+    "SUPPRESS_LITELLM_SERIALIZATION_WARNINGS",
+    # HTTP Client Misc
+    "HTTP2_ENABLED",
     # Env helpers
     "env_bool",
     "env_float",

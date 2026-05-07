@@ -3,11 +3,12 @@
 
 # src/rotator_library/background_refresher.py
 
-import os
 import asyncio
 import logging
 import httpx
 from typing import TYPE_CHECKING, Optional, Dict, Any, List
+
+from .config.defaults import OAUTH_REFRESH_INTERVAL
 
 if TYPE_CHECKING:
     from .client import RotatingClient
@@ -18,10 +19,6 @@ lib_logger = logging.getLogger("rotator_library")
 # CONFIGURATION DEFAULTS
 # =============================================================================
 # These can be overridden via environment variables.
-
-# OAuth token refresh interval in seconds
-# Override: OAUTH_REFRESH_INTERVAL=<seconds>
-DEFAULT_OAUTH_REFRESH_INTERVAL: int = 600  # 10 minutes
 
 # Default interval for provider background jobs (quota refresh, etc.)
 # Individual providers can override this in their get_background_job_config()
@@ -49,17 +46,7 @@ class BackgroundRefresher:
         self._usage_reset_task: Optional[asyncio.Task] = None
         self._cooldown_cleanup_task: Optional[asyncio.Task] = None
         self._initialized = False
-        try:
-            interval_str = os.getenv(
-                "OAUTH_REFRESH_INTERVAL", str(DEFAULT_OAUTH_REFRESH_INTERVAL)
-            )
-            self._interval = int(interval_str)
-        except ValueError:
-            lib_logger.warning(
-                f"Invalid OAUTH_REFRESH_INTERVAL '{interval_str}'. "
-                f"Falling back to {DEFAULT_OAUTH_REFRESH_INTERVAL}s."
-            )
-            self._interval = DEFAULT_OAUTH_REFRESH_INTERVAL
+        self._interval = OAUTH_REFRESH_INTERVAL
 
     def start(self):
         """Starts the background refresh task."""

@@ -26,6 +26,8 @@ from typing import Optional
 
 import httpx
 
+from .config.defaults import env_float
+
 lib_logger = logging.getLogger("rotator_library")
 
 
@@ -65,15 +67,7 @@ class TimeoutConfig:
     @classmethod
     def _get_env_float(cls, key: str, default: float) -> float:
         """Get a float value from environment variable, or return default."""
-        value = os.environ.get(key)
-        if value is not None:
-            try:
-                return float(value)
-            except ValueError:
-                lib_logger.warning(
-                    f"Invalid value for {key}: {value}. Using default: {default}"
-                )
-        return default
+        return env_float(key, default)
 
     @classmethod
     def quota_viewer_connect(cls) -> float:

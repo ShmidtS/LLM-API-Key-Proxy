@@ -77,27 +77,15 @@ parser.add_argument(
     action="store_true",
     help="Launch the interactive tool to add a new OAuth credential.",
 )
-args, _ = parser.parse_known_args()
+_DEFAULT_ARGS = argparse.Namespace(
+    host=DEFAULT_HOST,
+    port=DEFAULT_PORT,
+    enable_request_logging=False,
+    enable_raw_logging=False,
+    add_credential=False,
+)
+args = _DEFAULT_ARGS
 
-# Check if we should launch TUI (no arguments = TUI mode)
-if len(sys.argv) == 1:
-    # TUI MODE - Load ONLY what's needed for the launcher (fast path!)
-    from proxy_app.launcher_tui import run_launcher_tui
-
-    run_launcher_tui()
-    # Launcher modifies sys.argv and returns, or exits if user chose Exit
-    # If we get here, user chose "Run Proxy" and sys.argv is modified
-    # Re-parse arguments with modified sys.argv
-    args = parser.parse_args()
-
-# Check if credential tool mode (also doesn't need heavy proxy imports)
-if args.add_credential:
-    from rotator_library.credential_tool import run_credential_tool
-
-    run_credential_tool()
-    sys.exit(0)
-
-# If we get here, we're ACTUALLY running the proxy - NOW show startup messages and start timer
 _start_time = time.time()
 
 # Load all .env files from root folder (main .env first, then any additional *.env files)
@@ -453,6 +441,8 @@ async def read_root():
 
 
 if __name__ == "__main__":
+    args, _ = parser.parse_known_args()
+
     # Define ENV_FILE for onboarding checks using centralized path
     ENV_FILE = get_data_file(".env")
 

@@ -35,6 +35,9 @@ from .utils.duration import parse_duration
 from .utils.http_retry import compute_backoff_with_jitter
 
 from .config.defaults import COOLDOWN_RATE_LIMIT_DEFAULT, env_bool, env_float
+from .config.defaults import KILOCODE_BACKOFF_BASE, KILOCODE_MAX_BACKOFF
+from .config.defaults import INCEPTION_BACKOFF_BASE, INCEPTION_MAX_BACKOFF
+from .config.defaults import PROXY_PROVIDERS
 from .error_types import (
     ClassifiedError,
     GarbageResponseError,
@@ -102,25 +105,7 @@ KEY_SPECIFIC_PATTERNS = frozenset(
 
 # Providers that route through multiple backends - IP throttle detection is unreliable
 # These providers aggregate multiple upstream APIs, so rate limits may vary per backend
-_PROXY_PROVIDERS_DEFAULT = frozenset(
-    {
-        "kilocode",  # Routes to multiple providers (minimax, moonshot, z-ai, etc.)
-        "openrouter",  # Routes to 100+ providers
-        "requesty",  # Router/aggregator
-        "opencode",  # OpenCode AI provider with quota-based rate limits
-        "inception",  # Inception Labs - 429 errors should trigger rotation, not IP throttle
-        "nvidia",  # NVIDIA NIM routes to multiple backends, 429 should rotate keys
-        "zai",  # ZAI uses shared hourly quota across all credentials; 429 on one key means all keys are likely rate-limited, not IP throttle
-        "friendli",  # FriendliAI serverless backend; 429 should trigger key rotation, not IP-level circuit breaker
-    }
-)
-
-_env_providers = os.environ.get("PROXY_PROVIDERS")
-PROXY_PROVIDERS = (
-    frozenset(p.strip() for p in _env_providers.split(",") if p.strip())
-    if _env_providers is not None
-    else _PROXY_PROVIDERS_DEFAULT
-)
+# (Centralized in config/defaults.py, imported above)
 
 _RETRY_AFTER_BODY_PATTERNS = (
     re.compile(r"quota will reset after\s*([\dhmso.]+)", re.IGNORECASE),
@@ -647,9 +632,9 @@ def classify_stream_error(raw_response: Dict) -> "ClassifiedError":
 
 PROVIDER_BACKOFF_CONFIGS: Dict[str, Dict[str, float]] = {
     "kilocode": {
-        "server_error_base": 1.0,  # Faster retry for kilocode 500s
+        "server_error_base": KILOCODE_BACKOFF_BASE,
         "connection_base": 0.5,
-        "max_backoff": 30.0,
+        "max_backoff": KILOCODE_MAX_BACKOFF,
     },
     "friendli": {  # z-ai uses Friendli backend
         "server_error_base": 1.5,
@@ -657,9 +642,9 @@ PROVIDER_BACKOFF_CONFIGS: Dict[str, Dict[str, float]] = {
         "max_backoff": 20.0,
     },
     "inception": {
-        "server_error_base": 2.0,  # Longer initial backoff for 500s
+        "server_error_base": INCEPTION_BACKOFF_BASE,
         "connection_base": 1.0,
-        "max_backoff": 60.0,
+        "max_backoff": INCEPTION_MAX_BACKOFF,
         "max_retries": 5,
     },
 }

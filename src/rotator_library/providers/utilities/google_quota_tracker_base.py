@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from pathlib import Path
 import time
 from .base_quota_tracker import BaseQuotaTracker
+from .quota_utils import post_json_with_error_handling
 from ...http_client_pool import get_http_pool
 
 if TYPE_CHECKING:
@@ -59,9 +60,21 @@ class GoogleQuotaTrackerBase(BaseQuotaTracker):
             payload = {"project": project_id} if project_id else {}
             pool = await get_http_pool()
             client = await pool.get_client_async()
-            response = await client.post(url, headers=headers, json=payload, timeout=30)
-            response.raise_for_status()
-            data = response.json()
+            provider_name = self.cache_subdir if hasattr(self, "cache_subdir") else "google"
+            data = await post_json_with_error_handling(
+                client, url, headers, payload,
+                timeout=30, provider_name=provider_name,
+            )
+            if data is None:
+                return {
+                    "status": "error",
+                    "error": "HTTP or JSON error",
+                    "identifier": identifier,
+                    "tier": tier,
+                    "project_id": project_id,
+                    self._get_quota_error_response_key(): self._get_empty_quota_container(),
+                    "fetched_at": time.time(),
+                }
             parsed = self._parse_quota_response(data)
             result = {
                 "status": "success",

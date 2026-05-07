@@ -35,7 +35,6 @@ class ThrottleScope(Enum):
     ACCOUNT = "account"  # Account-level rate limit (affects all keys in account)
 
 
-@dataclass
 class ThrottleAssessment:
     """
     Assessment of throttle scope and recommended action.
@@ -49,12 +48,21 @@ class ThrottleAssessment:
         details: Additional diagnostic information
     """
 
-    scope: ThrottleScope
-    confidence: float = 0.0
-    suggested_cooldown: int = 0
-    affected_credentials: List[str] = field(default_factory=list)
-    error_signature: Optional[str] = None
-    details: Dict[str, Any] = field(default_factory=dict)
+    def __init__(
+        self,
+        scope: ThrottleScope,
+        confidence: float = 0.0,
+        suggested_cooldown: int = 0,
+        affected_credentials: Optional[List[str]] = None,
+        error_signature: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.scope = scope
+        self.confidence = confidence
+        self.suggested_cooldown = suggested_cooldown
+        self.affected_credentials = affected_credentials if affected_credentials is not None else []
+        self.error_signature = error_signature
+        self.details = details if details is not None else {}
 
     def __str__(self) -> str:
         return (
@@ -63,6 +71,36 @@ class ThrottleAssessment:
             f"cooldown={self.suggested_cooldown}s, "
             f"affected={len(self.affected_credentials)} creds)"
         )
+
+    def __repr__(self) -> str:
+        return (
+            f"ThrottleAssessment(scope={self.scope!r}, confidence={self.confidence!r}, "
+            f"suggested_cooldown={self.suggested_cooldown!r}, "
+            f"affected_credentials={self.affected_credentials!r}, "
+            f"error_signature={self.error_signature!r}, details={self.details!r})"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ThrottleAssessment):
+            return NotImplemented
+        return (
+            self.scope == other.scope
+            and self.confidence == other.confidence
+            and self.suggested_cooldown == other.suggested_cooldown
+            and self.affected_credentials == other.affected_credentials
+            and self.error_signature == other.error_signature
+            and self.details == other.details
+        )
+
+    def __hash__(self) -> int:
+        return hash((
+            self.scope,
+            self.confidence,
+            self.suggested_cooldown,
+            tuple(self.affected_credentials),
+            self.error_signature,
+            tuple(sorted(self.details.items())),
+        ))
 
 
 @dataclass

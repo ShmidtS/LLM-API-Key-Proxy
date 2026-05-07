@@ -33,6 +33,7 @@ import random
 import asyncio
 import concurrent.futures
 from .utils.json_utils import json_loads
+from .config.defaults import HTTP_DNS_RESOLVER as CONFIG_DNS_RESOLVER
 import ssl
 import threading
 import time
@@ -308,7 +309,7 @@ def _custom_getaddrinfo_sync(
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (known_ip, port))]
 
         # Otherwise, use DNS resolver
-        dns_resolver = os.getenv("HTTP_DNS_RESOLVER", "").strip()
+        dns_resolver = CONFIG_DNS_RESOLVER.strip()
 
         if dns_resolver and dns_resolver.lower() not in ("false", "0", "no", "off"):
             ip = None
@@ -417,7 +418,7 @@ def apply_dns_fix():
     if sys.platform == "win32":
         os.environ["AIOHTTP_NO_EXTENSIONS"] = "1"
 
-    dns_resolver = os.getenv("HTTP_DNS_RESOLVER", "").strip()
+    dns_resolver = CONFIG_DNS_RESOLVER.strip()
 
     # Check if custom DNS is disabled
     if not dns_resolver or dns_resolver.lower() in ("false", "0", "no", "off"):

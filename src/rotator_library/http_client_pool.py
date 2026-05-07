@@ -36,6 +36,7 @@ from .config.defaults import (
     HTTP_MAX_KEEPALIVE_POSIX,
     HTTP_MAX_KEEPALIVE_WINDOWS,
     HTTP_SSL_VERIFY_DEFAULT,
+    HTTP_SSL_VERIFY_HOSTS,
     HTTP_STREAMING_KEEPALIVE_EXPIRY,
     HTTP_STREAMING_MAX_CONNECTIONS_POSIX,
     HTTP_STREAMING_MAX_CONNECTIONS_WINDOWS,
@@ -43,6 +44,7 @@ from .config.defaults import (
     HTTP_STREAMING_MAX_KEEPALIVE_WINDOWS,
     HTTP_WARMUP_CONNECTIONS,
     HTTP_WARMUP_HOST_LIMIT,
+    HTTP2_ENABLED,
 )
 from .utils.singleton import SingletonMeta
 
@@ -175,7 +177,7 @@ def _env_ssl_verify() -> Union[bool, List[str]]:
         return False
 
     # Check per-host SSL verification overrides
-    hosts_str = os.getenv("HTTP_SSL_VERIFY_HOSTS", "").strip()
+    hosts_str = HTTP_SSL_VERIFY_HOSTS.strip()
 
     # Default hosts that need SSL bypass due to Azure SSLV3_ALERT_HANDSHAKE_FAILURE
     DEFAULT_SSL_BYPASS_HOSTS = [
@@ -269,7 +271,7 @@ class HttpClientPool(metaclass=SingletonMeta):
         self._ssl_context = self._create_ssl_context()
 
         # HTTP/2 configuration (can be disabled for problematic providers)
-        self._http2_enabled = _env_bool("HTTP2_ENABLED", DEFAULT_HTTP2_ENABLED)
+        self._http2_enabled = HTTP2_ENABLED
         if not self._http2_enabled:
             reason = (
                 "SelectorEventLoop incompatibility"

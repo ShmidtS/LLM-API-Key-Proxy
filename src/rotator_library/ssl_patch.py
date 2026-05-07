@@ -7,6 +7,8 @@ import os
 import ssl as _ssl_module
 import logging
 
+from .config.defaults import SSL_FORCE_TLS12
+
 AZURE_COMPATIBLE_CIPHERS = (
     "ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:"
     "ECDH+3DES:DH+3DES:RSA+AESGCM:RSA+AES:RSA+3DES:!aNULL:!MD5:!DSS"
@@ -55,7 +57,7 @@ def _patch_aiohttp_connector(disable_tls_verify=None):
     """Patch ssl module and aiohttp.TCPConnector when TLS verification is explicitly disabled."""
     try:
         _ssl_verify = not _tls_verification_disabled(disable_tls_verify)
-        _force_tls12 = os.environ.get("SSL_FORCE_TLS12", "false").lower() == "true"
+        _force_tls12 = SSL_FORCE_TLS12
 
         if not _ssl_verify:
             # Global patch: make ssl.create_default_context() return unverified context
