@@ -616,6 +616,167 @@ class RetryMixin(RetryBaseMixin):
                             break
         return quota_value, quota_id
 
+    def _check_max_attempts(self, total_api_attempts: int, last_exception: Optional[Exception]):
+        """Raise if total API attempts exceed MAX_TOTAL_ATTEMPTS.
+
+        Called at the start of each inner retry loop iteration to prevent
+        runaway retry cycles across all credentials.
+
+        Args:
+            total_api_attempts: Current count of total API attempts across
+                all credentials and inner retry iterations.
+            last_exception: Last exception to re-raise, or None.
+
+        Raises:
+            NoAvailableKeysError: When max attempts exceeded and no last exception.
+            last_exception: When max attempts exceeded with a prior exception.
+        """
+        if total_api_attempts > MAX_TOTAL_ATTEMPTS:
+            lib_logger.warning(
+                "Total API attempts (%s) exceeded MAX_TOTAL_ATTEMPTS (%s). Aborting.",
+                total_api_attempts, MAX_TOTAL_ATTEMPTS,
+            )
+            raise last_exception or NoAvailableKeysError(
+                f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
+            )
+
+    async def _execute_single_attempt(
+        self,
+        attempt: int,
+        max_retries: int,
+        current_cred: str,
+        call_label: str,
+        pre_request_callback: Optional[Callable],
+        request: Optional[Any],
+        litellm_kwargs: dict,
+        provider: str,
+    ):
+        """Prepare for a single API attempt with pre-attempt boilerplate.
+
+        Handles debug logging of the attempt number and invocation of the
+        optional pre-request callback.  The actual API call is performed by
+        the caller after this method returns.
+
+        Args:
+            attempt: Current attempt index (0-based).
+            max_retries: Maximum retries per key.
+            current_cred: Current credential string.
+            call_label: Label for debug log (e.g. "call" or "stream").
+            pre_request_callback: Optional async callback invoked before
+                the API call; may modify litellm_kwargs in-place.
+            request: Optional request object passed to the callback.
+            litellm_kwargs: Mutable kwargs dict for the upcoming API call.
+            provider: Provider name.
+        """
+        if lib_logger.isEnabledFor(logging.DEBUG):
+            lib_logger.debug(
+                "Attempting %s with credential %s (Attempt %s/%s)",
+                call_label, mask_credential(current_cred),
+                attempt + 1, max_retries,
+            )
+
+        if pre_request_callback:
+            await self._invoke_pre_request_callback(
+                pre_request_callback, request, litellm_kwargs, provider,
+            )
+
+    async def _handle_retry_error(
+        self,
+        e: Exception,
+        provider: str,
+        current_cred: str,
+        model: str,
+        attempt: int,
+        deadline: float,
+        request_headers: dict,
+        error_accumulator,
+        *,
+        reset_quota: bool = False,
+        request: Optional[Any] = None,
+    ) -> _ErrorDecision:
+        """Handle server, transport, and generic errors in the retry loop.
+
+        Dispatches to the appropriate specialized handler based on exception
+        type.  Reraises CancelledError and TypeError / AttributeError /
+        KeyError immediately.  Does NOT handle RateLimitError,
+        httpx.HTTPStatusError, GarbageResponseError, _StreamedException,
+        LiteLLMAPIError, BadRequestError, or InvalidRequestError -- those
+        require path-specific handling by the caller.
+
+        Args:
+            e: The caught exception.
+            provider: Provider name.
+            current_cred: Current credential string.
+            model: Model string.
+            attempt: Current attempt index (0-based).
+            deadline: Monotonic deadline for the overall retry cycle.
+            request_headers: Cached request headers for logging.
+            error_accumulator: RequestErrorAccumulator instance.
+            reset_quota: Whether to reset quota failures (standard path).
+            request: Optional request object for generic error handler.
+
+        Returns:
+            _ErrorDecision with action "retry_same_key", "rotate", or "fail".
+
+        Raises:
+            asyncio.CancelledError: Reraised immediately.
+            TypeError, AttributeError, KeyError: Reraised immediately.
+        """
+        if isinstance(e, asyncio.CancelledError):
+            raise
+        if isinstance(e, (TypeError, AttributeError, KeyError)):
+            raise
+
+        if isinstance(e, (APIConnectionError, InternalServerError,
+                          ServiceUnavailableError, RuntimeError)):
+            return await self._handle_server_error(
+                e, provider, current_cred, model,
+                attempt, deadline, request_headers, error_accumulator,
+                reset_quota=reset_quota,
+            )
+
+        if isinstance(e, (httpx.ReadTimeout, httpx.PoolTimeout,
+                          httpx.RemoteProtocolError, httpx.ConnectError)):
+            return await self._handle_transport_error(
+                e, provider, current_cred, model,
+                attempt, deadline, request_headers, error_accumulator,
+            )
+
+        return await self._handle_generic_error(
+            e, provider, current_cred, model,
+            error_accumulator, request_headers, request=request,
+        )
+
+    async def _record_attempt_metrics(
+        self,
+        current_cred: str,
+        model: str,
+        provider: str,
+        *,
+        streaming: bool = False,
+        response: Any = None,
+        transaction_logger: Any = None,
+    ):
+        """Record success metrics after a completed API attempt.
+
+        Delegates to _record_non_streaming_success or _record_streaming_success
+        based on the streaming flag.
+
+        Args:
+            current_cred: Current credential string.
+            model: Model string.
+            provider: Provider name.
+            streaming: Whether this was a streaming attempt.
+            response: Response object (non-streaming only).
+            transaction_logger: Optional transaction logger (non-streaming only).
+        """
+        if streaming:
+            await self._record_streaming_success(current_cred, model, provider)
+        else:
+            await self._record_non_streaming_success(
+                current_cred, model, provider, response, transaction_logger,
+            )
+
     async def _prepare_request_context(
         self,
         model: str,
@@ -866,23 +1027,12 @@ class RetryMixin(RetryBaseMixin):
                     # Retry loop for custom providers - mirrors streaming path error handling
                     for attempt in range(max_retries):
                         total_api_attempts += 1
-                        if total_api_attempts > MAX_TOTAL_ATTEMPTS:
-                            lib_logger.warning(
-                                "Total API attempts (%s) exceeded MAX_TOTAL_ATTEMPTS (%s). Aborting.",
-                                total_api_attempts, MAX_TOTAL_ATTEMPTS,
-                            )
-                            raise last_exception or NoAvailableKeysError(
-                                f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
-                            )
+                        self._check_max_attempts(total_api_attempts, last_exception)
                         try:
-                            if lib_logger.isEnabledFor(logging.DEBUG):
-                                lib_logger.debug(
-                                    "Attempting call with credential %s (Attempt %s/%s)",
-                                    mask_credential(current_cred), attempt + 1, max_retries,
-                                )
-
-                            if pre_request_callback:
-                                await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
+                            await self._execute_single_attempt(
+                                attempt, max_retries, current_cred, "call",
+                                pre_request_callback, request, litellm_kwargs, provider,
+                            )
 
                             http_client = await self._get_http_client_async(
                                 streaming=False
@@ -892,8 +1042,9 @@ class RetryMixin(RetryBaseMixin):
                                     http_client, **litellm_kwargs
                                 )
 
-                            await self._record_non_streaming_success(
-                                current_cred, model, provider, response, transaction_logger,
+                            await self._record_attempt_metrics(
+                                current_cred, model, provider,
+                                response=response, transaction_logger=transaction_logger,
                             )
                             key_acquired = False
                             _cb_slot_held = False  # record_success already released the slot
@@ -923,7 +1074,7 @@ class RetryMixin(RetryBaseMixin):
                             RuntimeError,  # "Cannot send a request, as the client has been closed"
                         ) as e:
                             last_exception = e
-                            dec = await self._handle_server_error(
+                            dec = await self._handle_retry_error(
                                 e, provider, current_cred, model,
                                 attempt, deadline,
                                 _cached_request_headers,
@@ -972,26 +1123,15 @@ class RetryMixin(RetryBaseMixin):
 
                     for attempt in range(max_retries):
                         total_api_attempts += 1
-                        if total_api_attempts > MAX_TOTAL_ATTEMPTS:
-                            lib_logger.warning(
-                                "Total API attempts (%s) exceeded MAX_TOTAL_ATTEMPTS (%s). Aborting.",
-                                total_api_attempts, MAX_TOTAL_ATTEMPTS,
-                            )
-                            raise last_exception or NoAvailableKeysError(
-                                f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
-                            )
+                        self._check_max_attempts(total_api_attempts, last_exception)
                         # Ensure HTTP client pool is healthy at the start of each attempt
                         # This replaces redundant per-error-handler calls below
                         await self._get_http_client_async(streaming=False)
                         try:
-                            if lib_logger.isEnabledFor(logging.DEBUG):
-                                lib_logger.debug(
-                                    "Attempting call with credential %s (Attempt %s/%s)",
-                                    mask_credential(current_cred), attempt + 1, max_retries,
-                                )
-
-                            if pre_request_callback:
-                                await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
+                            await self._execute_single_attempt(
+                                attempt, max_retries, current_cred, "call",
+                                pre_request_callback, request, litellm_kwargs, provider,
+                            )
 
                             if "_native_provider" in litellm_kwargs:
                                 final_kwargs = litellm_kwargs
@@ -1006,8 +1146,9 @@ class RetryMixin(RetryBaseMixin):
                                     logger_fn=self._litellm_logger_callback,
                                 )
 
-                            await self._record_non_streaming_success(
-                                current_cred, model, provider, response, transaction_logger,
+                            await self._record_attempt_metrics(
+                                current_cred, model, provider,
+                                response=response, transaction_logger=transaction_logger,
                             )
                             key_acquired = False
                             _cb_slot_held = False  # record_success already released the slot
@@ -1034,7 +1175,7 @@ class RetryMixin(RetryBaseMixin):
                             RuntimeError,  # "Cannot send a request, as the client has been closed"
                         ) as e:
                             last_exception = e
-                            dec = await self._handle_server_error(
+                            dec = await self._handle_retry_error(
                                 e, provider, current_cred, model,
                                 attempt, deadline,
                                 _cached_request_headers,
@@ -1095,10 +1236,11 @@ class RetryMixin(RetryBaseMixin):
                         except Exception as e:
                             lib_logger.error(f"Unexpected error in retry loop: {type(e).__name__}: {e}")
                             last_exception = e
-                            dec = await self._handle_generic_error(
+                            dec = await self._handle_retry_error(
                                 e, provider, current_cred, model,
-                                error_accumulator,
+                                attempt, deadline,
                                 _cached_request_headers,
+                                error_accumulator,
                                 request=request,
                             )
                             # Track account billing errors for logging, but don't fast-fail:
@@ -1250,23 +1392,12 @@ class RetryMixin(RetryBaseMixin):
 
                         for attempt in range(max_retries):
                             total_api_attempts += 1
-                            if total_api_attempts > MAX_TOTAL_ATTEMPTS:
-                                lib_logger.warning(
-                                    "Total API attempts (%s) exceeded MAX_TOTAL_ATTEMPTS (%s). Aborting.",
-                                    total_api_attempts, MAX_TOTAL_ATTEMPTS,
-                                )
-                                raise last_exception or NoAvailableKeysError(
-                                    f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
-                                )
+                            self._check_max_attempts(total_api_attempts, last_exception)
                             try:
-                                if lib_logger.isEnabledFor(logging.DEBUG):
-                                    lib_logger.debug(
-                                        "Attempting stream with credential %s (Attempt %s/%s)",
-                                        mask_credential(current_cred), attempt + 1, max_retries,
-                                    )
-
-                                if pre_request_callback:
-                                    await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
+                                await self._execute_single_attempt(
+                                    attempt, max_retries, current_cred, "stream",
+                                    pre_request_callback, request, litellm_kwargs, provider,
+                                )
 
                                 http_client = await self._get_http_client_async(
                                     streaming=True
@@ -1312,7 +1443,9 @@ class RetryMixin(RetryBaseMixin):
                                         )
                                         key_acquired = False  # prevent outer finally from double-releasing
                                 # Streaming completed successfully (semaphore released) — mirror non-streaming bookkeeping
-                                await self._record_streaming_success(current_cred, model, provider)
+                                await self._record_attempt_metrics(
+                                    current_cred, model, provider, streaming=True,
+                                )
                                 _cb_slot_held = False  # record_success already released the slot
                                 return
 
@@ -1340,29 +1473,14 @@ class RetryMixin(RetryBaseMixin):
                                 APIConnectionError,
                                 InternalServerError,
                                 ServiceUnavailableError,
-                                RuntimeError,  # "Cannot send a request, as the client has been closed"
-                            ) as e:
-                                last_exception = e
-                                dec = await self._handle_server_error(
-                                    e, provider, current_cred, model,
-                                    attempt, deadline,
-                                    _cached_request_headers,
-                                    error_accumulator,
-                                )
-                                if dec.action == "retry_same_key":
-                                    await asyncio.sleep(dec.wait_time)
-                                    continue
-                                async with HalfOpenSlot(self._resilience, provider):
-                                    break
-
-                            except (
+                                RuntimeError,
                                 httpx.ReadTimeout,
                                 httpx.PoolTimeout,
                                 httpx.RemoteProtocolError,
                                 httpx.ConnectError,
                             ) as e:
                                 last_exception = e
-                                dec = await self._handle_transport_error(
+                                dec = await self._handle_retry_error(
                                     e, provider, current_cred, model,
                                     attempt, deadline,
                                     _cached_request_headers,
@@ -1380,10 +1498,11 @@ class RetryMixin(RetryBaseMixin):
                                 raise
                             except Exception as e:
                                 last_exception = e
-                                dec = await self._handle_generic_error(
+                                dec = await self._handle_retry_error(
                                     e, provider, current_cred, model,
-                                    error_accumulator,
+                                    attempt, deadline,
                                     _cached_request_headers,
+                                    error_accumulator,
                                 )
                                 if dec.action == "fail":
                                     async with HalfOpenSlot(self._resilience, provider):
@@ -1415,26 +1534,15 @@ class RetryMixin(RetryBaseMixin):
 
                     for attempt in range(max_retries):
                         total_api_attempts += 1
-                        if total_api_attempts > MAX_TOTAL_ATTEMPTS:
-                            lib_logger.warning(
-                                "Total API attempts (%s) exceeded MAX_TOTAL_ATTEMPTS (%s). Aborting.",
-                                total_api_attempts, MAX_TOTAL_ATTEMPTS,
-                            )
-                            raise last_exception or NoAvailableKeysError(
-                                f"Exceeded max total attempts ({MAX_TOTAL_ATTEMPTS})"
-                            )
+                        self._check_max_attempts(total_api_attempts, last_exception)
                         # Ensure HTTP client pool is healthy at the start of each attempt
                         # This replaces redundant per-error-handler calls below
                         await self._get_http_client_async(streaming=True)
                         try:
-                            if lib_logger.isEnabledFor(logging.DEBUG):
-                                lib_logger.debug(
-                                    "Attempting stream with credential %s (Attempt %d/%d)",
-                                    mask_credential(current_cred), attempt + 1, max_retries,
-                                )
-
-                            if pre_request_callback:
-                                await self._invoke_pre_request_callback(pre_request_callback, request, litellm_kwargs, provider)
+                            await self._execute_single_attempt(
+                                attempt, max_retries, current_cred, "stream",
+                                pre_request_callback, request, litellm_kwargs, provider,
+                            )
 
                             if "_native_provider" in litellm_kwargs:
                                 final_kwargs = litellm_kwargs
@@ -1493,7 +1601,9 @@ class RetryMixin(RetryBaseMixin):
                                         False  # prevent outer finally from double-releasing
                                     )
                             # Streaming completed successfully (semaphore released) — mirror non-streaming bookkeeping
-                            await self._record_streaming_success(current_cred, model, provider)
+                            await self._record_attempt_metrics(
+                                current_cred, model, provider, streaming=True,
+                            )
                             _cb_slot_held = False  # record_success already released the slot
                             return
 
@@ -1676,23 +1786,7 @@ class RetryMixin(RetryBaseMixin):
                             APIConnectionError,
                             InternalServerError,
                             ServiceUnavailableError,
-                            RuntimeError,  # "Cannot send a request, as the client has been closed"
-                        ) as e:
-                            consecutive_quota_failures.pop(current_cred, None)
-                            last_exception = e
-                            dec = await self._handle_server_error(
-                                e, provider, current_cred, model,
-                                attempt, deadline,
-                                _cached_request_headers,
-                                error_accumulator,
-                            )
-                            if dec.action == "retry_same_key":
-                                await asyncio.sleep(dec.wait_time)
-                                continue
-                            async with HalfOpenSlot(self._resilience, provider):
-                                break
-
-                        except (
+                            RuntimeError,
                             httpx.ReadTimeout,
                             httpx.PoolTimeout,
                             httpx.RemoteProtocolError,
@@ -1700,7 +1794,7 @@ class RetryMixin(RetryBaseMixin):
                         ) as e:
                             consecutive_quota_failures.pop(current_cred, None)
                             last_exception = e
-                            dec = await self._handle_transport_error(
+                            dec = await self._handle_retry_error(
                                 e, provider, current_cred, model,
                                 attempt, deadline,
                                 _cached_request_headers,
@@ -1719,10 +1813,11 @@ class RetryMixin(RetryBaseMixin):
                         except Exception as e:
                             consecutive_quota_failures.pop(current_cred, None)
                             last_exception = e
-                            dec = await self._handle_generic_error(
+                            dec = await self._handle_retry_error(
                                 e, provider, current_cred, model,
-                                error_accumulator,
+                                attempt, deadline,
                                 _cached_request_headers,
+                                error_accumulator,
                                 request=request,
                             )
                             if dec.action == "fail":
