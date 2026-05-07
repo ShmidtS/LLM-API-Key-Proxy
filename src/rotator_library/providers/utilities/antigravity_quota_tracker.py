@@ -163,7 +163,7 @@ class AntigravityQuotaTracker(GoogleQuotaTrackerBase):
 
     def _get_quota_group_for_model(self, model: str) -> Optional[str]:
         """Get the quota group name for a model."""
-        clean_model = model.split("/")[-1] if "/" in model else model
+        clean_model = self._clean_model_name(model)
         groups = self._get_effective_quota_groups()
         for group_name, models in groups.items():
             if clean_model in models:
@@ -204,8 +204,6 @@ class AntigravityQuotaTracker(GoogleQuotaTrackerBase):
         Returns:
             List of (model_name, quota_info_dict) tuples.
         """
-        from datetime import datetime
-
         results = []
         for model_name, model_info in data.get("models", {}).items():
             quota_info = model_info.get("quotaInfo", {})
@@ -221,13 +219,7 @@ class AntigravityQuotaTracker(GoogleQuotaTrackerBase):
             reset_time_iso = quota_info.get("resetTime")
             reset_timestamp = None
             if reset_time_iso:
-                try:
-                    reset_dt = datetime.fromisoformat(
-                        reset_time_iso.replace("Z", "+00:00")
-                    )
-                    reset_timestamp = reset_dt.timestamp()
-                except (ValueError, AttributeError):
-                    pass
+                reset_timestamp = self._parse_iso_timestamp(reset_time_iso)
 
             results.append(
                 (

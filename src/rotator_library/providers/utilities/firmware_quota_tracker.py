@@ -19,7 +19,6 @@ Required from provider:
 
 import logging
 import time
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import httpx
@@ -75,15 +74,9 @@ class FirmwareQuotaTracker(LightweightQuotaMixin):
         quota_url = self._get_quota_url()
         data = await self._fetch_json(quota_url, headers, client)
         if data is None:
-            return {
-                "status": "error",
-                "error": None,
-                "used": None,
-                "remaining_fraction": None,
-                "reset_at": None,
-                "has_active_window": False,
-                "fetched_at": time.time(),
-            }
+            return self._error_result(
+                used=None, remaining_fraction=None, reset_at=None, has_active_window=False
+            )
 
         # Parse response - API returns ratio directly
         used_raw = data.get("used")
@@ -116,27 +109,3 @@ class FirmwareQuotaTracker(LightweightQuotaMixin):
             "has_active_window": has_active_window,
             "fetched_at": time.time(),
         }
-
-    def _parse_iso_timestamp(self, iso_string: str) -> Optional[float]:
-        """
-        Parse ISO 8601 timestamp to Unix timestamp.
-
-        Args:
-            iso_string: ISO 8601 formatted timestamp (e.g., "2026-01-20T18:12:03.000Z")
-
-        Returns:
-            Unix timestamp in seconds, or None if parsing fails
-        """
-        try:
-            # Handle 'Z' suffix by replacing with UTC offset
-            if iso_string.endswith("Z"):
-                iso_string = iso_string.replace("Z", "+00:00")
-
-            dt = datetime.fromisoformat(iso_string)
-            # Ensure timezone-aware
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.timestamp()
-        except (ValueError, TypeError, KeyError) as e:
-            lib_logger.warning(f"Failed to parse ISO timestamp '{iso_string}': {e}", exc_info=True)
-            return None

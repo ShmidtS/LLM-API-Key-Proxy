@@ -141,8 +141,6 @@ class GeminiCliQuotaTracker(GoogleQuotaTrackerBase):
         Returns:
             List of (model_id, quota_info_dict) tuples.
         """
-        from datetime import datetime
-
         results = []
         for bucket in data.get("buckets", []):
             # Parse remaining fraction (0.0 to 1.0)
@@ -158,13 +156,7 @@ class GeminiCliQuotaTracker(GoogleQuotaTrackerBase):
             reset_time_iso = bucket.get("resetTime")
             reset_timestamp = None
             if reset_time_iso:
-                try:
-                    reset_dt = datetime.fromisoformat(
-                        reset_time_iso.replace("Z", "+00:00")
-                    )
-                    reset_timestamp = reset_dt.timestamp()
-                except (ValueError, AttributeError):
-                    pass
+                reset_timestamp = self._parse_iso_timestamp(reset_time_iso)
 
             results.append(
                 (

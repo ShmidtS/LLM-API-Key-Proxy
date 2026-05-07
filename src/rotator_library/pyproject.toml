@@ -16,7 +16,16 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-dependencies = []
+dependencies = [
+    "httpx",
+    "orjson",
+    "aiofiles",
+    "aiohttp",
+    "litellm",
+    "cachetools",
+    "rich",
+    "pydantic",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/ShmidtS/LLM-API-Key-Proxy"

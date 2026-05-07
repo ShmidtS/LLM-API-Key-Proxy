@@ -78,17 +78,9 @@ class ChutesQuotaTracker(LightweightQuotaMixin):
         headers = self._make_bearer_header(api_key)
         data = await self._fetch_json(CHUTES_QUOTA_API_URL, headers, client)
         if data is None:
-            return {
-                "status": "error",
-                "error": None,
-                "quota": 0,
-                "used": 0.0,
-                "remaining": None,
-                "remaining_fraction": None,
-                "tier": "base",
-                "reset_at": 0,
-                "fetched_at": time.time(),
-            }
+            return self._error_result(
+                quota=0, used=0.0, remaining=None, remaining_fraction=None, tier="base", reset_at=0
+            )
 
         # Parse response with null safety
         quota = data.get("quota") or 0

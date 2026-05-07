@@ -34,37 +34,6 @@ from proxy_app.detailed_logger import RawIOLogger
 logger = logging.getLogger(__name__)
 
 
-def _get_litellm_error_map():
-    return [
-        (
-            (
-                InvalidRequestError,
-                BadRequestError,
-                ValueError,
-                ContextWindowExceededError,
-            ),
-            400,
-            "Invalid Request",
-            "invalid_request_error",
-        ),
-        ((AuthenticationError,), 401, "Authentication Error", "authentication_error"),
-        ((NotFoundError,), 404, "Not Found", "invalid_request_error"),
-        ((RateLimitError,), 429, "Rate Limit Exceeded", "rate_limit_error"),
-        (
-            (ServiceUnavailableError, APIConnectionError),
-            503,
-            "Service Unavailable",
-            "api_error",
-        ),
-        ((Timeout,), 504, "Gateway Timeout", "api_error"),
-        ((InternalServerError, OpenAIError), 502, "Bad Gateway", "api_error"),
-    ]
-
-
-def get_litellm_error_types():
-    return tuple(exc_type for row in _get_litellm_error_map() for exc_type in row[0])
-
-
 async def streaming_response_wrapper(
     request: Request,
     response_stream: AsyncGenerator[Any, None],

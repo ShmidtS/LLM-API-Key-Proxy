@@ -182,6 +182,32 @@ class BaseQuotaTracker:
         """
         return self.provider_env_prefix.lower() if self.provider_env_prefix else self.cache_subdir
 
+    @staticmethod
+    def _parse_iso_timestamp(iso_string: str) -> Optional[float]:
+        """Parse ISO 8601 timestamp to Unix timestamp.
+
+        Args:
+            iso_string: ISO 8601 formatted timestamp (e.g., "2026-01-20T18:12:03.000Z")
+
+        Returns:
+            Unix timestamp in seconds, or None if parsing fails
+        """
+        try:
+            if iso_string.endswith("Z"):
+                iso_string = iso_string.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(iso_string)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except (ValueError, TypeError, KeyError) as e:
+            lib_logger.warning(f"Failed to parse ISO timestamp '{iso_string}': {e}", exc_info=True)
+            return None
+
+    @staticmethod
+    def _clean_model_name(model: str) -> str:
+        """Extract the clean model name from a provider-prefixed identifier."""
+        return model.split("/")[-1] if "/" in model else model
+
     # =========================================================================
     # CACHE DIRECTORY HELPERS
     # =========================================================================
@@ -336,7 +362,7 @@ class BaseQuotaTracker:
         self._load_learned_costs()
 
         # Strip provider prefix if present
-        clean_model = model.split("/")[-1] if "/" in model else model
+        clean_model = self._clean_model_name(model)
 
         # Check learned costs first
         if tier in self._learned_costs and clean_model in self._learned_costs[tier]:
@@ -369,7 +395,7 @@ class BaseQuotaTracker:
         if self._use_integer_max_requests:
             self._load_learned_costs()
 
-            clean_model = model.split("/")[-1] if "/" in model else model
+            clean_model = self._clean_model_name(model)
 
             # Check learned values first (stored as max_requests integers)
             if tier in self._learned_costs and clean_model in self._learned_costs[tier]:
@@ -401,7 +427,7 @@ class BaseQuotaTracker:
         """
         self._load_learned_costs()
 
-        clean_model = model.split("/")[-1] if "/" in model else model
+        clean_model = self._clean_model_name(model)
 
         if tier not in self._learned_costs:
             self._learned_costs[tier] = {}
@@ -437,7 +463,7 @@ class BaseQuotaTracker:
         Returns:
             API model name to look up in quota response
         """
-        clean_model = model.split("/")[-1] if "/" in model else model
+        clean_model = self._clean_model_name(model)
         return self.user_to_api_model_map.get(clean_model, clean_model)
 
     def _api_to_user_model(self, model: str) -> str:
@@ -905,7 +931,7 @@ class BaseQuotaTracker:
         tier = quota_data.get("tier", "standard-tier")
         model_quotas = self._extract_model_quota_from_response(quota_data, tier)
 
-        clean_model = model.split("/")[-1] if "/" in model else model
+        clean_model = self._clean_model_name(model)
         api_model = self._user_to_api_model(clean_model)
 
         for user_model, remaining, _ in model_quotas:

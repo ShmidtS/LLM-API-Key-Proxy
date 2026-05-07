@@ -84,30 +84,29 @@ class ZaiQuotaTracker(LightweightQuotaMixin):
         headers = self._make_bearer_header(api_key)
         data = await self._fetch_json(ZAI_QUOTA_API_URL, headers, client)
         if data is None:
-            return {
-                "status": "transient_error",
-                "error": "empty_or_invalid_response",
-                "level": "lite",
-                "hourly_used": 0,
-                "hourly_limit": 0,
-                "hourly_remaining": 0,
-                "remaining_fraction": None,
-                "pct_5min": 0.0,
-                "pct_daily": 0.0,
-                "quota": 0,
-                "used": 0.0,
-                "remaining": None,
-                "reset_at": 0,
-                "fetched_at": time.time(),
-            }
+            return super()._error_result(
+                status="transient_error",
+                error="empty_or_invalid_response",
+                level="lite",
+                hourly_used=0,
+                hourly_limit=0,
+                hourly_remaining=0,
+                remaining_fraction=None,
+                pct_5min=0.0,
+                pct_daily=0.0,
+                quota=0,
+                used=0.0,
+                remaining=None,
+                reset_at=0,
+            )
 
         if data.get("code") != 200:
             error_msg = data.get("msg", "unknown error")
-            return self._error_result(f"API_ERROR: {error_msg}")
+            return super()._error_result(error=f"API_ERROR: {error_msg}")
 
         quota_data = data.get("data")
         if not quota_data:
-            return self._error_result("NO_DATA")
+            return super()._error_result(error="NO_DATA")
 
         level = quota_data.get("level", "lite")
         limits = quota_data.get("limits", [])
@@ -159,22 +158,20 @@ class ZaiQuotaTracker(LightweightQuotaMixin):
         # remaining_fraction=0.0 on error: treat unknown state as exhausted
         # so that baseline filtering skips the credential rather than
         # routing requests to a potentially dead key.
-        return {
-            "status": "error",
-            "error": error,
-            "level": "lite",
-            "hourly_used": 100,
-            "hourly_limit": 100,
-            "hourly_remaining": 0,
-            "remaining_fraction": 0.0,
-            "pct_5min": 0.0,
-            "pct_daily": 0.0,
-            "quota": 100,
-            "used": 100.0,
-            "remaining": 0.0,
-            "reset_at": 0,
-            "fetched_at": time.time(),
-        }
+        return super()._error_result(
+            error=error,
+            level="lite",
+            hourly_used=100,
+            hourly_limit=100,
+            hourly_remaining=0,
+            remaining_fraction=0.0,
+            pct_5min=0.0,
+            pct_daily=0.0,
+            quota=100,
+            used=100.0,
+            remaining=0.0,
+            reset_at=0,
+        )
 
     def _calculate_next_hour_reset(self) -> float:
         """Calculate timestamp of the next hour boundary (when hourly quota resets)."""
