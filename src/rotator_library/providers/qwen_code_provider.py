@@ -58,8 +58,7 @@ class QwenCodeProvider(QwenAuthBase, ACompletionMixin, ProviderInterface):
         super().__init__()
         self.model_definitions = ModelDefinitions()
 
-    def has_custom_logic(self) -> bool:
-        return True
+    has_custom_logic: bool = True
 
     async def get_models(self, credential: str, client: httpx.AsyncClient) -> List[str]:
         """

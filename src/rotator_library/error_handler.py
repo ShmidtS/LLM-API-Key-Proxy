@@ -1422,38 +1422,9 @@ def classify_error(e: Exception, provider: Optional[str] = None) -> ClassifiedEr
         # Re-check parse_quota_error for BadRequestError cases that the
         # earlier provider-specific pass may have missed (e.g. missing body).
         if provider:
-            try:
-                from .providers import get_provider
-                provider_class = get_provider(provider)
-                if provider_class and hasattr(provider_class, "parse_quota_error"):
-                    error_body = None
-                    _resp = getattr(e, "response", None)
-                    if _resp is not None and hasattr(_resp, "text"):
-                        try:
-                            error_body = _resp.text
-                        except (AttributeError, OSError):
-                            lib_logger.debug("Could not read error response text for quota parse", exc_info=True)
-                    else:
-                        _body = getattr(e, "body", None)
-                        if _body is not None:
-                            error_body = str(_body)
-                    # Also try the full string as body fallback
-                    if not error_body:
-                        error_body = error_str
-                    quota_info = provider_class.parse_quota_error(e, error_body)
-                    if quota_info and quota_info.get("retry_after"):
-                        retry_after = quota_info["retry_after"]
-                        quota_reset_timestamp = quota_info.get("quota_reset_timestamp")
-                        return ClassifiedError(
-                            error_type="quota_exceeded",
-                            original_exception=e,
-                            status_code=status_code or 400,
-                            retry_after=retry_after,
-                            quota_reset_timestamp=quota_reset_timestamp,
-                            reason=quota_info.get("reason"),
-                        )
-            except (KeyError, TypeError, ValueError):
-                lib_logger.debug("Provider-specific quota parse failed for '%s'", provider, exc_info=True)
+            result = _try_parse_provider_quota_error(e, provider, status_code=status_code or 400)
+            if result is not None:
+                return result
 
         return ClassifiedError(
             error_type="invalid_request",

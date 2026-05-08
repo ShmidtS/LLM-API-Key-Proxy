@@ -425,8 +425,7 @@ class GeminiCliProvider(
                 "This may cause unexpected behavior with model availability and rate limits."
             )
 
-    def has_custom_logic(self) -> bool:
-        return True
+    has_custom_logic: bool = True
 
     def _cli_preview_fallback_order(self, model: str) -> List[str]:
         """

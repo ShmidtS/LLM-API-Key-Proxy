@@ -88,6 +88,11 @@ args = _DEFAULT_ARGS
 
 _start_time = time.time()
 
+# Parse CLI args early when run directly so startup banners reflect actual values.
+# When imported by uvicorn, __name__ != "__main__" so defaults remain (uvicorn handles its own args).
+if __name__ == "__main__":
+    args, _ = parser.parse_known_args()
+
 # Load all .env files from root folder (main .env first, then any additional *.env files)
 try:
     from dotenv import load_dotenv as _load_dotenv_impl
@@ -441,8 +446,6 @@ async def read_root():
 
 
 if __name__ == "__main__":
-    args, _ = parser.parse_known_args()
-
     # Define ENV_FILE for onboarding checks using centralized path
     ENV_FILE = get_data_file(".env")
 

@@ -143,15 +143,5 @@ class OpenAICompatibleProvider(ProviderInterface):
 
         return self.model_definitions.get_model_options(self.provider_name, model_name)
 
-    def has_custom_logic(self) -> bool:
-        """
-        Returns False since we want to use the standard litellm flow
-        with just custom API base configuration.
-        """
-        return False
+    has_custom_logic: bool = False  # Uses standard litellm flow with custom API base
 
-    async def get_auth_header(self, credential_identifier: str) -> dict[str, str]:
-        """
-        Returns the standard Bearer token header for API key authentication.
-        """
-        return {"Authorization": f"Bearer {credential_identifier}"}

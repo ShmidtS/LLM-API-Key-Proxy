@@ -523,9 +523,7 @@ class AntigravityProvider(
             creds = await self._refresh_token(credential_identifier, creds)
         return creds["access_token"]
 
-    def has_custom_logic(self) -> bool:
-        """Antigravity uses custom translation logic."""
-        return True
+    has_custom_logic: bool = True  # Antigravity uses custom translation logic
 
     async def get_auth_header(self, credential_identifier: str) -> Dict[str, str]:
         """Get OAuth authorization header."""

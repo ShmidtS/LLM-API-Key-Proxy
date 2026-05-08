@@ -71,7 +71,7 @@ _LAZY_IMPORTS = {
 
 
 # --- Pre-register providers with custom logic ---
-# These providers implement has_custom_logic() = True and need early registration
+# These providers have has_custom_logic = True and need early registration
 # to bypass the standard litellm flow
 PROVIDER_PLUGINS["colin"] = PROVIDER_AUTH_MAP["colin"]
 PROVIDER_PLUGINS["elysiver"] = PROVIDER_AUTH_MAP["elysiver"]

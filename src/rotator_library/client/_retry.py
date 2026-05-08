@@ -1014,7 +1014,7 @@ class RetryMixin(RetryBaseMixin):
                     kwargs, provider, current_cred, model
                 )
 
-                if provider_plugin and provider_plugin.has_custom_logic():
+                if provider_plugin and provider_plugin.has_custom_logic:
                     lib_logger.debug(
                         "Provider '%s' has custom logic. Delegating call.",
                         provider,
@@ -1378,7 +1378,7 @@ class RetryMixin(RetryBaseMixin):
                                     litellm_kwargs["reasoning_effort"] = value
                                 elif key not in litellm_kwargs:
                                     litellm_kwargs[key] = value
-                    if provider_plugin and provider_plugin.has_custom_logic():
+                    if provider_plugin and provider_plugin.has_custom_logic:
                         lib_logger.debug(
                             "Provider '%s' has custom logic. Delegating call.",
                             provider,

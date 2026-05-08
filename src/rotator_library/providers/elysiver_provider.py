@@ -84,8 +84,7 @@ class ElysiverProvider(ProviderInterface):
             lib_logger.warning("Elysiver model discovery failed", exc_info=True)
         return []
 
-    def has_custom_logic(self) -> bool:
-        return True
+    has_custom_logic: bool = True
 
     async def acompletion(
         self, client: httpx.AsyncClient, **kwargs
@@ -372,5 +371,3 @@ class ElysiverProvider(ProviderInterface):
                 object="chat.completion.chunk",
             )
 
-    async def get_auth_header(self, credential_identifier: str) -> Dict[str, str]:
-        return {"Authorization": f"Bearer {credential_identifier}"}

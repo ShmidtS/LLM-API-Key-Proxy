@@ -233,8 +233,7 @@ def is_abnormal_error(classified_error: ClassifiedError) -> bool:
     return classified_error.error_type in ABNORMAL_ERROR_TYPES
 
 
-@functools.lru_cache(maxsize=512)
-def mask_credential(credential: str) -> str:
+def _mask_credential_uncached(credential: str) -> str:
     """
     Mask a credential for safe display in logs and error messages.
 
@@ -247,6 +246,9 @@ def mask_credential(credential: str) -> str:
         return f"...{credential[-6:]}"
     else:
         return "***"
+
+
+mask_credential = functools.lru_cache(maxsize=512)(_mask_credential_uncached)
 
 
 class RequestErrorAccumulator:

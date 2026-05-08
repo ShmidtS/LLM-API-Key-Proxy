@@ -146,9 +146,8 @@ class ProviderInterface(ABC):
         """Fetch the list of available model names from the provider's API."""
         ...
 
-    def has_custom_logic(self) -> bool:
-        """Returns True if the provider implements its own acompletion/aembedding logic."""
-        return False
+    has_custom_logic: bool = False
+    """Returns True if the provider implements its own acompletion/aembedding logic."""
 
     async def acompletion(
         self, client: httpx.AsyncClient, **kwargs
@@ -167,8 +166,8 @@ class ProviderInterface(ABC):
         )
 
     async def get_auth_header(self, credential_identifier: str) -> Dict[str, str]:
-        """For OAuth providers, returns the Authorization header dict."""
-        raise NotImplementedError("This provider does not support OAuth.")
+        """Return Bearer auth header dict. OAuth providers override this."""
+        return build_bearer_headers(credential_identifier, content_type=None)
 
     async def proactively_refresh(self, credential_path: str):
         """Proactively refresh a token if it's nearing expiry."""

@@ -86,14 +86,9 @@ class ColinProvider(ProviderInterface):
             "colin/gpt-5.4",
         ]
 
-    def has_custom_logic(self) -> bool:
-        """
-        Return True since we implement custom acompletion logic.
-
-        COLIN uses the Responses API format which is different from
-        standard chat/completions, so we need custom handling.
-        """
-        return True
+    has_custom_logic: bool = True
+    # COLIN uses the Responses API format which is different from
+    # standard chat/completions, so we need custom handling.
 
     async def acompletion(
         self, client: httpx.AsyncClient, **kwargs
@@ -444,6 +439,3 @@ class ColinProvider(ProviderInterface):
                 object="chat.completion.chunk",
             )
 
-    async def get_auth_header(self, credential_identifier: str) -> Dict[str, str]:
-        """Return Bearer token header for API key authentication."""
-        return {"Authorization": f"Bearer {credential_identifier}"}

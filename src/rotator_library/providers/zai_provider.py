@@ -242,8 +242,6 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
             lib_logger.error(f"Failed to fetch ZAI models: {e}")
             return self.get_static_models()
 
-    async def get_auth_header(self, credential_identifier: str) -> Dict[str, str]:
-        return {"Authorization": f"Bearer {credential_identifier}"}
 
     # --- ZAI-specific API methods (non-litellm) ---
 
