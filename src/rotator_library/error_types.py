@@ -248,7 +248,8 @@ def _mask_credential_uncached(credential: str) -> str:
         return "***"
 
 
-mask_credential = functools.lru_cache(maxsize=512)(_mask_credential_uncached)
+_mask_credential_cache = functools.lru_cache(maxsize=512)
+mask_credential = _mask_credential_cache(_mask_credential_uncached)
 
 
 class RequestErrorAccumulator:
