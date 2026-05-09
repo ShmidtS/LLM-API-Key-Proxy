@@ -21,7 +21,7 @@ from ...utils.duration import parse_duration as _parse_duration_shared
 from ..provider_interface import ProviderInterface, UsageResetConfigDef, QuotaGroupMap, build_bearer_headers
 from ..antigravity_auth_base import AntigravityAuthBase
 from ..provider_cache import ProviderCache
-from ..utilities.antigravity_quota_tracker import AntigravityQuotaTracker
+from ..utilities.google_quota_tracker_base import GoogleQuotaTrackerBase
 from ..utilities.gemini_shared_utils import (
     GEMINI_TIER_PRIORITIES,
     GEMINI_DEFAULT_TIER_PRIORITY,
@@ -55,6 +55,56 @@ from .message_transform import MessageTransformMixin
 from .tool_recovery import ToolRecoveryMixin
 from .streaming import AntigravityStreamingMixin
 
+DEFAULT_MAX_REQUESTS = {
+    "standard-tier": {
+        "claude-sonnet-4-5": 150,
+        "claude-sonnet-4-5-thinking": 150,
+        "claude-opus-4-5": 150,
+        "claude-opus-4-5-thinking": 150,
+        "claude-sonnet-4.5": 150,
+        "claude-opus-4.5": 150,
+        "gemini-3-pro-high": 320,
+        "gemini-3-pro-low": 320,
+        "gemini-3-pro-preview": 320,
+        "gemini-3-flash": 400,
+        "gemini-2.5-flash": 3000,
+        "gemini-2.5-flash-thinking": 3000,
+        "gemini-2.5-flash-lite": 5000,
+    },
+    "free-tier": {
+        "claude-sonnet-4-5": 50,
+        "claude-sonnet-4-5-thinking": 50,
+        "claude-opus-4-5": 50,
+        "claude-opus-4-5-thinking": 50,
+        "claude-sonnet-4.5": 50,
+        "claude-opus-4.5": 50,
+        "gemini-3-pro-high": 150,
+        "gemini-3-pro-low": 150,
+        "gemini-3-pro-preview": 150,
+        "gemini-3-flash": 500,
+        "gemini-2.5-flash": 3000,
+        "gemini-2.5-flash-thinking": 3000,
+        "gemini-2.5-flash-lite": 5000,
+    },
+}
+DEFAULT_MAX_REQUESTS_UNKNOWN = 100
+
+_USER_TO_API_MODEL_MAP = {
+    "claude-opus-4-5": "claude-opus-4-5-thinking",
+    "claude-opus-4.5": "claude-opus-4-5-thinking",
+    "gemini-3-pro-preview": "gemini-3-pro-high",
+}
+
+_API_TO_USER_MODEL_MAP = {
+    "claude-opus-4-5-thinking": "claude-opus-4.5",
+    "claude-opus-4-5": "claude-opus-4.5",
+    "claude-sonnet-4-5-thinking": "claude-sonnet-4.5",
+    "claude-sonnet-4-5": "claude-sonnet-4.5",
+    "gemini-3-pro-high": "gemini-3-pro-preview",
+    "gemini-3-pro-low": "gemini-3-pro-preview",
+    "gemini-2.5-flash-thinking": "gemini-2.5-flash",
+}
+
 
 class AntigravityProvider(
     ThinkingCacheMixin,
@@ -62,7 +112,7 @@ class AntigravityProvider(
     ToolRecoveryMixin,
     AntigravityStreamingMixin,
     AntigravityAuthBase,
-    AntigravityQuotaTracker,
+    GoogleQuotaTrackerBase,
     GeminiToolHandler,
     GeminiCredentialManager,
     ProviderInterface,
@@ -163,6 +213,13 @@ class AntigravityProvider(
 
     default_sequential_fallback_multiplier = GEMINI_DEFAULT_SEQUENTIAL_FALLBACK_MULTIPLIER
 
+    provider_env_prefix = "ANTIGRAVITY"
+    cache_subdir = "antigravity"
+    user_to_api_model_map = _USER_TO_API_MODEL_MAP
+    api_to_user_model_map = _API_TO_USER_MODEL_MAP
+    default_max_requests = DEFAULT_MAX_REQUESTS
+    default_max_requests_unknown = DEFAULT_MAX_REQUESTS_UNKNOWN
+
     @classmethod
     def parse_quota_error(
         cls, error: Exception, error_body: Optional[str] = None
@@ -240,6 +297,135 @@ class AntigravityProvider(
             return None
 
         return result
+
+    # =====================================================================
+    # GOOGLE QUOTA TRACKER BASE HOOK IMPLEMENTATIONS
+    # =====================================================================
+
+    def _get_quota_group_for_model(self, model: str):
+        clean_model = self._clean_model_name(model)
+        groups = self._get_effective_quota_groups()
+        for group_name, models in groups.items():
+            if clean_model in models:
+                return group_name
+        return None
+
+    def _get_api_base_url(self) -> str:
+        return self._get_base_url()
+
+    def _get_api_headers(self) -> Dict[str, str]:
+        return self._get_antigravity_headers()
+
+    def _get_quota_endpoint_suffix(self) -> str:
+        return "fetchAvailableModels"
+
+    def _get_quota_headers(self, auth_header: Dict[str, str]) -> Dict[str, str]:
+        access_token = auth_header["Authorization"].split(" ")[1]
+        return {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            **self._get_antigravity_headers(),
+        }
+
+    def _parse_quota_response(self, data: Dict[str, Any]) -> List:
+        results = []
+        for model_name, model_info in data.get("models", {}).items():
+            quota_info = model_info.get("quotaInfo", {})
+            remaining = quota_info.get("remainingFraction")
+            if remaining is None:
+                remaining = 0.0
+                is_exhausted = True
+            else:
+                is_exhausted = remaining <= 0
+            reset_time_iso = quota_info.get("resetTime")
+            reset_timestamp = None
+            if reset_time_iso:
+                reset_timestamp = self._parse_iso_timestamp(reset_time_iso)
+            results.append(
+                (
+                    model_name,
+                    {
+                        "remaining_fraction": remaining,
+                        "is_exhausted": is_exhausted,
+                        "reset_time_iso": reset_time_iso,
+                        "reset_timestamp": reset_timestamp,
+                        "display_name": model_info.get("displayName"),
+                    },
+                )
+            )
+        return results
+
+    async def _fetch_quota_for_credential(self, credential_path: str) -> Dict[str, Any]:
+        return await self.fetch_quota_from_api(credential_path)
+
+    def _extract_model_quota_from_response(self, quota_data: Dict[str, Any], tier: str) -> List:
+        results = []
+        available_models = set(self._get_available_models())
+        added_models = set()
+        for api_model_name, model_info in quota_data.get("models", {}).items():
+            remaining = model_info.get("remaining_fraction")
+            if remaining is None:
+                continue
+            user_model = self._api_to_user_model(api_model_name)
+            if user_model not in available_models:
+                continue
+            if user_model in added_models:
+                continue
+            max_requests = self.get_max_requests_for_model(user_model, tier)
+            results.append((user_model, remaining, max_requests))
+            added_models.add(user_model)
+        return results
+
+    async def _store_baselines_to_usage_manager(self, quota_results: Dict[str, Dict[str, Any]], usage_manager) -> int:
+        from pathlib import Path
+        stored_count = 0
+        available_models = set(self._get_available_models())
+        cooldowns_by_cred: Dict[str, Dict[str, float]] = {}
+        for cred_path, quota_data in quota_results.items():
+            if quota_data.get("status") != "success":
+                continue
+            tier = self.project_tier_cache.get(cred_path, "unknown")
+            models = quota_data.get("models", {})
+            stored_for_cred = set()
+            if cred_path.startswith("env://"):
+                short_cred = cred_path.split("/")[-1]
+            else:
+                short_cred = Path(cred_path).stem
+                if short_cred.startswith("antigravity_"):
+                    short_cred = short_cred[len("antigravity_"):]
+            for api_model_name, model_info in models.items():
+                remaining = model_info.get("remaining_fraction")
+                if remaining is None:
+                    continue
+                user_model = self._api_to_user_model(api_model_name)
+                if user_model not in available_models:
+                    continue
+                if user_model in stored_for_cred:
+                    continue
+                max_requests = self.get_max_requests_for_model(user_model, tier)
+                reset_timestamp = model_info.get("reset_timestamp")
+                prefixed_model = f"antigravity/{user_model}"
+                cooldown_info = await usage_manager.update_quota_baseline(
+                    cred_path, prefixed_model, remaining, max_requests, reset_timestamp
+                )
+                if cooldown_info:
+                    group_or_model = cooldown_info["group_or_model"]
+                    hours = cooldown_info["hours_until_reset"]
+                    if short_cred not in cooldowns_by_cred:
+                        cooldowns_by_cred[short_cred] = {}
+                    if group_or_model not in cooldowns_by_cred[short_cred]:
+                        cooldowns_by_cred[short_cred][group_or_model] = hours
+                stored_for_cred.add(user_model)
+                stored_count += 1
+        if cooldowns_by_cred:
+            parts = []
+            for cred_name, groups in sorted(cooldowns_by_cred.items()):
+                group_strs = [f"{g} {h:.1f}h" for g, h in sorted(groups.items())]
+                parts.append(f"{cred_name}[{', '.join(group_strs)}]")
+            lib_logger.info(f"Antigravity quota exhausted: {', '.join(parts)}")
+        else:
+            lib_logger.debug("Antigravity quota baseline refresh: no cooldowns needed")
+        return stored_count
 
     def __init__(self):
         super().__init__()

@@ -16,7 +16,7 @@ from .provider_interface import ProviderInterface, QuotaGroupMap, UsageResetConf
 from .base_streaming_provider import parse_sse_stream, StreamingResponseMixin
 from .gemini_auth_base import GeminiAuthBase
 from .provider_cache import ProviderCache
-from .utilities.gemini_cli_quota_tracker import GeminiCliQuotaTracker
+from .utilities.google_quota_tracker_base import GoogleQuotaTrackerBase
 from ..config import env_bool, env_int
 from .utilities.gemini_shared_utils import (
     inline_schema_refs,
@@ -28,6 +28,7 @@ from .utilities.gemini_shared_utils import (
     GEMINI_DEFAULT_TIER_PRIORITY,
     GEMINI_DEFAULT_PRIORITY_MULTIPLIERS,
     GEMINI_DEFAULT_SEQUENTIAL_FALLBACK_MULTIPLIER,
+    CODE_ASSIST_ENDPOINT,
 )
 from ..transaction_logger import ProviderLogger
 from .utilities.gemini_tool_handler import GeminiToolHandler
@@ -64,6 +65,26 @@ AVAILABLE_MODELS = [
     "gemini-3-pro-preview",
     "gemini-3-flash-preview",
 ]
+
+DEFAULT_MAX_REQUESTS = {
+    "standard-tier": {
+        "gemini-2.5-pro": 250,
+        "gemini-3-pro-preview": 250,
+        "gemini-2.0-flash": 1500,
+        "gemini-2.5-flash": 1500,
+        "gemini-2.5-flash-lite": 1500,
+        "gemini-3-flash-preview": 1500,
+    },
+    "free-tier": {
+        "gemini-2.5-pro": 100,
+        "gemini-3-pro-preview": 100,
+        "gemini-2.0-flash": 1000,
+        "gemini-2.5-flash": 1000,
+        "gemini-2.5-flash-lite": 1000,
+        "gemini-3-flash-preview": 1000,
+    },
+}
+DEFAULT_MAX_REQUESTS_UNKNOWN = 1000
 
 # Gemini 3 tool fix system instruction (prevents hallucination)
 DEFAULT_GEMINI3_SYSTEM_INSTRUCTION = """<CRITICAL_TOOL_USAGE_INSTRUCTIONS>
@@ -123,7 +144,7 @@ When in doubt, RE-READ THE SCHEMA before making the call.
 
 class GeminiCliProvider(
     GeminiAuthBase,
-    GeminiCliQuotaTracker,
+    GoogleQuotaTrackerBase,
     GeminiToolHandler,
     GeminiCredentialManager,
     ProviderInterface,
@@ -173,6 +194,13 @@ class GeminiCliProvider(
     default_priority_multipliers = GEMINI_DEFAULT_PRIORITY_MULTIPLIERS
 
     default_sequential_fallback_multiplier = GEMINI_DEFAULT_SEQUENTIAL_FALLBACK_MULTIPLIER
+
+    provider_env_prefix = "GEMINI_CLI"
+    cache_subdir = "gemini_cli"
+    user_to_api_model_map: Dict[str, str] = {}
+    api_to_user_model_map: Dict[str, str] = {}
+    default_max_requests: Dict[str, Dict[str, int]] = DEFAULT_MAX_REQUESTS
+    default_max_requests_unknown: int = DEFAULT_MAX_REQUESTS_UNKNOWN
 
     @classmethod
     def parse_quota_error(
@@ -301,10 +329,93 @@ class GeminiCliProvider(
             f"gemini3_strict_schema={self._gemini3_enforce_strict_schema}"
         )
 
-        # Quota tracking instance variables (required by GeminiCliQuotaTracker mixin)
+        # Quota tracking instance variables (required by GoogleQuotaTrackerBase)
         self._learned_costs: Dict[str, Dict[str, float]] = {}
         self._learned_costs_loaded: bool = False
 
+
+    # =========================================================================
+    # GOOGLE QUOTA TRACKER BASE HOOK IMPLEMENTATIONS
+    # =========================================================================
+
+    def _get_api_base_url(self) -> str:
+        return CODE_ASSIST_ENDPOINT
+
+    def _get_api_headers(self) -> Dict[str, str]:
+        return {}
+
+    def _get_quota_endpoint_suffix(self) -> str:
+        return "retrieveUserQuota"
+
+    def _get_quota_headers(self, auth_header: Dict[str, str]) -> Dict[str, str]:
+        access_token = auth_header["Authorization"].split(" ")[1]
+        return {
+            "Authorization": f"Bearer {access_token}",
+            **self._get_gemini_cli_headers(),
+        }
+
+    def _parse_quota_response(self, data: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
+        results = []
+        for bucket in data.get("buckets", []):
+            remaining = bucket.get("remainingFraction")
+            if remaining is None:
+                remaining = 0.0
+                is_exhausted = True
+            else:
+                is_exhausted = remaining <= 0
+            reset_time_iso = bucket.get("resetTime")
+            reset_timestamp = None
+            if reset_time_iso:
+                reset_timestamp = self._parse_iso_timestamp(reset_time_iso)
+            results.append(
+                (
+                    bucket.get("modelId"),
+                    {
+                        "model_id": bucket.get("modelId"),
+                        "remaining_fraction": remaining,
+                        "remaining_amount": bucket.get("remainingAmount"),
+                        "reset_time_iso": reset_time_iso,
+                        "reset_timestamp": reset_timestamp,
+                        "token_type": bucket.get("tokenType"),
+                        "is_exhausted": is_exhausted,
+                    },
+                )
+            )
+        return results
+
+    def _get_quota_error_response_key(self) -> str:
+        return "buckets"
+
+    def _get_empty_quota_container(self) -> Any:
+        return []
+
+    def _get_gemini_cli_headers(self) -> Dict[str, str]:
+        return {
+            "User-Agent": "google-api-nodejs-client/9.15.1",
+            "X-Goog-Api-Client": "gl-node/22.17.0",
+            "Client-Metadata": "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
+    async def _fetch_quota_for_credential(self, credential_path: str) -> Dict[str, Any]:
+        return await self.fetch_quota_from_api(credential_path)
+
+    def _extract_model_quota_from_response(
+        self, quota_data: Dict[str, Any], tier: str
+    ) -> List[Tuple[str, float, Optional[int]]]:
+        results = []
+        for bucket in quota_data.get("buckets", []):
+            model_id = bucket.get("model_id")
+            if not model_id:
+                continue
+            remaining = bucket.get("remaining_fraction")
+            if remaining is None:
+                remaining = 0.0
+            user_model = self._api_to_user_model(model_id)
+            max_requests = self.get_max_requests_for_model(user_model, tier)
+            results.append((user_model, remaining, max_requests))
+        return results
 
     # =========================================================================
     # MODEL UTILITIES

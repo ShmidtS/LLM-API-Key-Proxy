@@ -32,6 +32,7 @@ from .quota_formatters import (
 from .quota_api_client import QuotaApiClient
 from .quota_viewer_config import QuotaViewerConfig
 from rotator_library.utils.terminal_utils import clear_screen
+from proxy_app.ui_constants import SEPARATOR_78
 
 
 class QuotaRenderer:
@@ -264,22 +265,6 @@ class QuotaViewer:
     def last_error(self, value: Optional[str]) -> None:
         self.api_client.last_error = value
 
-    def _get_headers(self) -> Dict[str, str]:
-        """Get HTTP headers including auth if configured."""
-        return self.api_client.get_headers()
-
-    def _get_base_url(self) -> str:
-        """Get base URL for the current remote."""
-        return self.api_client.get_base_url()
-
-    def _build_endpoint_url(self, endpoint: str) -> str:
-        """Build a full endpoint URL with smart path handling."""
-        return self.api_client.build_endpoint_url(endpoint)
-
-    def _handle_httpx_error(self, exc: Exception) -> None:
-        """Handle httpx exceptions by setting self.last_error and returning None."""
-        return self.api_client.handle_httpx_error(exc)
-
     def check_connection(
         self, remote: Dict[str, Any], timeout: Optional[float] = None
     ) -> Tuple[bool, str]:
@@ -289,14 +274,6 @@ class QuotaViewer:
     def fetch_stats(self, provider: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Fetch quota stats from the current remote."""
         return self.api_client.fetch_stats(provider)
-
-    def _merge_provider_stats(self, provider: str, result: Dict[str, Any]) -> None:
-        """Merge provider-specific stats into the existing cache."""
-        self.api_client.merge_provider_stats(provider, result)
-
-    def _recalculate_summary(self) -> None:
-        """Recalculate summary fields from all provider data in cache."""
-        self.api_client.recalculate_summary()
 
     def post_action(
         self,
@@ -353,14 +330,14 @@ class QuotaViewer:
         )
 
         self.console.print()
-        self.console.print("━" * 78)
+        self.console.print(SEPARATOR_78)
         self.console.print()
         self.console.print("   S. Switch to a different remote")
         self.console.print("   M. Manage remotes (add/edit/delete)")
         self.console.print("   R. Retry connection")
         self.console.print("   B. Back to main menu")
         self.console.print()
-        self.console.print("━" * 78)
+        self.console.print(SEPARATOR_78)
 
         choice = Prompt.ask("Select option", default="B").strip().lower()
 
@@ -401,11 +378,11 @@ class QuotaViewer:
         else:
             view_label = "[cyan]📈 Current Period[/cyan]"
 
-        self.console.print("━" * 78)
+        self.console.print(SEPARATOR_78)
         self.console.print(
             f"[bold cyan]📈 Quota & Usage Statistics[/bold cyan]  |  {view_label}"
         )
-        self.console.print("━" * 78)
+        self.console.print(SEPARATOR_78)
         self.console.print(
             f"Connected to: [bold]{remote_name}[/bold] ({connection_display}) "
             f"[green]✅[/green] | {data_age}"
@@ -575,7 +552,7 @@ class QuotaViewer:
 
         # Menu
         self.console.print()
-        self.console.print("━" * 78)
+        self.console.print(SEPARATOR_78)
         self.console.print()
 
         # Build provider menu options
@@ -592,7 +569,7 @@ class QuotaViewer:
         self.console.print("   M. Manage remotes")
         self.console.print("   B. Back to main menu")
         self.console.print()
-        self.console.print("━" * 78)
+        self.console.print(SEPARATOR_78)
 
         # Get input
         valid_choices = [str(i) for i in range(1, len(provider_list) + 1)]
@@ -630,11 +607,11 @@ class QuotaViewer:
             else:
                 view_label = "[cyan]Current Period[/cyan]"
 
-            self.console.print("━" * 78)
+            self.console.print(SEPARATOR_78)
             self.console.print(
                 f"[bold cyan]📊 {provider.title()} - Detailed Stats[/bold cyan]  |  {view_label}"
             )
-            self.console.print("━" * 78)
+            self.console.print(SEPARATOR_78)
             self.console.print()
 
             if not self.cached_stats:
@@ -656,7 +633,7 @@ class QuotaViewer:
                         self.console.print()
 
             # Menu
-            self.console.print("━" * 78)
+            self.console.print(SEPARATOR_78)
             self.console.print()
             self.console.print("   G.  Toggle view mode (current/global)")
             self.console.print("   R.  Reload stats (from proxy cache)")
@@ -694,7 +671,7 @@ class QuotaViewer:
             self.console.print()
             self.console.print("   B.  Back to summary")
             self.console.print()
-            self.console.print("━" * 78)
+            self.console.print(SEPARATOR_78)
 
             choice = Prompt.ask("Select option", default="B").strip().upper()
 
@@ -769,208 +746,13 @@ class QuotaViewer:
                                 self.console.print(f"[red]  Error: {err}[/red]")
                         Prompt.ask("Press Enter to continue", default="")
 
-    def _render_credential_panel(self, idx: int, cred: Dict[str, Any], provider: str):
-        """Render a single credential as a panel."""
-        identifier = cred.get("identifier", f"credential {idx}")
-        email = cred.get("email")
-        tier = cred.get("tier", "")
-        status = cred.get("status", "unknown")
-
-        # Check for active cooldowns
-        key_cooldown = cred.get("key_cooldown_remaining")
-        model_cooldowns = cred.get("model_cooldowns", {})
-        has_cooldown = key_cooldown or model_cooldowns
-
-        # Status indicator
-        if status == "exhausted":
-            status_icon = "[red]⛔ Exhausted[/red]"
-        elif status == "cooldown" or has_cooldown:
-            if key_cooldown:
-                status_icon = f"[yellow]⚠️ Cooldown ({format_cooldown(int(key_cooldown))})[/yellow]"
-            else:
-                status_icon = "[yellow]⚠️ Cooldown[/yellow]"
-        else:
-            status_icon = "[green]✅ Active[/green]"
-
-        # Header line
-        display_name = email if email else identifier
-        tier_str = f" ({tier})" if tier else ""
-        header = f"[{idx}] {display_name}{tier_str} {status_icon}"
-
-        # Use global stats if in global mode
-        if self.view_mode == "global":
-            stats_source = cred.get("global", cred)
-        else:
-            stats_source = cred
-
-        # Stats line
-        last_used = format_time_ago(cred.get("last_used_ts"))  # Always from current
-        requests = stats_source.get("requests", 0)
-        tokens = stats_source.get("tokens", {})
-        input_total = tokens.get("input_cached", 0) + tokens.get("input_uncached", 0)
-        output = tokens.get("output", 0)
-        cost = format_cost(stats_source.get("approx_cost"))
-
-        stats_line = (
-            f"Last used: {last_used} | Requests: {requests} | "
-            f"Tokens: {format_tokens(input_total)}/{format_tokens(output)}"
-        )
-        if cost != "-":
-            stats_line += f" | Cost: {cost}"
-
-        # Build panel content
-        content_lines = [
-            f"[dim]{stats_line}[/dim]",
-        ]
-
-        # Model groups (for providers with quota tracking)
-        model_groups = cred.get("model_groups", {})
-
-        # Show cooldowns grouped by quota group (if model_groups exist)
-        if model_cooldowns:
-            if model_groups:
-                # Group cooldowns by quota group
-                group_cooldowns: Dict[
-                    str, int
-                ] = {}  # group_name -> max_remaining_seconds
-                ungrouped_cooldowns: List[Tuple[str, int]] = []
-
-                for model_name, cooldown_info in model_cooldowns.items():
-                    remaining = cooldown_info.get("remaining_seconds", 0)
-                    if remaining <= 0:
-                        continue
-
-                    # Find which group this model belongs to
-                    clean_model = model_name.split("/")[-1]
-                    found_group = None
-                    for group_name, group_info in model_groups.items():
-                        group_models = group_info.get("models", [])
-                        if clean_model in group_models:
-                            found_group = group_name
-                            break
-
-                    if found_group:
-                        group_cooldowns[found_group] = max(
-                            group_cooldowns.get(found_group, 0), remaining
-                        )
-                    else:
-                        ungrouped_cooldowns.append((model_name, remaining))
-
-                if group_cooldowns or ungrouped_cooldowns:
-                    content_lines.append("")
-                    content_lines.append("[yellow]Active Cooldowns:[/yellow]")
-
-                    # Show grouped cooldowns
-                    for group_name in sorted(group_cooldowns.keys()):
-                        remaining = group_cooldowns[group_name]
-                        content_lines.append(
-                            f"  [yellow]⏱️ {group_name}: {format_cooldown(remaining)}[/yellow]"
-                        )
-
-                    # Show ungrouped (shouldn't happen often)
-                    for model_name, remaining in ungrouped_cooldowns:
-                        short_model = model_name.split("/")[-1][:35]
-                        content_lines.append(
-                            f"  [yellow]⏱️ {short_model}: {format_cooldown(remaining)}[/yellow]"
-                        )
-            else:
-                # No model groups - show per-model cooldowns
-                content_lines.append("")
-                content_lines.append("[yellow]Active Cooldowns:[/yellow]")
-                for model_name, cooldown_info in model_cooldowns.items():
-                    remaining = cooldown_info.get("remaining_seconds", 0)
-                    if remaining > 0:
-                        short_model = model_name.split("/")[-1][:35]
-                        content_lines.append(
-                            f"  [yellow]⏱️ {short_model}: {format_cooldown(int(remaining))}[/yellow]"
-                        )
-
-        # Display model groups with quota info
-        if model_groups:
-            content_lines.append("")
-            for group_name, group_stats in model_groups.items():
-                remaining_pct = group_stats.get("remaining_pct")
-                requests_used = group_stats.get("requests_used", 0)
-                requests_max = group_stats.get("requests_max")
-                requests_remaining = group_stats.get("requests_remaining")
-                is_exhausted = group_stats.get("is_exhausted", False)
-                reset_time = format_reset_time(group_stats.get("reset_time_iso"))
-                confidence = group_stats.get("confidence", "low")
-
-                # Format display - use requests_remaining/max format
-                if requests_remaining is None and requests_max:
-                    requests_remaining = max(0, requests_max - requests_used)
-                display = group_stats.get(
-                    "display", f"{requests_remaining or 0}/{requests_max or '?'}"
-                )
-                bar = create_progress_bar(remaining_pct)
-
-                # Build status text - always show reset time if available
-                has_reset_time = reset_time and reset_time != "-"
-
-                # Color based on status
-                if is_exhausted:
-                    color = "red"
-                    if has_reset_time:
-                        status_text = f"⛔ Resets: {reset_time}"
-                    else:
-                        status_text = "⛔ EXHAUSTED"
-                elif remaining_pct is not None and remaining_pct < 20:
-                    color = "yellow"
-                    if has_reset_time:
-                        status_text = f"⚠️ Resets: {reset_time}"
-                    else:
-                        status_text = "⚠️ LOW"
-                else:
-                    color = "green"
-                    if has_reset_time:
-                        status_text = f"Resets: {reset_time}"
-                    else:
-                        status_text = ""  # Hide if unused/no reset time
-
-                # Confidence indicator
-                conf_indicator = ""
-                if confidence == "low":
-                    conf_indicator = " [dim](~)[/dim]"
-                elif confidence == "medium":
-                    conf_indicator = " [dim](?)[/dim]"
-
-                pct_str = f"{remaining_pct}%" if remaining_pct is not None else "?%"
-                content_lines.append(
-                    f"  [{color}]{group_name:<18} {display:<10} {pct_str:>4} {bar}[/{color}]  {status_text}{conf_indicator}"
-                )
-        else:
-            # For providers without quota groups, show model breakdown if available
-            models = cred.get("models", {})
-            if models:
-                content_lines.append("")
-                content_lines.append("  [dim]Models used:[/dim]")
-                for model_name, model_stats in models.items():
-                    req_count = model_stats.get("success_count", 0)
-                    model_cost = format_cost(model_stats.get("approx_cost"))
-                    # Shorten model name for display
-                    short_name = model_name.split("/")[-1][:30]
-                    content_lines.append(
-                        f"    {short_name}: {req_count} requests, {model_cost}"
-                    )
-
-        self.console.print(
-            Panel(
-                "\n".join(content_lines),
-                title=header,
-                title_align="left",
-                border_style="dim",
-                expand=True,
-            )
-        )
-
     def show_switch_remote_screen(self):
         """Display remote selection screen."""
         clear_screen()
 
-        self.console.print("━" * 78)
+        self.console.print(SEPARATOR_78)
         self.console.print("[bold cyan]🔄 Switch Remote[/bold cyan]")
-        self.console.print("━" * 78)
+        self.console.print(SEPARATOR_78)
         self.console.print()
 
         current_name = self.current_remote.get("name") if self.current_remote else None
@@ -1013,7 +795,7 @@ class QuotaViewer:
             )
 
         self.console.print()
-        self.console.print("━" * 78)
+        self.console.print(SEPARATOR_78)
         self.console.print()
 
         choice = Prompt.ask(
@@ -1077,9 +859,9 @@ class QuotaViewer:
         while True:
             clear_screen()
 
-            self.console.print("━" * 78)
+            self.console.print(SEPARATOR_78)
             self.console.print("[bold cyan]⚙️ Manage Remotes[/bold cyan]")
-            self.console.print("━" * 78)
+            self.console.print(SEPARATOR_78)
             self.console.print()
 
             remotes = self.config.get_remotes()
@@ -1104,7 +886,7 @@ class QuotaViewer:
             self.console.print(table)
 
             self.console.print()
-            self.console.print("━" * 78)
+            self.console.print(SEPARATOR_78)
             self.console.print()
             self.console.print("   A. Add new remote")
             self.console.print("   E. Edit remote (enter number, e.g., E1)")
@@ -1112,7 +894,7 @@ class QuotaViewer:
             self.console.print("   S. Set default remote")
             self.console.print("   B. Back")
             self.console.print()
-            self.console.print("━" * 78)
+            self.console.print(SEPARATOR_78)
 
             choice = Prompt.ask("Select option", default="B").strip().upper()
 

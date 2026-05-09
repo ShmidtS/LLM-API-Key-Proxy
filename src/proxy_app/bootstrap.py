@@ -15,10 +15,11 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, AsyncContextManager, Callable
 
 from proxy_app.config import DEFAULT_HOST, DEFAULT_PORT
 from proxy_app.logging_config import NoLiteLLMLogFilter, RotatorDebugFilter
+from proxy_app.ui_constants import SEPARATOR_70
 
 logger = logging.getLogger(__name__)
 
@@ -127,11 +128,11 @@ def load_environment(root_dir: Path | None = None) -> BootstrapState:
 
 def log_startup_banner(args: argparse.Namespace, elapsed: float | None = None) -> None:
     proxy_api_key = os.getenv("PROXY_API_KEY")
-    logger.info("━" * 70)
+    logger.info(SEPARATOR_70)
     logger.info("Starting proxy on %s:%s", args.host, args.port)
     logger.info("Proxy API Key status: %s", "Set" if proxy_api_key else "Not Set")
     logger.info("GitHub: https://github.com/ShmidtS/LLM-API-Key-Proxy")
-    logger.info("━" * 70)
+    logger.info(SEPARATOR_70)
     if elapsed is not None:
         logger.info("Server ready in %.2fs", elapsed)
 
@@ -242,7 +243,7 @@ def _discover_api_keys() -> dict[str, list[str]]:
     return api_keys
 
 
-def create_lifespan_from_environment(args: argparse.Namespace):
+def create_lifespan_from_environment(args: argparse.Namespace) -> Callable[[Any], AsyncContextManager[None]]:
     from proxy_app._lifecycle import LifespanConfig, create_lifespan
 
     proxy_api_key = os.getenv("PROXY_API_KEY")

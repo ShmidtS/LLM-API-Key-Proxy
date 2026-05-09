@@ -3,12 +3,37 @@
 
 import httpx
 import logging
+import time
+import asyncio
+from dataclasses import dataclass, field
+from collections import deque
 from typing import List, Dict, Any
 from .provider_interface import ProviderInterface, build_bearer_headers  # strip_provider_prefix intentionally not used — nvidia preserves org prefix
 from .utilities import fetch_provider_models
-from .utilities.nvidia_quota_tracker import NvidiaQuotaTracker
+from .utilities.base_quota_tracker import BaseQuotaTracker
 
 lib_logger = logging.getLogger('rotator_library')
+
+
+@dataclass
+class RateLimitWindow:
+    """Sliding window for rate limit tracking."""
+    requests: deque = field(default_factory=lambda: deque(maxlen=1000))
+    window_seconds: int = 60  # 1 minute window
+
+    def add_request(self, timestamp: float):
+        """Add request to window."""
+        self.requests.append(timestamp)
+
+    def get_request_count(self, since: float) -> int:
+        """Get request count since timestamp."""
+        return sum(1 for ts in self.requests if ts >= since)
+
+    def is_within_limit(self, limit: int) -> bool:
+        """Check if within rate limit."""
+        now = time.time()
+        window_start = now - self.window_seconds
+        return self.get_request_count(window_start) < limit
 
 # NVIDIA NIM models that support native thinking via chat_template_kwargs
 _NVIDIA_DEEPSEEK_THINKING_MODELS = frozenset([
@@ -30,7 +55,7 @@ _ANTHROPIC_UNSUPPORTED_FIELDS = frozenset([
 ])
 
 
-class NvidiaProvider(ProviderInterface):
+class NvidiaProvider(ProviderInterface, BaseQuotaTracker):
     skip_cost_calculation = True
     """
     Provider implementation for the NVIDIA NIM API.
@@ -42,9 +67,41 @@ class NvidiaProvider(ProviderInterface):
     # Provider name for env var lookups
     provider_env_name = "NVIDIA_NIM"
 
+    # BaseQuotaTracker configuration
+    _use_integer_max_requests = True
+    provider_env_prefix = ""
+    cache_subdir = "nvidia"
+    default_max_requests = {
+        "free": {"_default": 40},
+        "paid": {"_default": 500},
+    }
+    default_max_requests_unknown = 40
+    user_to_api_model_map: Dict[str, str] = {}
+    api_to_user_model_map: Dict[str, str] = {}
+
     def __init__(self):
         super().__init__()
-        self._quota_tracker = NvidiaQuotaTracker()
+        # Inline NVIDIA quota tracker state
+        self._windows: Dict[str, Dict[str, RateLimitWindow]] = {}
+        self._lock = None
+        self.project_tier_cache: Dict[str, str] = {}
+        self.project_id_cache: Dict[str, str] = {}
+        self._model_quota_groups: Dict[str, List[str]] = {
+            "deepseek": [
+                "deepseek-ai/deepseek-v3.1",
+                "deepseek-ai/deepseek-v3.1-terminus",
+                "deepseek-ai/deepseek-v3.2",
+                "deepseek-ai/deepseek-r1",
+            ],
+            "qwen": [
+                "qwen/qwen3.5-397b-a17b",
+                "qwen/qwen3-coder-480b-a35b-instruct",
+            ],
+        }
+        self._quota_refresh_interval = 300
+        self._learned_costs: Dict[str, Dict[str, float]] = {}
+        self._learned_costs_loaded = True
+        self._learned_costs_lock = None
 
     async def get_models(self, api_key: str, client: httpx.AsyncClient) -> List[str]:
         """
@@ -234,7 +291,13 @@ class NvidiaProvider(ProviderInterface):
             credential: Credential identifier
             model: Model name (e.g., "nvidia/deepseek-ai/deepseek-v3.1")
         """
-        await self._quota_tracker.track_request(credential, model)
+        async with self._ensure_lock():
+            if "/" in model:
+                model = model.split("/", 1)[1]
+            model_group = self._get_model_group(model)
+            for grouped_model in self._model_quota_groups.get(model_group, [model]):
+                window = self._get_window(credential, grouped_model)
+                window.add_request(time.time())
 
     def can_make_request(self, credential: str, model: str) -> bool:
         """
@@ -247,7 +310,15 @@ class NvidiaProvider(ProviderInterface):
         Returns:
             True if request is allowed, False otherwise
         """
-        return self._quota_tracker.can_make_request(credential, model)
+        if "/" in model:
+            model = model.split("/", 1)[1]
+        model_group = self._get_model_group(model)
+        for grouped_model in self._model_quota_groups.get(model_group, [model]):
+            window = self._get_window(credential, grouped_model)
+            limit = self._get_rate_limit(credential, grouped_model)
+            if not window.is_within_limit(limit):
+                return False
+        return True
 
     def get_wait_time(self, credential: str, model: str) -> float:
         """
@@ -260,7 +331,19 @@ class NvidiaProvider(ProviderInterface):
         Returns:
             Seconds to wait (0.0 if can proceed immediately)
         """
-        return self._quota_tracker.get_wait_time(credential, model)
+        if "/" in model:
+            model = model.split("/", 1)[1]
+        model_group = self._get_model_group(model)
+        max_wait = 0.0
+        for grouped_model in self._model_quota_groups.get(model_group, [model]):
+            window = self._get_window(credential, grouped_model)
+            limit = self._get_rate_limit(credential, grouped_model)
+            if not window.is_within_limit(limit):
+                if window.requests:
+                    oldest = min(window.requests)
+                    wait_time = (oldest + window.window_seconds) - time.time()
+                    max_wait = max(max_wait, wait_time)
+        return max(0.0, max_wait)
 
     def get_quota_info(self, credential: str, model: str) -> Dict:
         """
@@ -273,7 +356,30 @@ class NvidiaProvider(ProviderInterface):
         Returns:
             Dictionary with quota information
         """
-        return self._quota_tracker.get_usage_stats(credential, model)
+        if "/" in model:
+            model = model.split("/", 1)[1]
+        model_group = self._get_model_group(model)
+        stats = {
+            "credential": credential,
+            "model": model,
+            "model_group": model_group,
+            "tier": self.project_tier_cache.get(credential, "free"),
+            "models": {}
+        }
+        for grouped_model in self._model_quota_groups.get(model_group, [model]):
+            window = self._get_window(credential, grouped_model)
+            limit = self._get_rate_limit(credential, grouped_model)
+            now = time.time()
+            window_start = now - window.window_seconds
+            request_count = window.get_request_count(window_start)
+            stats["models"][grouped_model] = {
+                "request_count": request_count,
+                "rate_limit": limit,
+                "remaining": max(0, limit - request_count),
+                "window_seconds": window.window_seconds,
+                "is_within_limit": window.is_within_limit(limit),
+            }
+        return stats
 
     # =========================================================================
     # BACKGROUND JOB FOR QUOTA SYNC
@@ -305,10 +411,81 @@ class NvidiaProvider(ProviderInterface):
             credentials: List of credential paths (not used for NVIDIA)
         """
         try:
-            cleaned = self._quota_tracker.cleanup_old_windows()
+            cleaned = self.cleanup_old_windows()
             if cleaned > 0:
                 lib_logger.debug(
                     f"NVIDIA quota sync: cleaned {cleaned} old windows"
                 )
         except httpx.HTTPError as e:
             lib_logger.error(f"Error in NVIDIA quota sync job: {e}", exc_info=True)
+
+    # =====================================================================
+    # NVIDIA QUOTA TRACKER INTERNAL METHODS
+    # =====================================================================
+
+    def _ensure_lock(self):
+        """Lazily create asyncio.Lock to avoid RuntimeError before event loop starts."""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    def _get_window(self, credential: str, model: str) -> RateLimitWindow:
+        """Get or create rate limit window for credential+model."""
+        if credential not in self._windows:
+            self._windows[credential] = {}
+        if model not in self._windows[credential]:
+            self._windows[credential][model] = RateLimitWindow()
+        return self._windows[credential][model]
+
+    def _get_model_group(self, model: str) -> str:
+        """Get quota group for model."""
+        for group, models in self._model_quota_groups.items():
+            if model in models:
+                return group
+        return model  # Use model name as group if not in any group
+
+    def _get_rate_limit(self, credential: str, model: str) -> int:
+        """Get rate limit for credential and model via BaseQuotaTracker."""
+        tier = self.project_tier_cache.get(credential, "free")
+        return self.get_max_requests_for_model("_default", tier)
+
+    def set_credential_tier(self, credential: str, tier: str) -> None:
+        """Set tier for credential."""
+        self.project_tier_cache[credential] = tier
+        lib_logger.info(f"Set NVIDIA credential {credential} tier to {tier}")
+
+    def reset_window(self, credential: str, model: str) -> None:
+        """Reset rate limit window for credential and model."""
+        if "/" in model:
+            model = model.split("/", 1)[1]
+        model_group = self._get_model_group(model)
+        for grouped_model in self._model_quota_groups.get(model_group, [model]):
+            if credential in self._windows and grouped_model in self._windows[credential]:
+                self._windows[credential][grouped_model] = RateLimitWindow()
+
+    def cleanup_old_windows(self, max_age_seconds: int = 3600) -> int:
+        """Clean up old rate limit windows."""
+        now = time.time()
+        cleaned = 0
+        for credential in list(self._windows.keys()):
+            for model in list(self._windows[credential].keys()):
+                window = self._windows[credential][model]
+                if window.requests:
+                    newest = max(window.requests)
+                    if now - newest > max_age_seconds:
+                        del self._windows[credential][model]
+                        cleaned += 1
+                else:
+                    del self._windows[credential][model]
+                    cleaned += 1
+            if not self._windows[credential]:
+                del self._windows[credential]
+        if cleaned > 0:
+            lib_logger.debug(f"Cleaned up {cleaned} old rate limit windows")
+        return cleaned
+
+    async def _fetch_quota_for_credential(self, credential_path: str) -> dict:
+        return {"status": "error", "error": "NVIDIA NIM has no public quota API", "identifier": credential_path, "tier": None, "fetched_at": time.time()}
+
+    def _extract_model_quota_from_response(self, quota_data: dict, tier: str) -> list:
+        return []

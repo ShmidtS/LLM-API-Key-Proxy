@@ -2,7 +2,6 @@
 Firmware.ai Provider with Quota Tracking
 
 Provider implementation for the Firmware.ai API with 5-hour rolling window quota tracking.
-Uses the FirmwareQuotaTracker mixin to fetch quota usage from their API.
 
 Environment variables:
     FIRMWARE_API_BASE: API base URL (default: https://app.firmware.ai/api/v1)
@@ -11,16 +10,20 @@ Environment variables:
 """
 
 import httpx
+import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 from .provider_interface import ProviderInterface, build_bearer_headers
 from .utilities import fetch_provider_models
-from .utilities.firmware_quota_tracker import FirmwareQuotaTracker
+from .utilities.lightweight_quota_mixin import LightweightQuotaMixin
 from ..config.defaults import env_int
 
+lib_logger = logging.getLogger("rotator_library")
 
-class FirmwareProvider(FirmwareQuotaTracker, ProviderInterface):
+
+class FirmwareProvider(LightweightQuotaMixin, ProviderInterface):
     """
     Provider implementation for the Firmware.ai API with quota tracking.
     """
@@ -49,6 +52,48 @@ class FirmwareProvider(FirmwareQuotaTracker, ProviderInterface):
         self.api_base = os.environ.get(
             "FIRMWARE_API_BASE", "https://app.firmware.ai/api/v1"
         )
+
+    # --- Quota tracking (inlined from removed FirmwareQuotaTracker) ---
+
+    def _get_quota_url(self) -> str:
+        return f"{self.api_base.rstrip('/')}/quota"
+
+    async def fetch_quota_usage(
+        self, api_key: str, client: Optional[httpx.AsyncClient] = None
+    ) -> Dict[str, Any]:
+        headers = self._make_bearer_header(api_key)
+        quota_url = self._get_quota_url()
+        data = await self._fetch_json(quota_url, headers, client)
+        if data is None:
+            return self._error_result(
+                used=None, remaining_fraction=None, reset_at=None, has_active_window=False
+            )
+
+        used_raw = data.get("used")
+        if not isinstance(used_raw, (int, float)):
+            lib_logger.warning(
+                f"Firmware.ai quota API returned non-numeric 'used' value: {used_raw}"
+            )
+            used = 0.0
+        else:
+            used = float(used_raw)
+        reset_iso = data.get("reset")
+
+        remaining_fraction = max(0.0, min(1.0, 1.0 - used))
+        reset_at = None
+        if reset_iso is not None:
+            reset_at = self._parse_iso_timestamp(reset_iso)
+        has_active_window = reset_at is not None
+
+        return {
+            "status": "success",
+            "error": None,
+            "used": used,
+            "remaining_fraction": remaining_fraction,
+            "reset_at": reset_at,
+            "has_active_window": has_active_window,
+            "fetched_at": time.time(),
+        }
 
     def get_model_quota_group(self, model: str) -> Optional[str]:
         """

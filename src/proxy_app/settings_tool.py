@@ -19,6 +19,7 @@ from rich.panel import Panel
 
 from rotator_library.utils.paths import get_data_file
 from rotator_library.utils.terminal_utils import clear_screen
+from proxy_app.ui_constants import SEPARATOR_50, SEPARATOR_70
 
 from proxy_app.settings_dialogs import (
     _NOT_FOUND,
@@ -100,6 +101,46 @@ class SettingsTool:
 
         return f"[bold]ℹ️  Pending changes: {', '.join(parts)}[/bold]"
 
+    def _undo_pending_addition(
+        self, name: str, prefix: str = "", suffix: str = "", label: str = "addition of"
+    ) -> None:
+        """Remove a pending addition from pending_changes and print cancellation message."""
+        key = f"{prefix}{name.upper()}{suffix}"
+        del self.settings.pending_changes[key]
+        self.console.print(f"\n[green]✅ Pending {label} '{name}' cancelled![/green]")
+
+    def _select_removable_item(
+        self,
+        items: Dict[str, Any],
+        empty_msg: str,
+        header: str,
+    ) -> Optional[tuple]:
+        """Filter removable/pending-add items, display numbered list.
+
+        Returns (sorted_keys, pending_adds) or None if nothing to show.
+        """
+        removable = {
+            k: v
+            for k, v in items.items()
+            if v["type"] != "remove" and v["type"] != "add"
+        }
+        pending_adds = {k: v for k, v in items.items() if v["type"] == "add"}
+
+        if not removable and not pending_adds:
+            self.console.print(f"\n[yellow]{empty_msg}[/yellow]")
+            input("\nPress Enter to continue...")
+            return None
+
+        self.console.print(f"\n[bold]{header}[/bold]")
+        items_list = sorted(removable.keys()) + sorted(pending_adds.keys())
+        for idx, name in enumerate(items_list, 1):
+            if name in pending_adds:
+                self.console.print(f"   {idx}. {name} [green](pending add)[/green]")
+            else:
+                self.console.print(f"   {idx}. {name}")
+
+        return (items_list, pending_adds)
+
     def get_available_providers(self) -> List[str]:
         """Get list of providers that have credentials configured"""
         env_file = get_data_file(".env")
@@ -164,7 +205,7 @@ class SettingsTool:
         self.console.print("   8. 🚫 Exit Without Saving")
 
         self.console.print()
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
 
         self.console.print(self._get_pending_status_text())
 
@@ -210,7 +251,7 @@ class SettingsTool:
 
             self.console.print()
             self.console.print("[bold]📋 Configured Custom Providers[/bold]")
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
 
             # Build combined view with pending changes
             all_providers: Dict[str, Dict[str, Any]] = {}
@@ -258,7 +299,7 @@ class SettingsTool:
                 self.console.print("   [dim]No custom providers configured[/dim]")
 
             self.console.print()
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             self.console.print()
             self.console.print("[bold]⚙️  Actions[/bold]")
             self.console.print()
@@ -268,7 +309,7 @@ class SettingsTool:
             self.console.print("   4. ↩️  Back to Settings Menu")
 
             self.console.print()
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             self.console.print()
 
             choice = Prompt.ask(
@@ -329,33 +370,12 @@ class SettingsTool:
                 input("\nPress Enter to continue...")
 
             elif choice == "3":
-                # Get removable providers (existing ones not already pending removal)
-                removable = {
-                    k: v
-                    for k, v in all_providers.items()
-                    if v["type"] != "remove" and v["type"] != "add"
-                }
-                # For pending additions, we can "undo" by removing from pending
-                pending_adds = {
-                    k: v for k, v in all_providers.items() if v["type"] == "add"
-                }
-
-                if not removable and not pending_adds:
-                    self.console.print("\n[yellow]No providers to remove[/yellow]")
-                    input("\nPress Enter to continue...")
+                result = self._select_removable_item(
+                    all_providers, "No providers to remove", "Select provider to remove:"
+                )
+                if result is None:
                     continue
-
-                # Show numbered list
-                self.console.print("\n[bold]Select provider to remove:[/bold]")
-                # Show existing providers first, then pending additions
-                providers_list = sorted(removable.keys()) + sorted(pending_adds.keys())
-                for idx, prov in enumerate(providers_list, 1):
-                    if prov in pending_adds:
-                        self.console.print(
-                            f"   {idx}. {prov} [green](pending add)[/green]"
-                        )
-                    else:
-                        self.console.print(f"   {idx}. {prov}")
+                providers_list, pending_adds = result
 
                 choice_idx = IntPrompt.ask(
                     "Select option",
@@ -365,12 +385,7 @@ class SettingsTool:
 
                 if Confirm.ask(f"Remove '{name}'?"):
                     if name in pending_adds:
-                        # Undo pending addition - remove from pending_changes
-                        key = f"{name.upper()}_API_BASE"
-                        del self.settings.pending_changes[key]
-                        self.console.print(
-                            f"\n[green]✅ Pending addition of '{name}' cancelled![/green]"
-                        )
+                        self._undo_pending_addition(name, suffix="_API_BASE")
                     else:
                         self.provider_mgr.remove_provider(name)
                         self.console.print(
@@ -398,7 +413,7 @@ class SettingsTool:
 
             self.console.print()
             self.console.print("[bold]📋 Configured Provider Models[/bold]")
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
 
             # Build combined view with pending changes
             all_models: Dict[str, Dict[str, Any]] = {}
@@ -468,7 +483,7 @@ class SettingsTool:
                 self.console.print("   [dim]No model definitions configured[/dim]")
 
             self.console.print()
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             self.console.print()
             self.console.print("[bold]⚙️  Actions[/bold]")
             self.console.print()
@@ -479,7 +494,7 @@ class SettingsTool:
             self.console.print("   5. ↩️  Back to Settings Menu")
 
             self.console.print()
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             self.console.print()
 
             choice = Prompt.ask(
@@ -508,33 +523,12 @@ class SettingsTool:
                     continue
                 self.view_model_definitions(sorted(viewable.keys()))
             elif choice == "4":
-                # Get removable models (existing ones not already pending removal)
-                removable = {
-                    k: v
-                    for k, v in all_models.items()
-                    if v["type"] != "remove" and v["type"] != "add"
-                }
-                pending_adds = {
-                    k: v for k, v in all_models.items() if v["type"] == "add"
-                }
-
-                if not removable and not pending_adds:
-                    self.console.print("\n[yellow]No providers to remove[/yellow]")
-                    input("\nPress Enter to continue...")
-                    continue
-
-                # Show numbered list
-                self.console.print(
-                    "\n[bold]Select provider to remove models from:[/bold]"
+                result = self._select_removable_item(
+                    all_models, "No providers to remove", "Select provider to remove models from:"
                 )
-                providers_list = sorted(removable.keys()) + sorted(pending_adds.keys())
-                for idx, prov in enumerate(providers_list, 1):
-                    if prov in pending_adds:
-                        self.console.print(
-                            f"   {idx}. {prov} [green](pending add)[/green]"
-                        )
-                    else:
-                        self.console.print(f"   {idx}. {prov}")
+                if result is None:
+                    continue
+                providers_list, pending_adds = result
 
                 choice_idx = IntPrompt.ask(
                     "Select option",
@@ -544,11 +538,8 @@ class SettingsTool:
 
                 if Confirm.ask(f"Remove all model definitions for '{provider}'?"):
                     if provider in pending_adds:
-                        # Undo pending addition
-                        key = f"{provider.upper()}{suffix}"
-                        del self.settings.pending_changes[key]
-                        self.console.print(
-                            f"\n[green]✅ Pending models for '{provider}' cancelled![/green]"
+                        self._undo_pending_addition(
+                            provider, suffix=suffix, label="models for"
                         )
                     else:
                         self.model_mgr.remove_models(provider)
@@ -780,7 +771,7 @@ class SettingsTool:
         clear_screen()
         self.console.print(f"[bold]Provider: {provider}[/bold]\n")
         self.console.print("[bold]📦 Configured Models:[/bold]")
-        self.console.print("━" * 50)
+        self.console.print(SEPARATOR_50)
 
         # Handle both dict and list formats
         if isinstance(models, dict):
@@ -842,7 +833,7 @@ class SettingsTool:
             self.console.print(
                 "[bold]📋 Available Providers with Custom Settings[/bold]"
             )
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
 
             for provider in available_providers:
                 modified = self.provider_settings_mgr.get_modified_settings(provider)
@@ -855,7 +846,7 @@ class SettingsTool:
                 self.console.print(f"   • {display_name:20} {status}")
 
             self.console.print()
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             self.console.print()
             self.console.print("[bold]⚙️  Select Provider to Configure[/bold]")
             self.console.print()
@@ -868,7 +859,7 @@ class SettingsTool:
             )
 
             self.console.print()
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             self.console.print()
 
             choices = [str(i) for i in range(1, len(available_providers) + 2)]
@@ -900,7 +891,7 @@ class SettingsTool:
 
             self.console.print()
             self.console.print("[bold]📋 Current Settings[/bold]")
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
 
             # Display all settings with current values and pending changes
             settings_list = list(definitions.keys())
@@ -989,7 +980,7 @@ class SettingsTool:
                 self.console.print(f"       [dim]{description}[/dim]")
 
             self.console.print()
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             self.console.print(
                 "[dim]* = modified from default, + = pending add, ~ = pending edit, - = pending reset[/dim]"
             )
@@ -1002,7 +993,7 @@ class SettingsTool:
             self.console.print("   B. ↩️  Back to Provider Selection")
 
             self.console.print()
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             self.console.print()
 
             choice = Prompt.ask(
@@ -1125,7 +1116,7 @@ class SettingsTool:
 
             self.console.print()
             self.console.print("[bold]📋 Rotation Modes Explained[/bold]")
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             self.console.print(
                 "   [cyan]balanced[/cyan]   - Rotate credentials evenly across requests (default)"
             )
@@ -1134,7 +1125,7 @@ class SettingsTool:
             )
             self.console.print()
             self.console.print("[bold]📋 Current Rotation Mode Settings[/bold]")
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
 
             # Build combined view with pending changes
             all_modes: Dict[str, Dict[str, Any]] = {}
@@ -1223,7 +1214,7 @@ class SettingsTool:
                     )
 
             self.console.print()
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             self.console.print(
                 "[dim]* = custom setting (differs from provider default)[/dim]"
             )
@@ -1236,7 +1227,7 @@ class SettingsTool:
             self.console.print("   4. ↩️  Back to Settings Menu")
 
             self.console.print()
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             self.console.print()
 
             choice = Prompt.ask(
@@ -1338,11 +1329,8 @@ class SettingsTool:
 
                 if Confirm.ask(f"Reset '{provider}' to default mode ({default_mode})?"):
                     if info["type"] == "add":
-                        # Undo pending addition
-                        key = f"{prefix}{provider.upper()}"
-                        del self.settings.pending_changes[key]
-                        self.console.print(
-                            f"\n[green]✅ Pending mode for '{provider}' cancelled![/green]"
+                        self._undo_pending_addition(
+                            provider, prefix=prefix, label="mode for"
                         )
                     else:
                         self.rotation_mgr.remove_mode(provider)
@@ -1373,7 +1361,7 @@ class SettingsTool:
 
         self.console.print()
         self.console.print("[bold]📋 Current Priority Multiplier Settings[/bold]")
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
 
         # Show all providers with their priority multipliers
         has_settings = False
@@ -1422,7 +1410,7 @@ class SettingsTool:
         )
         self.console.print("   Example: Priority 1 = 5x, Priority 2 = 3x, Others = 1x")
         self.console.print()
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print()
         self.console.print("   1. ✏️  Set Priority Multiplier")
         self.console.print("   2. 🔄 Reset to Provider Default")
@@ -1533,7 +1521,7 @@ class SettingsTool:
 
             self.console.print()
             self.console.print("[bold]📋 Current Concurrency Settings[/bold]")
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
 
             # Build combined view with pending changes
             all_limits: Dict[str, Dict[str, Any]] = {}
@@ -1590,7 +1578,7 @@ class SettingsTool:
                 self.console.print("   • Default:        1 request/key (all providers)")
 
             self.console.print()
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             self.console.print()
             self.console.print("[bold]⚙️  Actions[/bold]")
             self.console.print()
@@ -1600,7 +1588,7 @@ class SettingsTool:
             self.console.print("   4. ↩️  Back to Settings Menu")
 
             self.console.print()
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             self.console.print()
 
             choice = Prompt.ask(
@@ -1694,34 +1682,12 @@ class SettingsTool:
                 input("\nPress Enter to continue...")
 
             elif choice == "3":
-                # Get removable limits (existing ones not already pending removal)
-                removable = {
-                    k: v
-                    for k, v in all_limits.items()
-                    if v["type"] != "remove" and v["type"] != "add"
-                }
-                # For pending additions, we can "undo" by removing from pending
-                pending_adds = {
-                    k: v for k, v in all_limits.items() if v["type"] == "add"
-                }
-
-                if not removable and not pending_adds:
-                    self.console.print("\n[yellow]No limits to remove[/yellow]")
-                    input("\nPress Enter to continue...")
-                    continue
-
-                # Show numbered list
-                self.console.print(
-                    "\n[bold]Select provider to remove limit from:[/bold]"
+                result = self._select_removable_item(
+                    all_limits, "No limits to remove", "Select provider to remove limit from:"
                 )
-                limits_list = sorted(removable.keys()) + sorted(pending_adds.keys())
-                for idx, prov in enumerate(limits_list, 1):
-                    if prov in pending_adds:
-                        self.console.print(
-                            f"   {idx}. {prov} [green](pending add)[/green]"
-                        )
-                    else:
-                        self.console.print(f"   {idx}. {prov}")
+                if result is None:
+                    continue
+                limits_list, pending_adds = result
 
                 choice_idx = IntPrompt.ask(
                     "Select option",
@@ -1733,11 +1699,8 @@ class SettingsTool:
                     f"Remove concurrency limit for '{provider}' (reset to default 1)?"
                 ):
                     if provider in pending_adds:
-                        # Undo pending addition
-                        key = f"{prefix}{provider.upper()}"
-                        del self.settings.pending_changes[key]
-                        self.console.print(
-                            f"\n[green]✅ Pending limit for '{provider}' cancelled![/green]"
+                        self._undo_pending_addition(
+                            provider, prefix=prefix, label="limit for"
                         )
                     else:
                         self.concurrency_mgr.remove_limit(provider)
@@ -1836,7 +1799,7 @@ class SettingsTool:
                         self.console.print(f"  [red]- {key}[/red]")
             self.console.print()
 
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
 
     def save_and_exit(self):
         """Save pending changes and exit"""

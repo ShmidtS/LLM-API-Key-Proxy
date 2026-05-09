@@ -23,6 +23,7 @@ from rich.text import Text
 from dotenv import load_dotenv, set_key
 from rotator_library.utils.paths import get_data_file
 from rotator_library.utils.terminal_utils import clear_screen
+from proxy_app.ui_constants import SEPARATOR_70
 from proxy_app.config import DEFAULT_HOST, DEFAULT_PORT, env_int
 from .settings_detector import SettingsDetector
 
@@ -179,7 +180,7 @@ class LauncherTUI:
     def _show_main_config_summary(self):
         self.console.print()
         self.console.print("[bold]📋 Proxy Configuration[/bold]")
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print(f"   Host:                {self.config.config['host']}")
         self.console.print(f"   Port:                {self.config.config['port']}")
         self.console.print(
@@ -201,7 +202,7 @@ class LauncherTUI:
 
         self.console.print()
         self.console.print("[bold]📊 Status Summary[/bold]")
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         provider_count = len(credentials)
         custom_count = len(custom_bases)
 
@@ -219,7 +220,7 @@ class LauncherTUI:
 
     def _show_main_menu_options(self, show_warning: bool):
         self.console.print()
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print()
         self.console.print("[bold]🎯 Main Menu[/bold]")
         self.console.print()
@@ -241,7 +242,7 @@ class LauncherTUI:
         self.console.print("   8. 🚪 Exit")
 
         self.console.print()
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print()
 
     def _prompt_main_menu_choice(self) -> str:
@@ -347,7 +348,7 @@ class LauncherTUI:
     def _show_config_current_settings(self):
         self.console.print()
         self.console.print("[bold]📋 Current Settings[/bold]")
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print(f"   Host:                {self.config.config['host']}")
         self.console.print(f"   Port:                {self.config.config['port']}")
         self.console.print(
@@ -362,7 +363,7 @@ class LauncherTUI:
 
     def _show_config_options(self):
         self.console.print()
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print()
         self.console.print("[bold]⚙️  Configuration Options[/bold]")
         self.console.print()
@@ -375,7 +376,7 @@ class LauncherTUI:
         self.console.print("   7. ↩️  Back to Main Menu")
 
         self.console.print()
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print()
 
     def _prompt_config_menu_choice(self) -> str:
@@ -580,7 +581,7 @@ class LauncherTUI:
         # Configured Providers
         self.console.print()
         self.console.print("[bold]📊 Configured Providers[/bold]")
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         if credentials:
             for provider, info in credentials.items():
                 provider_name = provider.title()
@@ -606,7 +607,7 @@ class LauncherTUI:
         if custom_bases:
             self.console.print()
             self.console.print("[bold]🌐 Custom API Bases[/bold]")
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             for provider, base in custom_bases.items():
                 self.console.print(f"   • {provider:15} {base}")
 
@@ -614,7 +615,7 @@ class LauncherTUI:
         if model_defs:
             self.console.print()
             self.console.print("[bold]📦 Provider Model Definitions[/bold]")
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             for provider, count in model_defs.items():
                 self.console.print(
                     f"   • {provider:15} {count} model{'s' if count > 1 else ''} configured"
@@ -624,7 +625,7 @@ class LauncherTUI:
         if concurrency:
             self.console.print()
             self.console.print("[bold]⚡ Concurrency Limits[/bold]")
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             for provider, limit in concurrency.items():
                 self.console.print(f"   • {provider:15} {limit} requests/key")
             self.console.print("   • Default:        1 request/key (all others)")
@@ -633,7 +634,7 @@ class LauncherTUI:
         if filters:
             self.console.print()
             self.console.print("[bold]🎯 Model Filters[/bold]")
-            self.console.print("━" * 70)
+            self.console.print(SEPARATOR_70)
             for provider, filter_info in filters.items():
                 status_parts = []
                 if filter_info["has_whitelist"]:
@@ -646,14 +647,14 @@ class LauncherTUI:
         # Provider-Specific Settings (deferred to Settings Tool to avoid heavy imports)
         self.console.print()
         self.console.print("[bold]🔬 Provider-Specific Settings[/bold]")
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print(
             "   [dim]Launch Settings Tool to view/configure provider-specific settings[/dim]"
         )
 
         # Actions
         self.console.print()
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print()
         self.console.print("[bold]💡 Actions[/bold]")
         self.console.print()
@@ -663,7 +664,7 @@ class LauncherTUI:
         self.console.print("   2. ↩️  Back to Main Menu")
 
         self.console.print()
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print(
             "[dim]ℹ️  Advanced settings are stored in .env file.\n   Use the Settings Tool to configure them interactively.[/dim]"
         )
@@ -689,10 +690,10 @@ class LauncherTUI:
         _start_time = time.time()
 
         # Show the same header as standalone mode
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print("Interactive Credential Setup Tool")
         self.console.print("GitHub: https://github.com/ShmidtS/LLM-API-Key-Proxy")
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print("Loading credential management components...")
 
         # Now import with spinner (this is where the 6-7 second delay happens)
@@ -724,9 +725,9 @@ class LauncherTUI:
 
         clear_screen()
 
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print("Advanced Settings Configuration Tool")
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
 
         _start_time = time.time()
 
@@ -746,9 +747,9 @@ class LauncherTUI:
         """Launch the quota stats viewer"""
         clear_screen()
 
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print("Quota & Usage Statistics Viewer")
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print()
 
         # Import the lightweight viewer (no heavy imports)
@@ -768,7 +769,7 @@ class LauncherTUI:
 
         self.console.print()
         self.console.print("[bold]📦 Project Information[/bold]")
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print("   [bold cyan]LLM API Key Proxy[/bold cyan]")
         self.console.print(
             "   A lightweight, high-performance proxy server for managing"
@@ -781,7 +782,7 @@ class LauncherTUI:
 
         self.console.print()
         self.console.print("[bold]✨ Key Features[/bold]")
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print(
             "   • [green]Smart Key Rotation[/green] - Automatic rotation across multiple API keys"
         )
@@ -809,12 +810,12 @@ class LauncherTUI:
 
         self.console.print()
         self.console.print("[bold]📝 License & Credits[/bold]")
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print("   Made with ❤️  by the community")
         self.console.print("   Open source - contributions welcome!")
 
         self.console.print()
-        self.console.print("━" * 70)
+        self.console.print(SEPARATOR_70)
         self.console.print()
 
         Prompt.ask("Press Enter to return to main menu", default="")

@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncContextManager, Callable, Dict, List, Optional
 
 import orjson
 
@@ -171,7 +171,7 @@ def _safe_close_sync(close_fn, label: str) -> None:
 # --- Lifespan factory ---
 
 
-def create_lifespan(config: LifespanConfig):
+def create_lifespan(config: LifespanConfig) -> Callable[[FastAPI], AsyncContextManager[None]]:
     """Create the lifespan async context manager for the FastAPI app.
 
     Returns an @asynccontextmanager-decorated function that can be passed

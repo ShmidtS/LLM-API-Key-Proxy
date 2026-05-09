@@ -20,6 +20,7 @@ All models share a daily/monthly usage pool at the credential level.
 
 import asyncio
 import json
+import time
 import httpx
 from ..http_client_pool import get_http_pool
 import logging
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
     from ..usage_manager import UsageManager
 
 from .provider_interface import ProviderInterface, strip_provider_prefix
-from .utilities.nanogpt_quota_tracker import NanoGptQuotaTracker
+from .utilities.lightweight_quota_mixin import LightweightQuotaMixin
 from .utilities.response_helpers import parse_bearer_json
 from ..config.defaults import env_int
 from ..model_definitions import ModelDefinitions
@@ -53,7 +54,7 @@ NANOGPT_FALLBACK_MODELS = [
 ]
 
 
-class NanoGptProvider(NanoGptQuotaTracker, ProviderInterface):
+class NanoGptProvider(LightweightQuotaMixin, ProviderInterface):
     """
     Provider for NanoGPT API.
 
@@ -105,6 +106,83 @@ class NanoGptProvider(NanoGptQuotaTracker, ProviderInterface):
 
         # Track subscription-only models (subject to daily/monthly limits)
         self._subscription_models: set = set()
+
+    # --- Quota tracking (inlined from removed NanoGptQuotaTracker) ---
+
+    async def fetch_subscription_usage(
+        self, api_key: str, client: Optional[httpx.AsyncClient] = None
+    ) -> Dict[str, Any]:
+        url = f"{NANOGPT_API_BASE}/api/subscription/v1/usage"
+        headers = self._make_bearer_header(api_key)
+        data = await self._fetch_json(url, headers, client)
+        if data is None:
+            return self._error_result(
+                active=False,
+                state="unknown",
+                limits={"daily": 0, "monthly": 0},
+                daily={"used": 0, "remaining": 0, "percent_used": 0.0, "reset_at": 0},
+                monthly={"used": 0, "remaining": 0, "percent_used": 0.0, "reset_at": 0},
+            )
+
+        daily = data.get("daily", {})
+        monthly = data.get("monthly", {})
+        limits = data.get("limits", {})
+        return {
+            "status": "success",
+            "error": None,
+            "active": data.get("active", False),
+            "state": data.get("state", "inactive"),
+            "enforce_daily_limit": data.get("enforceDailyLimit", False),
+            "limits": {
+                "daily": limits.get("daily", 0),
+                "monthly": limits.get("monthly", 0),
+            },
+            "daily": {
+                "used": daily.get("used", 0),
+                "remaining": daily.get("remaining", 0),
+                "percent_used": daily.get("percentUsed", 0.0),
+                "reset_at": daily.get("resetAt", 0) / 1000.0,
+            },
+            "monthly": {
+                "used": monthly.get("used", 0),
+                "remaining": monthly.get("remaining", 0),
+                "percent_used": monthly.get("percentUsed", 0.0),
+                "reset_at": monthly.get("resetAt", 0) / 1000.0,
+            },
+            "fetched_at": time.time(),
+        }
+
+    def get_tier_from_state(self, state: str) -> str:
+        mapping = {
+            "active": "subscription-active",
+            "grace": "subscription-grace",
+            "inactive": "no-subscription",
+        }
+        return mapping.get(state, "no-subscription")
+
+    def get_remaining_fraction(self, usage_data: Dict[str, Any]) -> float:
+        limits = usage_data.get("limits", {})
+        daily = usage_data.get("daily", {})
+        daily_limit = limits.get("daily", 0)
+        daily_remaining = daily.get("remaining", 0)
+        if daily_limit <= 0:
+            return 1.0
+        return min(1.0, max(0.0, daily_remaining / daily_limit))
+
+    async def refresh_subscription_usage(
+        self, api_key: str, credential_identifier: str, client: Optional[httpx.AsyncClient] = None
+    ) -> Dict[str, Any]:
+        usage_data = await self.fetch_subscription_usage(api_key, client)
+        if usage_data.get("status") == "success":
+            self._subscription_cache[credential_identifier] = usage_data
+            daily = usage_data.get("daily", {})
+            limits = usage_data.get("limits", {})
+            lib_logger.debug(
+                f"NanoGPT subscription usage for {credential_identifier}: "
+                f"daily={daily.get('remaining', 0)}/{limits.get('daily', 0)}, "
+                f"state={usage_data.get('state')}"
+            )
+        return usage_data
 
     # =========================================================================
     # USAGE TRACKING CONFIGURATION

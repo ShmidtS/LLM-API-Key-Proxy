@@ -9,11 +9,17 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from .provider_interface import ProviderInterface, UsageResetConfigDef
+from .utilities.lightweight_quota_mixin import LightweightQuotaMixin
 from .utilities.response_helpers import parse_bearer_json, parse_post_json_response
-from .utilities.zai_quota_tracker import ZaiQuotaTracker
 from ..config.defaults import env_int
 
 ZAI_DEFAULT_API_BASE = "https://api.z.ai/api/coding/paas/v4"
+ZAI_QUOTA_API_URL = "https://api.z.ai/api/monitor/usage/quota/limit"
+ZAI_TIER_HOURLY_LIMITS = {"lite": 100, "pro": 1000, "max": 4000}
+ZAI_UNIT_5MIN_TOKENS = 3
+ZAI_UNIT_HOURLY_TIME = 5
+ZAI_UNIT_DAILY_TOKENS = 6
+
 ZAI_DOCUMENTED_MODELS = (
     "glm-5.1",
     "glm-5",
@@ -37,11 +43,12 @@ ZAI_DOCUMENTED_MODELS = (
 )
 
 import logging
+import time
 
 lib_logger = logging.getLogger("rotator_library")
 
 
-class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
+class ZaiProvider(LightweightQuotaMixin, ProviderInterface):
     """
     Provider implementation for the ZAI (z.ai) API with quota tracking.
 
@@ -104,6 +111,88 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
         self.api_base: str = os.environ.get(
             "ZAI_API_BASE", ZAI_DEFAULT_API_BASE
         ).rstrip("/")
+
+    # --- Quota tracking (inlined from removed ZaiQuotaTracker) ---
+
+    async def fetch_quota_usage(
+        self, api_key: str, client: Optional[httpx.AsyncClient] = None
+    ) -> Dict[str, Any]:
+        headers = self._make_bearer_header(api_key)
+        data = await self._fetch_json(ZAI_QUOTA_API_URL, headers, client)
+        if data is None:
+            return self._error_result(
+                status="transient_error",
+                error="empty_or_invalid_response",
+                level="lite",
+                hourly_used=0,
+                hourly_limit=0,
+                hourly_remaining=0,
+                remaining_fraction=None,
+                pct_5min=0.0,
+                pct_daily=0.0,
+                quota=0,
+                used=0.0,
+                remaining=None,
+                reset_at=0,
+            )
+
+        if data.get("code") != 200:
+            error_msg = data.get("msg", "unknown error")
+            return self._error_result(error=f"API_ERROR: {error_msg}")
+
+        quota_data = data.get("data")
+        if not quota_data:
+            return self._error_result(error="NO_DATA")
+
+        level = quota_data.get("level", "lite")
+        limits = quota_data.get("limits", [])
+
+        pct_5min = 0.0
+        pct_daily = 0.0
+        hourly_used = 0
+        hourly_limit = 0
+
+        for lim in limits:
+            lim_type = lim.get("type", "")
+            unit = lim.get("unit", 0)
+            if lim_type == "TOKENS_LIMIT" and unit == ZAI_UNIT_5MIN_TOKENS:
+                pct_5min = float(lim.get("percentage", 0))
+            elif lim_type == "TOKENS_LIMIT" and unit == ZAI_UNIT_DAILY_TOKENS:
+                pct_daily = float(lim.get("percentage", 0))
+            elif lim_type == "TIME_LIMIT" and unit == ZAI_UNIT_HOURLY_TIME:
+                hourly_used = int(lim.get("currentValue", 0))
+                hourly_limit = int(lim.get("usage", 0))
+
+        if hourly_limit <= 0:
+            hourly_limit = ZAI_TIER_HOURLY_LIMITS.get(level, 100)
+
+        hourly_remaining = max(0, hourly_limit - hourly_used)
+        remaining_fraction = (
+            (hourly_remaining / hourly_limit) if hourly_limit > 0 else 0.0
+        )
+        reset_at = self._calculate_next_hour_reset()
+
+        return {
+            "status": "success",
+            "error": None,
+            "level": level,
+            "hourly_used": hourly_used,
+            "hourly_limit": hourly_limit,
+            "hourly_remaining": hourly_remaining,
+            "remaining_fraction": remaining_fraction,
+            "pct_5min": pct_5min,
+            "pct_daily": pct_daily,
+            "quota": hourly_limit,
+            "used": float(hourly_used),
+            "remaining": float(hourly_remaining),
+            "reset_at": reset_at,
+            "fetched_at": time.time(),
+        }
+
+    def _calculate_next_hour_reset(self) -> float:
+        now = datetime.now(timezone.utc)
+        next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+        return next_hour.timestamp()
 
     def get_credential_tier_name(self, credential: str) -> Optional[str]:
         cached = self._tier_cache.get(credential)

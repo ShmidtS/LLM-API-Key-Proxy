@@ -18,6 +18,7 @@ from .utils.json_utils import json_loads
 from .config.defaults import env_int
 import time
 from dataclasses import dataclass, field
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -934,8 +935,8 @@ class ModelRegistry(metaclass=SingletonMeta):
 
         # Lookup infrastructure
         self._index = ModelIndex()
-        self._result_cache: Dict[str, ModelMetadata] = {}
-        self._negative_cache: Dict[str, float] = {}
+        self._result_cache: OrderedDict[str, ModelMetadata] = OrderedDict()
+        self._negative_cache: OrderedDict[str, float] = OrderedDict()
         self._negative_cache_ttl = 300.0
         self._cache_maxsize = 2048
         self._raw_models_cache: Optional[Dict[str, Dict]] = None
@@ -1049,21 +1050,23 @@ class ModelRegistry(metaclass=SingletonMeta):
         3. Aggregate if multiple sources match
         """
         if model_id in self._result_cache:
+            self._result_cache.move_to_end(model_id)
             return self._result_cache[model_id]
 
         now = time.time()
         cached_miss = self._negative_cache.get(model_id)
         if cached_miss is not None and (now - cached_miss) < self._negative_cache_ttl:
+            self._negative_cache.move_to_end(model_id)
             return None
 
         metadata = self._resolve_model(model_id)
         if metadata:
             if len(self._result_cache) >= self._cache_maxsize:
-                self._result_cache.clear()
+                self._result_cache.popitem(last=False)
             self._result_cache[model_id] = metadata
         else:
             if len(self._negative_cache) >= self._cache_maxsize:
-                self._negative_cache.clear()
+                self._negative_cache.popitem(last=False)
             self._negative_cache[model_id] = time.time()
         return metadata
 
