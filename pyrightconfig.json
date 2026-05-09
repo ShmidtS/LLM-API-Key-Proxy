@@ -5,6 +5,7 @@
   "reportAttributeAccessIssue": "none",
   "reportMissingTypeStubs": "none",
   "reportPrivateImportUsage": "none",
+  "reportUnsupportedDunderAll": "none",
   "pythonVersion": "3.11",
   "typeCheckingMode": "basic"
 }
