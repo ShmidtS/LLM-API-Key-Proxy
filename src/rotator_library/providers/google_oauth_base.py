@@ -53,6 +53,12 @@ DEFAULT_OAUTH_CALLBACK_PATH: str = "/oauth2callback"
 # Default: 30 minutes before expiry
 DEFAULT_REFRESH_EXPIRY_BUFFER: int = 30 * 60  # 1800 seconds
 
+GOOGLE_BASE_OAUTH_SCOPES = [
+    "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+]
+
 
 @dataclass
 class CredentialSetupResult:
@@ -105,6 +111,27 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
     CALLBACK_PATH: str = DEFAULT_OAUTH_CALLBACK_PATH
     REFRESH_EXPIRY_BUFFER_SECONDS: int = DEFAULT_REFRESH_EXPIRY_BUFFER
     _primary_token_key: str = "access_token"  # Key used for auth header and staleness checks
+
+    @staticmethod
+    def _parse_oauth_token_response(response: httpx.Response, logger: Any) -> dict:
+        """Raise for status and parse JSON, or log warning on decode error."""
+        response.raise_for_status()
+        try:
+            return response.json()
+        except (json.JSONDecodeError, ValueError) as e:
+            body_preview = response.text[:200] if response.text else "<empty>"
+            logger.warning("OAuth/HTTP error in refresh: %s — body: %s", e, body_preview)
+            raise
+
+    async def _resolve_credentials(self, credential_identifier: str) -> tuple[bool, Any]:
+        """Detect if credential_identifier is an OAuth file path or API key string. Returns (is_oauth, creds)."""
+        if os.path.isfile(credential_identifier):
+            lib_logger.debug(
+                f"Using OAuth credentials from file: {credential_identifier}"
+            )
+            return True, await self._load_credentials(credential_identifier)
+        lib_logger.debug("Using direct API key for %s", self.ENV_PREFIX or "provider")
+        return False, credential_identifier
 
     # =========================================================================
     # PKCE (Proof Key for Code Exchange) SUPPORT
@@ -455,13 +482,10 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
                         timeout=30.0,
                     )
                     try:
-                        response.raise_for_status()
-                        new_token_data = response.json()
+                        new_token_data = self._parse_oauth_token_response(response, lib_logger)
                     except httpx.HTTPStatusError:
                         raise
                     except (json.JSONDecodeError, ValueError) as e:
-                        body_preview = response.text[:200] if response.text else "<empty>"
-                        lib_logger.warning("OAuth/HTTP error in refresh: %s — body: %s", e, body_preview)
                         last_error = e
                         continue
                     break  # Success, exit retry loop

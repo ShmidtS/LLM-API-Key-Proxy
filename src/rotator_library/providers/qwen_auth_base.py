@@ -286,14 +286,8 @@ class QwenAuthBase(GoogleOAuthBase):
         - OAuth: credential_identifier is a file path to JSON credentials
         - API Key: credential_identifier is the API key string itself
         """
-        # Detect credential type
-        if os.path.isfile(credential_identifier):
-            # OAuth credential: file path to JSON
-            lib_logger.debug(
-                f"Using OAuth credentials from file: {credential_identifier}"
-            )
-            creds = await self._load_credentials(credential_identifier)
-
+        is_oauth, creds = await self._resolve_credentials(credential_identifier)
+        if is_oauth:
             if self._is_token_expired(creds):
                 creds = await self._refresh_token(credential_identifier)
 
@@ -302,10 +296,8 @@ class QwenAuthBase(GoogleOAuthBase):
                 base_url = f"https://{base_url}"
             access_token = creds["access_token"]
         else:
-            # Direct API key: use as-is
-            lib_logger.debug("Using direct API key for Qwen Code")
             base_url = "https://portal.qwen.ai/v1"
-            access_token = credential_identifier
+            access_token = creds
 
         return base_url, access_token
 

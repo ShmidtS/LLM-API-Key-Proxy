@@ -25,6 +25,7 @@ from litellm.types.utils import Delta as DeltaType, ChatCompletionMessageToolCal
 
 from .provider_interface import ProviderInterface, strip_provider_prefix, build_bearer_headers
 from .base_streaming_provider import parse_sse_stream
+from .utilities.response_helpers import parse_post_json_response
 from ..timeout_config import TimeoutConfig
 from ..utils.json_utils import json_loads
 
@@ -200,8 +201,7 @@ class ElysiverProvider(ProviderInterface):
             "POST", url, headers=headers, json=payload
         ) as response:
             if response.status_code >= 400:
-                await response.aread()
-                response.raise_for_status()
+                await parse_post_json_response(response, "Elysiver")
 
             full_content = ""
             response_id = f"elysiver-{model}"
@@ -293,8 +293,7 @@ class ElysiverProvider(ProviderInterface):
             "POST", url, headers=headers, json=payload
         ) as response:
             if response.status_code >= 400:
-                await response.aread()
-                response.raise_for_status()
+                await parse_post_json_response(response, "Elysiver")
 
             async for data in parse_sse_stream(response, provider_name="Elysiver"):
                 content_delta = ""

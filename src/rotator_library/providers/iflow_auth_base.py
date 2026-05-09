@@ -476,13 +476,10 @@ class IFlowAuthBase(GoogleOAuthBase):
                         IFLOW_OAUTH_TOKEN_ENDPOINT, headers=headers, data=data
                     )
                     try:
-                        response.raise_for_status()
-                        new_token_data = response.json()
+                        new_token_data = self._parse_oauth_token_response(response, lib_logger)
                     except httpx.HTTPStatusError:
                         raise
                     except (json.JSONDecodeError, ValueError) as e:
-                        body_preview = response.text[:200] if response.text else "<empty>"
-                        lib_logger.warning("OAuth/HTTP error in refresh: %s — body: %s", e, body_preview)
                         last_error = e
                         continue
 
@@ -697,14 +694,8 @@ class IFlowAuthBase(GoogleOAuthBase):
         - OAuth: credential_identifier is a file path to JSON credentials
         - API Key: credential_identifier is the API key string itself
         """
-        # Detect credential type
-        if os.path.isfile(credential_identifier):
-            # OAuth credential: file path to JSON
-            lib_logger.debug(
-                f"Using OAuth credentials from file: {credential_identifier}"
-            )
-            creds = await self._load_credentials(credential_identifier)
-
+        is_oauth, creds = await self._resolve_credentials(credential_identifier)
+        if is_oauth:
             # Check if token needs refresh
             if self._is_token_expired(creds):
                 creds = await self._refresh_token(credential_identifier)
@@ -713,9 +704,7 @@ class IFlowAuthBase(GoogleOAuthBase):
             if not api_key:
                 raise ValueError("Missing api_key in iFlow OAuth credentials")
         else:
-            # Direct API key: use as-is
-            lib_logger.debug("Using direct API key for iFlow")
-            api_key = credential_identifier
+            api_key = creds
 
         base_url = "https://apis.iflow.cn/v1"
         return base_url, api_key

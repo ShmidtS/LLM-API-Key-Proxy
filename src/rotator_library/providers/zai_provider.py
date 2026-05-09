@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from .provider_interface import ProviderInterface, UsageResetConfigDef
+from .utilities.response_helpers import parse_bearer_json, parse_post_json_response
 from .utilities.zai_quota_tracker import ZaiQuotaTracker
 from ..config.defaults import env_int
 
@@ -198,22 +199,11 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
 
     async def get_models(self, api_key: str, client: httpx.AsyncClient) -> List[str]:
         try:
-            response = await client.get(
+            data = await parse_bearer_json(
+                client,
                 f"{self.api_base}/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=30,
+                api_key,
             )
-            response.raise_for_status()
-            try:
-                data = response.json()
-            except (json.JSONDecodeError, ValueError) as e:
-                lib_logger.warning(
-                    "Invalid JSON from ZAI models: %s, status=%s",
-                    e,
-                    response.status_code,
-                )
-                lib_logger.debug("Invalid JSON body from ZAI models: %s", response.text[:200])
-                return self.get_static_models()
             models = list(ZAI_DOCUMENTED_MODELS)
             for model in data.get("data", []):
                 if (
@@ -272,22 +262,7 @@ class ZaiProvider(ZaiQuotaTracker, ProviderInterface):
                 params=params,
                 timeout=timeout,
             )
-        response.raise_for_status()
-        try:
-            return response.json()
-        except (json.JSONDecodeError, ValueError) as e:
-            lib_logger.warning(
-                "Invalid JSON response from %s: %s, status=%s",
-                self.provider_name,
-                e,
-                response.status_code,
-            )
-            lib_logger.debug(
-                "Invalid JSON body from %s: %s",
-                self.provider_name,
-                response.text[:200] if response.text else "<empty>",
-            )
-            raise
+        return await parse_post_json_response(response, self.provider_name)
 
     async def video_generate(
         self, credential: str, client: httpx.AsyncClient, **kwargs

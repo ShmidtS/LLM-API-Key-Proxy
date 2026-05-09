@@ -4,7 +4,6 @@
 import logging
 import os
 from pathlib import Path
-from typing import Union
 
 _IMPORT_PATCHES_APPLIED = False
 _LITELLM_RUNTIME_CONFIGURED = False
@@ -72,7 +71,7 @@ def configure_litellm_runtime() -> None:
     _LITELLM_RUNTIME_CONFIGURED = True
 
 
-def configure_client_logging(data_dir: Union[str, Path], configure_logging: bool) -> None:
+def configure_client_logging(data_dir: str | Path, configure_logging: bool) -> None:
     """Configure rotator_library logging for a client instance."""
     from ..failure_logger import configure_failure_logger
     from ..utils.paths import get_logs_dir

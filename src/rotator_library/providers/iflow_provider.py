@@ -3,13 +3,13 @@
 
 # src/rotator_library/providers/iflow_provider.py
 
-import json
 import time
 import os
 import httpx
 import logging
 from typing import List, Dict, Any
-from .provider_interface import ProviderInterface, strip_provider_prefix, build_bearer_headers
+from .provider_interface import ProviderInterface, strip_provider_prefix
+from .utilities.response_helpers import parse_bearer_json
 from .iflow_auth_base import IFlowAuthBase
 from .acompletion_mixin import ACompletionMixin
 from ..model_definitions import ModelDefinitions
@@ -154,16 +154,7 @@ class IFlowProvider(IFlowAuthBase, ACompletionMixin, ProviderInterface):
             api_base, api_key = await self.get_api_details(credential)
             models_url = f"{api_base.rstrip('/')}/models"
 
-            response = await client.get(
-                models_url, headers=build_bearer_headers(api_key)
-            )
-            response.raise_for_status()
-
-            try:
-                dynamic_data = response.json()
-            except (json.JSONDecodeError, ValueError) as e:
-                lib_logger.warning(f"Invalid JSON from iflow models: {e}, body={response.text[:200]}")
-                dynamic_data = {}
+            dynamic_data = await parse_bearer_json(client, models_url, api_key)
 
             # Handle both {data: [...]} and direct [...] formats
             model_list = (

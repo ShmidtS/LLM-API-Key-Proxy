@@ -7,7 +7,7 @@ import logging
 import os
 
 from ..utils.ttl_dict import TTLDict
-from .google_oauth_base import GoogleOAuthBase
+from .google_oauth_base import GOOGLE_BASE_OAUTH_SCOPES, GoogleOAuthBase
 from .utilities.gemini_shared_utils import CODE_ASSIST_ENDPOINT
 from .utilities.google_project_discovery import GoogleProjectDiscoveryMixin
 
@@ -51,11 +51,7 @@ class GeminiAuthBase(GoogleProjectDiscoveryMixin, GoogleOAuthBase):
         "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
     )
     CLIENT_SECRET = _GEMINI_CLIENT_SECRET
-    OAUTH_SCOPES = [
-        "https://www.googleapis.com/auth/cloud-platform",
-        "https://www.googleapis.com/auth/userinfo.email",
-        "https://www.googleapis.com/auth/userinfo.profile",
-    ]
+    OAUTH_SCOPES = GOOGLE_BASE_OAUTH_SCOPES
     ENV_PREFIX = "GEMINI_CLI"
     # CALLBACK_PORT and CALLBACK_PATH intentionally omitted:
     # parent defaults (8085, "/oauth2callback") are correct for Gemini CLI

@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 from .provider_interface import ProviderInterface, strip_provider_prefix
 from .utilities.nanogpt_quota_tracker import NanoGptQuotaTracker
+from .utilities.response_helpers import parse_bearer_json
 from ..config.defaults import env_int
 from ..model_definitions import ModelDefinitions
 
@@ -217,17 +218,11 @@ class NanoGptProvider(NanoGptQuotaTracker, ProviderInterface):
 
         # Source 2: Dynamic discovery from API
         try:
-            response = await client.get(
+            data = await parse_bearer_json(
+                client,
                 f"{NANOGPT_API_BASE}/api/v1/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=30,
+                api_key,
             )
-            response.raise_for_status()
-            try:
-                data = response.json()
-            except (json.JSONDecodeError, ValueError) as e:
-                lib_logger.warning(f"Invalid JSON from nanogpt models: {e}, body={response.text[:200]}")
-                data = {}
 
             dynamic_count = 0
             for model in data.get("data", []):
@@ -296,17 +291,11 @@ class NanoGptProvider(NanoGptQuotaTracker, ProviderInterface):
         Non-subscription (paid) models are pay-as-you-go and not limited.
         """
         try:
-            response = await client.get(
+            data = await parse_bearer_json(
+                client,
                 f"{NANOGPT_API_BASE}/api/subscription/v1/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=30,
+                api_key,
             )
-            response.raise_for_status()
-            try:
-                data = response.json()
-            except (json.JSONDecodeError, ValueError) as e:
-                lib_logger.warning(f"Invalid JSON from nanogpt subscription models: {e}, body={response.text[:200]}")
-                data = {}
 
             new_models = set()
             for model in data.get("data", []):

@@ -10,7 +10,6 @@
 
 import os
 import sys
-import time
 
 from . import bootstrap as _bootstrap
 
@@ -19,7 +18,7 @@ apply_import_time_patches()
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 import httpx
 import litellm  # type: ignore[import-untyped]
 from pathlib import Path
@@ -67,16 +66,8 @@ _PROVIDER_METHOD_NO_PROVIDER = object()
 _PROVIDER_METHOD_NO_METHOD = object()
 
 from ..usage_manager import UsageManager
-from ..failure_logger import configure_failure_logger
-from litellm.llms.openai.common_utils import OpenAIError  # type: ignore[import-untyped]
 
-from ..error_types import (
-    mask_credential,
-    NoAvailableKeysError,
-)
-from ..error_handler import (
-    classify_error,
-)
+from ..error_types import mask_credential
 from ..provider_routing_config import ProviderConfig
 from ..http_client_pool import HttpClientPool, close_http_pool
 from ..providers import PROVIDER_PLUGINS
