@@ -453,19 +453,26 @@ def anthropic_to_openai_tools(
 
 
 def anthropic_to_openai_tool_choice(
-    anthropic_tool_choice: Optional[Dict[str, Any]],
+    anthropic_tool_choice: Optional[Union[str, Dict[str, Any]]],
 ) -> Optional[Union[str, Dict[str, Any]]]:
     """
     Convert Anthropic tool_choice to OpenAI format.
 
     Args:
-        anthropic_tool_choice: Tool choice in Anthropic format
+        anthropic_tool_choice: Tool choice in Anthropic format (str or dict)
 
     Returns:
         Tool choice in OpenAI format
     """
     if not anthropic_tool_choice:
         return None
+
+    if isinstance(anthropic_tool_choice, str):
+        if anthropic_tool_choice == "any":
+            return "required"
+        elif anthropic_tool_choice == "none":
+            return "none"
+        return "auto"
 
     choice_type: str = anthropic_tool_choice.get("type", "auto")
 
@@ -623,7 +630,7 @@ def translate_anthropic_request(request: AnthropicMessagesRequest) -> Dict[str, 
     if tools and not isinstance(tools[0], dict):
         tools = [t.model_dump(exclude_none=True) if hasattr(t, "model_dump") else t for t in tools]  # type: ignore[assignment]
 
-    tool_choice: Optional[Dict[str, Any]] = request.tool_choice
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = request.tool_choice
     if tool_choice is not None and hasattr(tool_choice, "model_dump"):
         tool_choice = tool_choice.model_dump(exclude_none=True)  # type: ignore[union-attr]
 

@@ -101,7 +101,7 @@ class AnthropicMessagesRequest(BaseModel):
     stop_sequences: Optional[List[str]] = None
     stream: Optional[bool] = False
     tools: Optional[List[AnthropicTool]] = None
-    tool_choice: Optional[dict] = None
+    tool_choice: Optional[Union[str, dict]] = None
     metadata: Optional[dict] = None
     thinking: Optional[AnthropicThinkingConfig] = None
 
@@ -124,5 +124,5 @@ class AnthropicCountTokensRequest(BaseModel):
     messages: List[AnthropicMessage]
     system: Optional[Union[str, List[dict]]] = None
     tools: Optional[List[AnthropicTool]] = None
-    tool_choice: Optional[dict] = None
+    tool_choice: Optional[Union[str, dict]] = None
     thinking: Optional[AnthropicThinkingConfig] = None
