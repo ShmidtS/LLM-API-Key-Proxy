@@ -291,7 +291,7 @@ def handle_litellm_error(e: Exception, error_format: str = "openai") -> HTTPExce
             return HTTPException(status_code=status_code, detail=detail)
 
     # Fallback for unmatched litellm errors — use generic message to avoid information leakage
-    from proxy_app.routes.error_handler import internal_server_error_payload
+    from proxy_app._stream_types import internal_server_error_payload
 
     detail = (
         "Internal server error"

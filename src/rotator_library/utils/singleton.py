@@ -48,7 +48,7 @@ class SingletonMeta(type):
     """
 
     _instances: Dict[Any, Any] = {}
-    _lock: threading.Lock = threading.Lock()
+    _lock: threading.RLock = threading.RLock()
 
     def __call__(cls, *args: Any, **kwargs: Any) -> Any:
         # Fast path: instance already exists

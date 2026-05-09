@@ -9,24 +9,11 @@ import json
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from proxy_app._stream_types import internal_server_error_payload
 from proxy_app.dependencies import make_error_response
 from proxy_app.streaming import handle_litellm_error
 
 logger = logging.getLogger(__name__)
-
-
-def internal_server_error_payload(format: str) -> dict:
-    if format == "anthropic":
-        return {
-            "type": "error",
-            "error": {
-                "type": "api_error",
-                "message": "Internal server error",
-            },
-        }
-    if format == "log":
-        return {"error": "Internal server error"}
-    return make_error_response("Internal server error", "api_error")
 
 
 def _is_no_available_keys_error(error: Exception) -> bool:

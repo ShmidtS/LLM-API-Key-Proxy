@@ -258,9 +258,9 @@ async def export_all_provider_credentials(provider_name: str):
     )
 
 
-async def combine_provider_credentials(provider_name: str):
+async def export_combined_provider_credentials(provider_name: str):
     """
-    Combine all credentials for a specific provider into a single .env file.
+    Export all credentials for a specific provider into a single .env file.
     Uses the auth class's list_credentials() and build_env_lines() methods.
     """
     display_name = provider_name.replace("_", " ").title()
@@ -548,19 +548,19 @@ async def export_credentials_submenu():
             input()
         # Combine per provider
         elif export_choice == "9":
-            await combine_provider_credentials("gemini_cli")
+            await export_combined_provider_credentials("gemini_cli")
             console.print("\n[dim]Press Enter to return to export menu...[/dim]")
             input()
         elif export_choice == "10":
-            await combine_provider_credentials("qwen_code")
+            await export_combined_provider_credentials("qwen_code")
             console.print("\n[dim]Press Enter to return to export menu...[/dim]")
             input()
         elif export_choice == "11":
-            await combine_provider_credentials("iflow")
+            await export_combined_provider_credentials("iflow")
             console.print("\n[dim]Press Enter to return to export menu...[/dim]")
             input()
         elif export_choice == "12":
-            await combine_provider_credentials("antigravity")
+            await export_combined_provider_credentials("antigravity")
             console.print("\n[dim]Press Enter to return to export menu...[/dim]")
             input()
         # Combine all providers

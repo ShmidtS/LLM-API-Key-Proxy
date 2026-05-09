@@ -16,7 +16,7 @@ from litellm.exceptions import APIConnectionError, InternalServerError, ServiceU
 
 from ..retry_base import HalfOpenSlot, _ErrorDecision, RetryBaseMixin
 from ...config.defaults import MAX_TOTAL_ATTEMPTS, RETRY_SAME_KEY_MAX_WAIT
-from .._retry import (
+from ...error_handler import (
     classify_error,
     should_retry_same_key,
     should_rotate_on_error,
@@ -30,7 +30,7 @@ from ...error_types import (
     PreRequestCallbackError,
     mask_credential,
 )
-from .._retry import log_failure
+from ...failure_logger import log_failure
 from ...request_sanitizer import sanitize_request_payload
 from ...utils.http_retry import compute_backoff_with_jitter
 from .context_builder import RetryContextBuilderMixin

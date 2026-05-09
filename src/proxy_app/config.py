@@ -3,20 +3,7 @@
 
 """Centralized defaults for proxy application runtime tuning."""
 
-import logging
-import os
-
-
-_logger = logging.getLogger(__name__)
-
-
-def env_int(key: str, default: int) -> int:
-    value = os.getenv(key, str(default))
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        _logger.warning("Invalid integer for %s=%r; using default %s", key, value, default)
-        return default
+from rotator_library.utils.env import env_int
 
 
 DEFAULT_HOST = "127.0.0.1"

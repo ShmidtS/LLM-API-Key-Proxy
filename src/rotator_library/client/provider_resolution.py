@@ -39,11 +39,11 @@ def filter_configured_credentials(
     return filtered_api_keys, filtered_oauth_credentials
 
 
-def combine_provider_credentials(
+def merge_provider_credential_sources(
     api_keys: dict[str, list[str]],
     oauth_credentials: dict[str, list[str]],
 ) -> dict[str, list[str]]:
-    """Combine API keys and OAuth account paths by provider."""
+    """Merge API keys and OAuth account paths by provider."""
     all_credentials: dict[str, list[str]] = {}
     for provider, keys in api_keys.items():
         all_credentials.setdefault(provider, []).extend(keys)
