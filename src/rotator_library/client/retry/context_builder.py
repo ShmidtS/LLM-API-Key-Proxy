@@ -11,7 +11,7 @@ from typing import Any
 
 from ..retry_base import _RetryContext
 from ...config.defaults import TRACE
-from ...error_types import RequestErrorAccumulator
+from ...error_accumulator import RequestErrorAccumulator
 from ...utils.model_utils import (
     extract_provider_from_model,
     normalize_model_string,

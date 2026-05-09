@@ -34,12 +34,12 @@ class ChunkBatcher:
 
     """
     Batch SSE events for improved throughput.
-    
+
     Buffers small events and flushes when:
     - Buffer size exceeds max_size
     - Time since last flush exceeds max_delay_ms
     """
-    
+
     def __init__(self, max_size: int = 16384, max_delay_ms: int = 1):
         self.buffer = []
         self.current_size = 0
@@ -72,12 +72,12 @@ class ChunkBatcher:
             return self.flush()
 
         return None
-    
+
     def flush(self) -> str:
         """Flush buffer and return concatenated events."""
         if not self.buffer:
             return ""
-        
+
         result = "".join(self.buffer)
         self.buffer.clear()
         self.current_size = 0
@@ -222,62 +222,422 @@ def _make_error_event(error_details: Any) -> str:
     return f"event: error\ndata: {json_dumps(error_event)}\n\n"
 
 
-async def _finalize_anthropic_stream(
-    batcher: ChunkBatcher,
-    thinking_block_started: bool,
-    content_block_started: bool,
-    current_block_index: int,
-    tool_block_indices: dict,
-    tool_calls_by_index: dict,
-    output_tokens: int,
-    cached_tokens: int,
-    cache_creation_tokens: int,
-    transaction_logger: Optional["TransactionLogger"],
-    request_id: str,
-    original_model: str,
-    _thinking_parts: list,
-    _text_parts: list,
-    input_tokens: int,
-) -> AsyncGenerator[str, None]:
-    """Close all open content blocks and send final Anthropic stream events."""
-    batch_add = batcher.add
-    if thinking_block_started:
-        event_str = _make_content_block_stop_event(current_block_index)
-        if event := batch_add(event_str):
-            yield event
-        current_block_index += 1
+# Sentinel returned by _StreamTranslator._parse_raw_chunk when SSE [DONE] is received
+_PARSED_DONE = object()
 
-    if content_block_started:
-        event_str = _make_content_block_stop_event(current_block_index)
-        if event := batch_add(event_str):
-            yield event
-        current_block_index += 1
 
-    for tc_index in sorted(tool_block_indices.keys()):
-        block_idx = tool_block_indices[tc_index]
-        event_str = _make_content_block_stop_event(block_idx)
-        if event := batch_add(event_str):
-            yield event
+class _StreamTranslator:
+    """Stateful OpenAI-to-Anthropic SSE stream translator.
 
-    stop_reason = "tool_use" if tool_calls_by_index else "end_turn"
+    Encapsulates all per-request state and dispatches chunk events
+    to specialised private handlers.
+    """
 
-    event_str = _make_message_delta_event(stop_reason, output_tokens, cached_tokens, cache_creation_tokens)
-    if event := batch_add(event_str):
-        yield event
-    event_str = _make_message_stop_event()
-    if event := batch_add(event_str):
-        yield event
+    _HEARTBEAT_INTERVAL = 30  # seconds
+    _DISCONNECT_CHECK_INTERVAL = 50  # chunks
 
-    if remaining := batcher.flush():
-        yield remaining
+    __slots__ = (
+        "request_id", "original_model", "is_disconnected", "transaction_logger",
+        "batcher", "_batch_add",
+        "message_started", "content_block_started", "thinking_block_started",
+        "current_block_index",
+        "tool_calls_by_index", "tool_block_indices",
+        "input_tokens", "output_tokens", "cached_tokens", "cache_creation_tokens",
+        "_text_parts", "_thinking_parts",
+        "last_event_time", "_chunk_count",
+    )
 
-    if transaction_logger:
-        await _log_anthropic_response(
-            transaction_logger, request_id, original_model,
-            "".join(_thinking_parts), "".join(_text_parts),
-            tool_calls_by_index, input_tokens, output_tokens,
-            cached_tokens, cache_creation_tokens, stop_reason
+    def __init__(
+        self,
+        request_id: str,
+        original_model: str,
+        is_disconnected: Optional[Callable[[], Awaitable[bool]]],
+        transaction_logger: Optional["TransactionLogger"],
+        precomputed_input_tokens: Optional[int],
+    ):
+        self.request_id = request_id
+        self.original_model = original_model
+        self.is_disconnected = is_disconnected
+        self.transaction_logger = transaction_logger
+
+        self.batcher = ChunkBatcher(max_size=16384, max_delay_ms=1)
+        self._batch_add = self.batcher.add
+
+        self.message_started = False
+        self.content_block_started = False
+        self.thinking_block_started = False
+        self.current_block_index = 0
+
+        self.tool_calls_by_index: dict = {}
+        self.tool_block_indices: dict = {}
+
+        self.input_tokens = precomputed_input_tokens if precomputed_input_tokens is not None else 0
+        self.output_tokens = 0
+        self.cached_tokens = 0
+        self.cache_creation_tokens = 0
+
+        self._text_parts: list[str] = []
+        self._thinking_parts: list[str] = []
+
+        self.last_event_time = monotonic()
+        self._chunk_count = 0
+
+    # ------------------------------------------------------------------
+    # Chunk parsing
+    # ------------------------------------------------------------------
+
+    def _parse_raw_chunk(self, raw_chunk: Any) -> Any:
+        """Parse a raw chunk from the upstream stream.
+
+        Returns:
+            dict -- successfully parsed chunk,
+            _PARSED_DONE -- SSE ``[DONE]`` received (stream should finalize),
+            None -- unparseable / irrelevant chunk (skip).
+        """
+        if isinstance(raw_chunk, dict):
+            return raw_chunk
+        if isinstance(raw_chunk, str):
+            if not raw_chunk or not raw_chunk.startswith("data:"):
+                return None
+            data_content = raw_chunk[5:].strip()
+            if data_content == "[DONE]":
+                return _PARSED_DONE
+            try:
+                return json_loads(data_content)
+            except (ValueError, KeyError, TypeError) as e:
+                logger.debug("Failed to parse SSE data chunk: %s: %s", data_content, e, exc_info=True)
+                return None
+        return None
+
+    # ------------------------------------------------------------------
+    # Usage extraction
+    # ------------------------------------------------------------------
+
+    def _extract_usage(self, chunk: dict) -> None:
+        """Extract usage from chunk and update token counters."""
+        usage = chunk.get("usage")
+        if not usage:
+            return
+        if usage.get("prompt_tokens") is not None:
+            self.input_tokens = usage["prompt_tokens"]
+        raw_completion = usage.get("completion_tokens")
+        if raw_completion is not None:
+            self.output_tokens = raw_completion
+        prompt_details = usage.get("prompt_tokens_details")
+        if prompt_details:
+            raw_cached = prompt_details.get("cached_tokens")
+            if raw_cached is not None:
+                self.cached_tokens = raw_cached
+            raw_creation = prompt_details.get("cache_creation_tokens")
+            if raw_creation is not None:
+                self.cache_creation_tokens = raw_creation
+
+    # ------------------------------------------------------------------
+    # Block lifecycle helpers
+    # ------------------------------------------------------------------
+
+    def _emit_message_start(self, current_time: float) -> list[str]:
+        """Emit the message_start event (once per stream). Returns events to yield."""
+        event_str = _make_message_start_event(
+            self.request_id, self.original_model,
+            self.input_tokens, self.cached_tokens, self.cache_creation_tokens,
         )
+        self.message_started = True
+        self.last_event_time = current_time
+        events: list[str] = []
+        if event := self._batch_add(event_str):
+            events.append(event)
+        return events
+
+    def _close_thinking_block(self) -> list[str]:
+        """Close the thinking block if open. Returns events to yield."""
+        if not self.thinking_block_started:
+            return []
+        event_str = _make_content_block_stop_event(self.current_block_index)
+        self.current_block_index += 1
+        self.thinking_block_started = False
+        events: list[str] = []
+        if event := self._batch_add(event_str):
+            events.append(event)
+        return events
+
+    def _close_content_block(self) -> list[str]:
+        """Close the text content block if open. Returns events to yield."""
+        if not self.content_block_started:
+            return []
+        event_str = _make_content_block_stop_event(self.current_block_index)
+        self.current_block_index += 1
+        self.content_block_started = False
+        events: list[str] = []
+        if event := self._batch_add(event_str):
+            events.append(event)
+        return events
+
+    # ------------------------------------------------------------------
+    # Delta handlers
+    # ------------------------------------------------------------------
+
+    def _handle_thinking(self, delta: dict, current_time: float) -> list[str]:
+        """Handle reasoning/thinking content delta. Returns events to yield."""
+        reasoning_content = delta.get("reasoning_content")
+        if not reasoning_content:
+            return []
+
+        events: list[str] = []
+        if not self.thinking_block_started:
+            event_str = _make_content_block_start_event(self.current_block_index, "thinking")
+            if event := self._batch_add(event_str):
+                events.append(event)
+            self.thinking_block_started = True
+
+        event_str = _make_thinking_delta_event(self.current_block_index, reasoning_content)
+        if event := self._batch_add(event_str):
+            events.append(event)
+        self._thinking_parts.append(reasoning_content)
+        self.last_event_time = current_time
+        return events
+
+    def _handle_text(self, delta: dict, current_time: float) -> list[str]:
+        """Handle text content delta. Returns events to yield."""
+        content = delta.get("content")
+        if not content:
+            return []
+
+        events: list[str] = []
+        # Close thinking block if we were in one
+        if self.thinking_block_started and not self.content_block_started:
+            events.extend(self._close_thinking_block())
+
+        if not self.content_block_started:
+            event_str = _make_content_block_start_event(self.current_block_index, "text")
+            if event := self._batch_add(event_str):
+                events.append(event)
+            self.content_block_started = True
+
+        event_str = _make_text_delta_event(self.current_block_index, content)
+        if event := self._batch_add(event_str):
+            events.append(event)
+        self._text_parts.append(content)
+        self.last_event_time = current_time
+        return events
+
+    def _handle_tool_calls(self, delta: dict, current_time: float) -> list[str]:
+        """Handle tool call deltas. Returns events to yield."""
+        tool_calls = delta.get("tool_calls") or []
+        if not tool_calls:
+            return []
+
+        events: list[str] = []
+        for tc in tool_calls:
+            tc_index = tc.get("index", 0)
+
+            if tc_index not in self.tool_calls_by_index:
+                # Close previous blocks
+                events.extend(self._close_thinking_block())
+                events.extend(self._close_content_block())
+
+                # Start new tool use block
+                tc_id = tc.get("id")
+                if tc_id is None:
+                    tc_id = f"toolu_{uuid.uuid4().hex[:12]}"
+                self.tool_calls_by_index[tc_index] = {
+                    "id": tc_id,
+                    "name": tc.get("function", {}).get("name", ""),
+                    "arguments": "",
+                }
+                self.tool_block_indices[tc_index] = self.current_block_index
+
+                event_str = _make_content_block_start_event(
+                    self.current_block_index,
+                    "tool_use",
+                    id=self.tool_calls_by_index[tc_index]["id"],
+                    name=self.tool_calls_by_index[tc_index]["name"],
+                    input={},
+                )
+                if event := self._batch_add(event_str):
+                    events.append(event)
+                self.current_block_index += 1
+
+            # Accumulate arguments
+            func = tc.get("function", {})
+            if func.get("name"):
+                self.tool_calls_by_index[tc_index]["name"] = func["name"]
+            args_entry = self.tool_calls_by_index[tc_index]
+            if func.get("arguments"):
+                if "chunks" not in args_entry:
+                    args_entry["chunks"] = []
+                args_entry["chunks"].append(func["arguments"])
+                event_str = _make_input_json_delta_event(
+                    self.tool_block_indices[tc_index], func["arguments"]
+                )
+                if event := self._batch_add(event_str):
+                    events.append(event)
+                self.last_event_time = current_time
+
+        return events
+
+    # ------------------------------------------------------------------
+    # Stream finalization
+    # ------------------------------------------------------------------
+
+    async def _finalize_stream(self) -> AsyncGenerator[str, None]:
+        """Close all open content blocks and send final Anthropic stream events."""
+        batch_add = self._batch_add
+
+        if self.thinking_block_started:
+            event_str = _make_content_block_stop_event(self.current_block_index)
+            if event := batch_add(event_str):
+                yield event
+            self.current_block_index += 1
+
+        if self.content_block_started:
+            event_str = _make_content_block_stop_event(self.current_block_index)
+            if event := batch_add(event_str):
+                yield event
+            self.current_block_index += 1
+
+        for tc_index in sorted(self.tool_block_indices.keys()):
+            block_idx = self.tool_block_indices[tc_index]
+            event_str = _make_content_block_stop_event(block_idx)
+            if event := batch_add(event_str):
+                yield event
+
+        stop_reason = "tool_use" if self.tool_calls_by_index else "end_turn"
+
+        event_str = _make_message_delta_event(stop_reason, self.output_tokens, self.cached_tokens, self.cache_creation_tokens)
+        if event := batch_add(event_str):
+            yield event
+        event_str = _make_message_stop_event()
+        if event := batch_add(event_str):
+            yield event
+
+        if remaining := self.batcher.flush():
+            yield remaining
+
+        if self.transaction_logger:
+            await _log_anthropic_response(
+                self.transaction_logger, self.request_id, self.original_model,
+                "".join(self._thinking_parts), "".join(self._text_parts),
+                self.tool_calls_by_index, self.input_tokens, self.output_tokens,
+                self.cached_tokens, self.cache_creation_tokens, stop_reason,
+            )
+
+    # ------------------------------------------------------------------
+    # Connection error handling
+    # ------------------------------------------------------------------
+
+    def _emit_connection_error(self, error: Exception) -> list[str]:
+        """Emit error events for httpx/ConnectionError. Returns events to yield."""
+        logger.error("Error in Anthropic streaming wrapper: %s", error)
+
+        error_message = f"Error: {str(error)}"
+        events: list[str] = []
+
+        if not self.message_started:
+            event_str = _make_message_start_event(
+                self.request_id, self.original_model,
+                self.input_tokens, self.cached_tokens, self.cache_creation_tokens,
+            )
+            if event := self._batch_add(event_str):
+                events.append(event)
+        event_str = _make_content_block_start_event(self.current_block_index, "text")
+        if event := self._batch_add(event_str):
+            events.append(event)
+        event_str = _make_text_delta_event(self.current_block_index, error_message)
+        if event := self._batch_add(event_str):
+            events.append(event)
+        event_str = _make_content_block_stop_event(self.current_block_index)
+        if event := self._batch_add(event_str):
+            events.append(event)
+        event_str = _make_message_delta_event("end_turn", 0, self.cached_tokens, self.cache_creation_tokens)
+        if event := self._batch_add(event_str):
+            events.append(event)
+        event_str = _make_message_stop_event()
+        if event := self._batch_add(event_str):
+            events.append(event)
+
+        # Flush any remaining events
+        if remaining := self.batcher.flush():
+            events.append(remaining)
+
+        # Send formal error event
+        error_event = {
+            "type": "error",
+            "error": {"type": "api_error", "message": str(error)},
+        }
+        events.append(f"event: error\ndata: {json_dumps(error_event)}\n\n")
+
+        return events
+
+    # ------------------------------------------------------------------
+    # Main translation loop
+    # ------------------------------------------------------------------
+
+    async def translate(self, openai_stream: AsyncGenerator[Any, None]) -> AsyncGenerator[str, None]:
+        """Main loop: consume OpenAI SSE chunks, yield Anthropic SSE events."""
+        try:
+            async for raw_chunk in openai_stream:
+                self._chunk_count += 1
+                if (self.is_disconnected is not None
+                        and self._chunk_count % self._DISCONNECT_CHECK_INTERVAL == 0
+                        and await self.is_disconnected()):
+                    break
+
+                # STREAM_DONE sentinel: stream is complete
+                if raw_chunk is STREAM_DONE:
+                    async for event in self._finalize_stream():
+                        yield event
+                    break
+
+                chunk = self._parse_raw_chunk(raw_chunk)
+                if chunk is _PARSED_DONE:
+                    async for event in self._finalize_stream():
+                        yield event
+                    break
+                if chunk is None:
+                    continue
+
+                # Send heartbeat if no events for a while
+                current_time = monotonic()
+                if current_time - self.last_event_time > self._HEARTBEAT_INTERVAL:
+                    yield ": heartbeat\n\n"
+                    self.last_event_time = current_time
+
+                # Internal retry pipeline reports terminal failures as OpenAI-style
+                # error payloads. Convert them to Anthropic SSE errors.
+                if "error" in chunk:
+                    if remaining := self.batcher.flush():
+                        yield remaining
+                    yield _make_error_event(chunk.get("error"))
+                    return
+
+                self._extract_usage(chunk)
+
+                # Send message_start on first chunk
+                if not self.message_started:
+                    for ev in self._emit_message_start(current_time):
+                        yield ev
+
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+
+                delta = choices[0].get("delta", {})
+
+                for ev in self._handle_thinking(delta, current_time):
+                    yield ev
+                for ev in self._handle_text(delta, current_time):
+                    yield ev
+                for ev in self._handle_tool_calls(delta, current_time):
+                    yield ev
+
+        except GeneratorExit:
+            raise
+        except asyncio.CancelledError:
+            raise
+        except (httpx.HTTPError, ConnectionError) as e:
+            for ev in self._emit_connection_error(e):
+                yield ev
 
 
 async def anthropic_streaming_wrapper_fast(
@@ -319,266 +679,15 @@ async def anthropic_streaming_wrapper_fast(
     if request_id is None:
         request_id = f"msg_{uuid.uuid4().hex[:24]}"
 
-    # State tracking
-    message_started = False
-    content_block_started = False
-    thinking_block_started = False
-    current_block_index = 0
-
-    # Tool calls tracking
-    tool_calls_by_index: dict = {}  # Track tool calls by their index
-    tool_block_indices: dict = {}  # Track which block index each tool call uses
-
-    # Token tracking - use precomputed input tokens as fallback
-    # This is critical for providers that don't return usage in stream (e.g., Kilocode)
-    input_tokens = precomputed_input_tokens if precomputed_input_tokens is not None else 0
-    output_tokens = 0
-    cached_tokens = 0
-    cache_creation_tokens = 0
-
-    # Accumulated content for logging (list + join for O(n) instead of += O(n^2))
-    _text_parts: list[str] = []
-    _thinking_parts: list[str] = []
-    
-    # Initialize chunk batcher for improved throughput
-    batcher = ChunkBatcher(max_size=16384, max_delay_ms=1)
-    batch_add = batcher.add
-
-    # Heartbeat tracking to prevent connection timeouts
-    last_event_time = monotonic()
-    HEARTBEAT_INTERVAL = 30  # seconds
-
-    _chunk_count = 0
-    try:
-        async for raw_chunk in openai_stream:
-            # Check for client disconnection every 20 chunks (avoid per-chunk syscall overhead)
-            _chunk_count += 1
-            if is_disconnected is not None and _chunk_count % 50 == 0 and await is_disconnected():
-                break
-
-            # STREAM_DONE sentinel: stream is complete
-            if raw_chunk is STREAM_DONE:
-                async for event in _finalize_anthropic_stream(
-                    batcher, thinking_block_started, content_block_started,
-                    current_block_index, tool_block_indices, tool_calls_by_index,
-                    output_tokens, cached_tokens, cache_creation_tokens,
-                    transaction_logger, request_id, original_model,
-                    _thinking_parts, _text_parts, input_tokens,
-                ):
-                    yield event
-                break
-
-            # Dict chunk (new internal pipeline format)
-            if isinstance(raw_chunk, dict):
-                chunk = raw_chunk
-            elif isinstance(raw_chunk, str):
-                # Legacy SSE string format (backward compat)
-                if not raw_chunk or not raw_chunk.startswith("data:"):
-                    continue
-                data_content = raw_chunk[5:].strip()
-                if data_content == "[DONE]":
-                    async for event in _finalize_anthropic_stream(
-                        batcher, thinking_block_started, content_block_started,
-                        current_block_index, tool_block_indices, tool_calls_by_index,
-                        output_tokens, cached_tokens, cache_creation_tokens,
-                        transaction_logger, request_id, original_model,
-                        _thinking_parts, _text_parts, input_tokens,
-                    ):
-                        yield event
-                    break
-
-                try:
-                    chunk = json_loads(data_content)
-                except (ValueError, KeyError, TypeError) as e:
-                    logger.debug("Failed to parse SSE data chunk: %s: %s", data_content, e, exc_info=True)
-                    continue
-            else:
-                continue
-
-            # Send heartbeat if no events for a while
-            current_time = monotonic()
-            if current_time - last_event_time > HEARTBEAT_INTERVAL:
-                yield ": heartbeat\n\n"
-                last_event_time = current_time
-
-            # Internal retry pipeline reports terminal failures as OpenAI-style
-            # error payloads. Convert them to Anthropic SSE errors instead of
-            # treating them as empty successful messages.
-            if "error" in chunk:
-                if remaining := batcher.flush():
-                    yield remaining
-                yield _make_error_event(chunk.get("error"))
-                return
-
-            # Extract usage if present
-            if "usage" in chunk and chunk["usage"]:
-                usage = chunk["usage"]
-                # Provider returned usage - use it (overrides precomputed)
-                if usage.get("prompt_tokens") is not None:
-                    input_tokens = usage["prompt_tokens"]
-                raw_completion = usage.get("completion_tokens")
-                if raw_completion is not None:
-                    output_tokens = raw_completion
-                # Extract cached tokens from prompt_tokens_details
-                if usage.get("prompt_tokens_details"):
-                    prompt_details = usage["prompt_tokens_details"]
-                    raw_cached = prompt_details.get("cached_tokens")
-                    if raw_cached is not None:
-                        cached_tokens = raw_cached
-                    raw_creation = prompt_details.get("cache_creation_tokens")
-                    if raw_creation is not None:
-                        cache_creation_tokens = raw_creation
-
-            # Send message_start on first chunk
-            if not message_started:
-                event_str = _make_message_start_event(request_id, original_model, input_tokens, cached_tokens, cache_creation_tokens)
-                if event := batch_add(event_str):
-                    yield event
-                message_started = True
-                last_event_time = current_time
-
-            choices = chunk.get("choices") or []
-            if not choices:
-                continue
-
-            delta = choices[0].get("delta", {})
-
-            # Handle reasoning/thinking content
-            reasoning_content = delta.get("reasoning_content")
-            if reasoning_content:
-                if not thinking_block_started:
-                    event_str = _make_content_block_start_event(current_block_index, "thinking")
-                    if event := batch_add(event_str):
-                        yield event
-                    thinking_block_started = True
-
-                event_str = _make_thinking_delta_event(current_block_index, reasoning_content)
-                if event := batch_add(event_str):
-                    yield event
-                _thinking_parts.append(reasoning_content)
-                last_event_time = current_time
-
-            # Handle text content
-            content = delta.get("content")
-            if content:
-                # Close thinking block if we were in one
-                if thinking_block_started and not content_block_started:
-                    event_str = _make_content_block_stop_event(current_block_index)
-                    if event := batch_add(event_str):
-                        yield event
-                    current_block_index += 1
-                    thinking_block_started = False
-
-                if not content_block_started:
-                    event_str = _make_content_block_start_event(current_block_index, "text")
-                    if event := batch_add(event_str):
-                        yield event
-                    content_block_started = True
-
-                event_str = _make_text_delta_event(current_block_index, content)
-                if event := batch_add(event_str):
-                    yield event
-                _text_parts.append(content)
-                last_event_time = current_time
-
-            # Handle tool calls
-            tool_calls = delta.get("tool_calls") or []
-            for tc in tool_calls:
-                tc_index = tc.get("index", 0)
-
-                if tc_index not in tool_calls_by_index:
-                    # Close previous blocks
-                    if thinking_block_started:
-                        event_str = _make_content_block_stop_event(current_block_index)
-                        if event := batch_add(event_str):
-                            yield event
-                        current_block_index += 1
-                        thinking_block_started = False
-
-                    if content_block_started:
-                        event_str = _make_content_block_stop_event(current_block_index)
-                        if event := batch_add(event_str):
-                            yield event
-                        current_block_index += 1
-                        content_block_started = False
-
-                    # Start new tool use block
-                    tc_id = tc.get("id")
-                    if tc_id is None:
-                        tc_id = f"toolu_{uuid.uuid4().hex[:12]}"
-                    tool_calls_by_index[tc_index] = {
-                        "id": tc_id,
-                        "name": tc.get("function", {}).get("name", ""),
-                        "arguments": "",
-                    }
-                    tool_block_indices[tc_index] = current_block_index
-
-                    event_str = _make_content_block_start_event(
-                        current_block_index,
-                        "tool_use",
-                        id=tool_calls_by_index[tc_index]["id"],
-                        name=tool_calls_by_index[tc_index]["name"],
-                        input={},
-                    )
-                    if event := batch_add(event_str):
-                        yield event
-                    current_block_index += 1
-
-                # Accumulate arguments
-                func = tc.get("function", {})
-                if func.get("name"):
-                    tool_calls_by_index[tc_index]["name"] = func["name"]
-                args_entry = tool_calls_by_index[tc_index]
-                if func.get("arguments"):
-                    if "chunks" not in args_entry:
-                        args_entry["chunks"] = []
-                    args_entry["chunks"].append(func["arguments"])
-                    event_str = _make_input_json_delta_event(
-                        tool_block_indices[tc_index], func["arguments"]
-                    )
-                    if event := batch_add(event_str):
-                        yield event
-                    last_event_time = current_time
-
-    except GeneratorExit:
-        raise
-    except asyncio.CancelledError:
-        raise
-    except (httpx.HTTPError, ConnectionError) as e:
-        logger.error("Error in Anthropic streaming wrapper: %s", e)
-
-        # Send error as visible text
-        error_message = f"Error: {str(e)}"
-        if not message_started:
-            event_str = _make_message_start_event(request_id, original_model, input_tokens, cached_tokens, cache_creation_tokens)
-            if event := batch_add(event_str):
-                yield event
-        event_str = _make_content_block_start_event(current_block_index, "text")
-        if event := batch_add(event_str):
-            yield event
-        event_str = _make_text_delta_event(current_block_index, error_message)
-        if event := batch_add(event_str):
-            yield event
-        event_str = _make_content_block_stop_event(current_block_index)
-        if event := batch_add(event_str):
-            yield event
-        event_str = _make_message_delta_event("end_turn", 0, cached_tokens, cache_creation_tokens)
-        if event := batch_add(event_str):
-            yield event
-        event_str = _make_message_stop_event()
-        if event := batch_add(event_str):
-            yield event
-
-        # Flush any remaining events
-        if remaining := batcher.flush():
-            yield remaining
-
-        # Send formal error event
-        error_event = {
-            "type": "error",
-            "error": {"type": "api_error", "message": str(e)},
-        }
-        yield f"event: error\ndata: {json_dumps(error_event)}\n\n"
+    translator = _StreamTranslator(
+        request_id=request_id,
+        original_model=original_model,
+        is_disconnected=is_disconnected,
+        transaction_logger=transaction_logger,
+        precomputed_input_tokens=precomputed_input_tokens,
+    )
+    async for event in translator.translate(openai_stream):
+        yield event
 
 
 async def _log_anthropic_response(

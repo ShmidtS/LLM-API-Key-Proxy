@@ -241,11 +241,11 @@ def anthropic_to_openai_messages(
                                     },
                                 }
                             )
-                        elif source.get("type") == "url":
+                        elif doc_source.get("type") == "url":
                             openai_content.append(
                                 {
                                     "type": "image_url",
-                                    "image_url": {"url": source.get("url", "")},
+                                    "image_url": {"url": doc_source.get("url", "")},
                                 }
                             )
                     elif block_type == "thinking":
@@ -616,23 +616,12 @@ def translate_anthropic_request(request: AnthropicMessagesRequest) -> Dict[str, 
     Returns:
         Dictionary containing the OpenAI-compatible request parameters
     """
-    messages: List[Dict[str, Any]] = [m.model_dump(exclude_none=True) for m in request.messages]  # type: ignore[assignment]
-    if messages and not isinstance(messages[0], dict):
-        messages = [m.model_dump(exclude_none=True) if hasattr(m, "model_dump") else m for m in messages]  # type: ignore[assignment]
+    messages = [m.model_dump(exclude_none=True) for m in request.messages]
 
-    system: Optional[Union[str, List[Dict[str, Any]]]] = request.system
-    if system is not None and hasattr(system, "model_dump"):
-        system = system.model_dump(exclude_none=True)  # type: ignore[union-attr]
+    openai_messages: List[Dict[str, Any]] = anthropic_to_openai_messages(messages, request.system)
 
-    openai_messages: List[Dict[str, Any]] = anthropic_to_openai_messages(messages, system)
-
-    tools: Optional[List[Dict[str, Any]]] = request.tools  # type: ignore[assignment]
-    if tools and not isinstance(tools[0], dict):
-        tools = [t.model_dump(exclude_none=True) if hasattr(t, "model_dump") else t for t in tools]  # type: ignore[assignment]
-
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = request.tool_choice
-    if tool_choice is not None and hasattr(tool_choice, "model_dump"):
-        tool_choice = tool_choice.model_dump(exclude_none=True)  # type: ignore[union-attr]
+    tools = [t.model_dump(exclude_none=True) for t in request.tools] if request.tools else None
+    tool_choice = request.tool_choice
 
     openai_tools: Optional[List[Dict[str, Any]]] = anthropic_to_openai_tools(tools)
     openai_tool_choice: Optional[Union[str, Dict[str, Any]]] = anthropic_to_openai_tool_choice(tool_choice)
