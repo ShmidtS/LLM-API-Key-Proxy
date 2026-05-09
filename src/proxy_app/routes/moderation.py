@@ -8,11 +8,10 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from rotator_library import RotatingClient
 
-import orjson
 from fastapi import APIRouter, Request, Depends
 
 from proxy_app.dependencies import get_rotating_client, verify_api_key
-from proxy_app.routes._helpers import log_request_to_console
+from proxy_app.routes._helpers import _parse_and_log
 from proxy_app.routes.error_handler import handle_route_errors
 
 router = APIRouter(tags=["moderation"])
@@ -31,11 +30,6 @@ async def moderations(
     Analyzes text for policy violations (hate, violence, sexual content, etc.).
     Supports providers via LiteLLM: OpenAI, Azure, etc.
     """
-    request_data = orjson.loads(await request.body())
-    log_request_to_console(
-        url=str(request.url),
-        client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
-        request_data=request_data,
-    )
+    request_data = await _parse_and_log(request)
     response = await client.amoderation(request=request, **request_data)
     return response

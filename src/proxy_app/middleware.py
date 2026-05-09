@@ -31,6 +31,33 @@ SECURITY_HEADERS = {
 }
 
 
+class SecurityHeadersMiddleware:
+    """Add default security headers to HTTP responses."""
+
+    def __init__(self, app):
+        self._app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        async def _send(message):
+            if message["type"] == "http.response.start":
+                message = {**message, "headers": self._headers_with_security_defaults(message)}
+            await send(message)
+
+        await self._app(scope, receive, _send)
+
+    def _headers_with_security_defaults(self, message):
+        headers = list(message.get("headers", []))
+        existing = {_hdr_lower(h[0]) for h in headers}
+        for name, value in SECURITY_HEADERS.items():
+            if name.lower() not in existing:
+                headers.append((name.encode(), value.encode()))
+        return headers
+
+
 class _NoGzipForSSE:
     """Apply gzip compression while passing streaming responses through."""
 
@@ -98,21 +125,13 @@ class _NoGzipForSSE:
         await self._handle_response_body(message, state, send)
 
     async def _handle_response_start(self, message, state, send):
-        headers = self._headers_with_security_defaults(message)
+        headers = list(message.get("headers", []))
         state["initial_message"] = {**message, "headers": headers}
         if not state["accept_gzip"]:
             state["passthrough"] = True
             await send(state["initial_message"])
             return
         state["skip"] = self._should_skip_compression(headers, state["initial_message"])
-
-    def _headers_with_security_defaults(self, message):
-        headers = list(message.get("headers", []))
-        existing = {_hdr_lower(h[0]) for h in headers}
-        for name, value in SECURITY_HEADERS.items():
-            if name.lower() not in existing:
-                headers.append((name.encode(), value.encode()))
-        return headers
 
     def _should_skip_compression(self, headers, initial_message):
         for h in headers:

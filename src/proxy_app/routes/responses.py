@@ -15,9 +15,8 @@ import orjson
 from fastapi import APIRouter, Request, Depends
 
 from proxy_app.dependencies import get_rotating_client, verify_api_key
-from proxy_app.streaming import streaming_response_wrapper, make_sse_response
-from proxy_app.detailed_logger import RawIOLogger
-from proxy_app.routes._helpers import log_request_to_console
+from proxy_app.routes._helpers import _parse_and_log, complete_or_stream, raw_logger_from_request
+from proxy_app.streaming import safe_aclose
 from proxy_app.routes.error_handler import handle_route_errors
 from rotator_library.utils.json_utils import sse_data_event
 
@@ -75,13 +74,9 @@ async def create_response(
     the rotator/LiteLLM pipeline, then translates the result back to Responses
     API shape for clients such as Codex CLI.
     """
-    request_data = orjson.loads(await request.body())
+    request_data = await _parse_and_log(request, log_transform=_responses_request_to_chat_request)
     chat_request_data = _responses_request_to_chat_request(request_data)
-
-    enable_raw_logging = getattr(request.app.state, "enable_raw_logging", False)
-    raw_logger = RawIOLogger() if enable_raw_logging else None
-    if raw_logger:
-        await raw_logger.log_request(headers=dict(request.headers), body=request_data)
+    raw_logger = raw_logger_from_request(request)
 
     logger.info(
         "Responses request normalized: model=%s stream=%s max_tokens=%s max_completion_tokens=%s has_max_output_tokens=%s tools=%s input_type=%s",
@@ -94,44 +89,24 @@ async def create_response(
         type(request_data.get("input")).__name__ if request_data.get("input") is not None else "none",
     )
 
-    log_request_to_console(
-        url=str(request.url),
-        client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
-        request_data=chat_request_data,
-    )
-
-    is_streaming = chat_request_data.get("stream", False)
-
-    try:
-        if is_streaming:
-            response_generator = client.acompletion(request=request, **chat_request_data)
-            chat_sse_stream = streaming_response_wrapper(request, response_generator, raw_logger)
-            return make_sse_response(
-                _chat_sse_to_responses_sse(
-                    chat_sse_stream,
-                    model=chat_request_data.get("model", ""),
-                )
-            )
-
-        response = await client.acompletion(request=request, **chat_request_data)  # type: ignore[reportGeneralTypeIssues]
-        if raw_logger:
-            response_headers = response.headers if hasattr(response, "headers") else None
-            status_code = response.status_code if hasattr(response, "status_code") else 200
-            await raw_logger.log_final_response(
-                status_code=status_code,
-                headers=response_headers,
-                body=response.model_dump(),
-            )
-        return _chat_completion_to_response(
-            response,
+    response = await complete_or_stream(
+        request,
+        chat_request_data,
+        client,
+        chat_request_data.get("stream", False),
+        raw_logger,
+        lambda stream: _chat_sse_to_responses_sse(
+            stream,
             model=chat_request_data.get("model", ""),
-        )
-    except Exception:
-        if getattr(request.app.state, "enable_request_logging", False) and raw_logger:
-            await raw_logger.log_final_response(
-                status_code=500, headers=None, body={"error": "Internal server error"}
-            )
-        raise
+        ),
+        log_body=request_data,
+    )
+    if chat_request_data.get("stream", False):
+        return response
+    return _chat_completion_to_response(
+        response,
+        model=chat_request_data.get("model", ""),
+    )
 
 
 def _responses_request_to_chat_request(request_data: dict[str, Any]) -> dict[str, Any]:
@@ -454,15 +429,10 @@ async def _chat_sse_to_responses_sse(
             yield _responses_sse_event(response_event)
         yield b"data: [DONE]\n\n"
     except GeneratorExit:
-        if hasattr(chat_sse_stream, "aclose"):
-            await chat_sse_stream.aclose()
+        await safe_aclose(chat_sse_stream)
         return
     finally:
-        if hasattr(chat_sse_stream, "aclose"):
-            try:
-                await chat_sse_stream.aclose()
-            except Exception as e:
-                logger.debug("Error closing SSE stream: %s", e)
+        await safe_aclose(chat_sse_stream)
 
 
 def _split_sse_blocks(raw: str | bytes) -> list[str]:

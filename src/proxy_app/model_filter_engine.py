@@ -29,6 +29,51 @@ from proxy_app.model_filter_models import (
 logger = logging.getLogger(__name__)
 
 
+class FilterRuleRepository:
+    """Persistence boundary for provider filter rules in .env."""
+
+    def __init__(self, env_path: Optional[Path] = None):
+        self.env_path = env_path or Path.cwd() / ".env"
+
+    def load_provider_rules(self, provider: str) -> Tuple[List[str], List[str]]:
+        """Load ignore and whitelist patterns for a provider."""
+        load_dotenv(override=True)
+
+        ignore_key = f"IGNORE_MODELS_{provider.upper()}"
+        whitelist_key = f"WHITELIST_MODELS_{provider.upper()}"
+
+        ignore_value = os.getenv(ignore_key, "")
+        whitelist_value = os.getenv(whitelist_key, "")
+
+        ignore_patterns = [p.strip() for p in ignore_value.split(",") if p.strip()]
+        whitelist_patterns = [p.strip() for p in whitelist_value.split(",") if p.strip()]
+        return ignore_patterns, whitelist_patterns
+
+    def save_provider_rules(
+        self, provider: str, ignore_patterns: List[str], whitelist_patterns: List[str]
+    ) -> bool:
+        """Save ignore and whitelist patterns for a provider."""
+        try:
+            ignore_key = f"IGNORE_MODELS_{provider.upper()}"
+            whitelist_key = f"WHITELIST_MODELS_{provider.upper()}"
+
+            if ignore_patterns:
+                set_key(str(self.env_path), ignore_key, ",".join(ignore_patterns))
+            else:
+                unset_key(str(self.env_path), ignore_key)
+
+            if whitelist_patterns:
+                set_key(str(self.env_path), whitelist_key, ",".join(whitelist_patterns))
+            else:
+                unset_key(str(self.env_path), whitelist_key)
+
+            return True
+        except Exception as e:
+            logger.error("Error saving to .env: %s", e)
+            traceback.print_exc()
+            return False
+
+
 class FilterEngine:
     """
     Core filtering logic with rule management.
@@ -38,7 +83,8 @@ class FilterEngine:
     Uses caching for performance with large model lists.
     """
 
-    def __init__(self):
+    def __init__(self, repository: Optional[FilterRuleRepository] = None):
+        self.repository = repository or FilterRuleRepository()
         self.ignore_rules: List[FilterRule] = []
         self.whitelist_rules: List[FilterRule] = []
         self._ignore_color_index = 0
@@ -325,61 +371,32 @@ class FilterEngine:
         """Load ignore/whitelist rules for a provider from environment."""
         self.reset()
         self._current_provider = provider
-        load_dotenv(override=True)
+        ignore_patterns, whitelist_patterns = self.repository.load_provider_rules(provider)
 
-        # Load ignore list
-        ignore_key = f"IGNORE_MODELS_{provider.upper()}"
-        ignore_value = os.getenv(ignore_key, "")
-        if ignore_value:
-            patterns = [p.strip() for p in ignore_value.split(",") if p.strip()]
-            for pattern in patterns:
-                self.add_ignore_rule(pattern)
-            self._original_ignore_patterns = set(patterns)
+        for pattern in ignore_patterns:
+            self.add_ignore_rule(pattern)
+        self._original_ignore_patterns = set(ignore_patterns)
 
-        # Load whitelist
-        whitelist_key = f"WHITELIST_MODELS_{provider.upper()}"
-        whitelist_value = os.getenv(whitelist_key, "")
-        if whitelist_value:
-            patterns = [p.strip() for p in whitelist_value.split(",") if p.strip()]
-            for pattern in patterns:
-                self.add_whitelist_rule(pattern)
-            self._original_whitelist_patterns = set(patterns)
+        for pattern in whitelist_patterns:
+            self.add_whitelist_rule(pattern)
+        self._original_whitelist_patterns = set(whitelist_patterns)
 
     def save_to_env(self, provider: str) -> bool:
         """
         Save current rules to .env file.
         Returns True if successful.
         """
-        env_path = Path.cwd() / ".env"
+        ignore_patterns = [rule.pattern for rule in self.ignore_rules]
+        whitelist_patterns = [rule.pattern for rule in self.whitelist_rules]
 
-        try:
-            ignore_key = f"IGNORE_MODELS_{provider.upper()}"
-            whitelist_key = f"WHITELIST_MODELS_{provider.upper()}"
-
-            # Save ignore patterns
-            ignore_patterns = [rule.pattern for rule in self.ignore_rules]
-            if ignore_patterns:
-                set_key(str(env_path), ignore_key, ",".join(ignore_patterns))
-            else:
-                # Remove the key if no patterns
-                unset_key(str(env_path), ignore_key)
-
-            # Save whitelist patterns
-            whitelist_patterns = [rule.pattern for rule in self.whitelist_rules]
-            if whitelist_patterns:
-                set_key(str(env_path), whitelist_key, ",".join(whitelist_patterns))
-            else:
-                unset_key(str(env_path), whitelist_key)
-
-            # Update original state
-            self._original_ignore_patterns = set(ignore_patterns)
-            self._original_whitelist_patterns = set(whitelist_patterns)
-
-            return True
-        except Exception as e:
-            logger.error("Error saving to .env: %s", e)
-            traceback.print_exc()
+        if not self.repository.save_provider_rules(
+            provider, ignore_patterns, whitelist_patterns
+        ):
             return False
+
+        self._original_ignore_patterns = set(ignore_patterns)
+        self._original_whitelist_patterns = set(whitelist_patterns)
+        return True
 
     def has_unsaved_changes(self) -> bool:
         """Check if current rules differ from saved state."""

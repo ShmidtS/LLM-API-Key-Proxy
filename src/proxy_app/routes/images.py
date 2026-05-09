@@ -12,9 +12,14 @@ from fastapi import APIRouter, Request, Depends
 
 from proxy_app.dependencies import get_rotating_client, verify_api_key
 from proxy_app.routes.error_handler import handle_route_errors
-from proxy_app.routes._helpers import proxy_provider_call, proxy_client_method
+from proxy_app.routes._helpers import (
+    proxy_client_method,
+    proxy_provider_status_call,
+    proxy_zai_route,
+)
 
 router = APIRouter(tags=["images"])
+_async_image_generate = proxy_zai_route("async_image_generate")
 
 
 @router.post("/v1/images/generations")
@@ -73,7 +78,7 @@ async def async_image_generations(
     _=Depends(verify_api_key),
 ) -> Any:
     """Async image generation endpoint (ZAI-specific). Returns a task ID for polling."""
-    return await proxy_provider_call(request, client, "zai", "async_image_generate")
+    return await _async_image_generate(request, client)
 
 
 @router.get("/v1/images/{image_id}")
@@ -85,6 +90,6 @@ async def get_image_status(
     _=Depends(verify_api_key),
 ) -> Any:
     """Retrieve status/result of an async image generation task (ZAI-specific)."""
-    return await client.call_provider_method(
-        "zai", "async_image_status", image_id=image_id
+    return await proxy_provider_status_call(
+        client, "zai", "async_image_status", "image_id", image_id
     )

@@ -15,6 +15,19 @@ from proxy_app.streaming import handle_litellm_error
 logger = logging.getLogger(__name__)
 
 
+def internal_server_error_payload(format: str) -> dict:
+    if format == "anthropic":
+        return {
+            "type": "error",
+            "error": {
+                "type": "api_error",
+                "message": "Internal server error",
+            },
+        }
+    if format == "log":
+        return {"error": "Internal server error"}
+    return make_error_response("Internal server error", "api_error")
+
 
 def _is_no_available_keys_error(error: Exception) -> bool:
     return error.__class__.__name__ == "NoAvailableKeysError"
@@ -119,22 +132,10 @@ def handle_route_errors(
                 prefix = f"{log_context}: " if log_context else ""
                 logging.error(f"{prefix}{e}", exc_info=True)
 
-                if error_format == "anthropic":
-                    raise HTTPException(
-                        status_code=500,
-                        detail={
-                            "type": "error",
-                            "error": {
-                                "type": "api_error",
-                                "message": "Internal server error",
-                            },
-                        },
-                    )
-                else:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=make_error_response("Internal server error", "api_error"),
-                    )
+                raise HTTPException(
+                    status_code=500,
+                    detail=internal_server_error_payload(error_format),
+                )
 
         return wrapper
 

@@ -34,7 +34,6 @@ from typing import Any, Dict, Optional
 import logging
 
 from rotator_library.utils.resilient_io import (
-    safe_write_json,
     safe_log_write,
     safe_mkdir,
 )

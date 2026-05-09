@@ -15,7 +15,7 @@ from fastapi import APIRouter, Request, Depends
 from proxy_app.models import EmbeddingRequest
 from proxy_app.dependencies import get_rotating_client, get_embedding_batcher, verify_api_key
 from proxy_app.batch_manager import EmbeddingBatcher
-from proxy_app.routes._helpers import log_request_to_console
+from proxy_app.routes._helpers import log_request_data
 from proxy_app.routes.error_handler import handle_route_errors
 
 router = APIRouter(tags=["embeddings"])
@@ -38,11 +38,7 @@ async def embeddings(
     - False: Passes requests directly to the provider.
     """
     request_data = body.model_dump(exclude_none=True)
-    log_request_to_console(
-        url=str(request.url),
-        client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
-        request_data=request_data,
-    )
+    log_request_data(request, request_data)
     if getattr(request.app.state, "use_embedding_batcher", False) and batcher:
         inputs = request_data.get("input", [])
         if isinstance(inputs, str):

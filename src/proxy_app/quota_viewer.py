@@ -183,50 +183,36 @@ def natural_sort_key(item: Dict[str, Any]) -> List:
     return [int(p) if p.isdigit() else p.lower() for p in parts]
 
 
-class QuotaViewer:
-    """Main Quota Viewer TUI class."""
+class QuotaApiClient:
+    """HTTP/API client for quota stats endpoints."""
 
-    def __init__(self, config: Optional[QuotaViewerConfig] = None):
-        """
-        Initialize the viewer.
-
-        Args:
-            config: Optional config object. If not provided, one will be created.
-        """
-        self.console = Console()
-        self.config = config or QuotaViewerConfig()
-        self.config.sync_with_launcher_config()
-
+    def __init__(self):
         self.current_remote: Optional[Dict[str, Any]] = None
         self.cached_stats: Optional[Dict[str, Any]] = None
         self.last_error: Optional[str] = None
-        self.running = True
-        self.view_mode = "current"  # "current" or "global"
 
-    def _get_headers(self) -> Dict[str, str]:
+    def get_headers(self) -> Dict[str, str]:
         """Get HTTP headers including auth if configured."""
         headers = {}
         if self.current_remote and self.current_remote.get("api_key"):
             headers["Authorization"] = f"Bearer {self.current_remote['api_key']}"
         return headers
 
-    def _get_base_url(self) -> str:
+    def get_base_url(self) -> str:
         """Get base URL for the current remote."""
         if not self.current_remote:
             return "http://127.0.0.1:8000"
         host = self.current_remote.get("host", "127.0.0.1")
         host = normalize_host_for_connection(host)
 
-        # If host is a full URL, use it directly (strip trailing slash)
         if is_full_url(host):
             return host.rstrip("/")
 
-        # Otherwise construct from host:port
         port = self.current_remote.get("port", 8000)
         scheme = get_scheme_for_host(host, port)
         return f"{scheme}://{host}:{port}"
 
-    def _build_endpoint_url(self, endpoint: str) -> str:
+    def build_endpoint_url(self, endpoint: str) -> str:
         """
         Build a full endpoint URL with smart path handling.
 
@@ -235,40 +221,27 @@ class QuotaViewer:
           -> "https://api.example.com/v1/quota-stats" (no duplication)
         - Base: "http://localhost:8000", Endpoint: "/v1/quota-stats"
           -> "http://localhost:8000/v1/quota-stats"
-
-        Args:
-            endpoint: The endpoint path (e.g., "/v1/quota-stats")
-
-        Returns:
-            Full URL string
         """
-        base_url = self._get_base_url()
+        base_url = self.get_base_url()
         endpoint = endpoint.lstrip("/")
 
-        # Check if base URL already ends with a path segment that matches
-        # the start of the endpoint (e.g., base ends with /v1, endpoint starts with v1/)
         from urllib.parse import urlparse
 
         parsed = urlparse(base_url)
         base_path = parsed.path.rstrip("/")
 
-        # If base has a path and endpoint starts with the same segment, avoid duplication
         if base_path:
-            # e.g., base_path = "/v1", endpoint = "v1/quota-stats"
-            # We want to produce "/v1/quota-stats", not "/v1/v1/quota-stats"
             base_segments = base_path.split("/")
             endpoint_segments = endpoint.split("/")
 
-            # Check if first endpoint segment matches last base segment
             if base_segments and endpoint_segments:
                 if base_segments[-1] == endpoint_segments[0]:
-                    # Skip the duplicated segment in endpoint
                     endpoint = "/".join(endpoint_segments[1:])
 
         return f"{base_url}/{endpoint}"
 
-    def _handle_httpx_error(self, exc: Exception) -> None:
-        """Handle httpx exceptions by setting self.last_error and returning None."""
+    def handle_httpx_error(self, exc: Exception) -> None:
+        """Handle httpx exceptions by setting last_error and returning None."""
         if isinstance(exc, httpx.ConnectError):
             self.last_error = "Connection failed. Is the proxy running?"
         elif isinstance(exc, httpx.TimeoutException):
@@ -280,27 +253,16 @@ class QuotaViewer:
     def check_connection(
         self, remote: Dict[str, Any], timeout: Optional[float] = None
     ) -> Tuple[bool, str]:
-        """
-        Check if a remote proxy is reachable.
-
-        Args:
-            remote: Remote configuration dict
-            timeout: Connection timeout in seconds (defaults to TimeoutConfig.quota_viewer_connect)
-
-        Returns:
-            Tuple of (is_online, status_message)
-        """
+        """Check if a remote proxy is reachable."""
         if timeout is None:
             timeout = TimeoutConfig.quota_viewer_connect()
         host = remote.get("host", "127.0.0.1")
         host = normalize_host_for_connection(host)
 
-        # If host is a full URL, extract scheme and netloc to hit root
         if is_full_url(host):
             from urllib.parse import urlparse
 
             parsed = urlparse(host)
-            # Hit the root domain, not the path (e.g., /v1 would 404)
             url = f"{parsed.scheme}://{parsed.netloc}/"
         else:
             port = remote.get("port", 8000)
@@ -331,22 +293,14 @@ class QuotaViewer:
             return False, str(e)[:20]
 
     def fetch_stats(self, provider: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """
-        Fetch quota stats from the current remote.
-
-        Args:
-            provider: Optional provider filter
-
-        Returns:
-            Stats dict or None on failure
-        """
-        url = self._build_endpoint_url("/v1/quota-stats")
+        """Fetch quota stats from the current remote."""
+        url = self.build_endpoint_url("/v1/quota-stats")
         if provider:
             url += f"?provider={provider}"
 
         try:
             client = get_http_client()
-            response = client.get(url, headers=self._get_headers(), timeout=TimeoutConfig.quota_viewer_fetch())
+            response = client.get(url, headers=self.get_headers(), timeout=TimeoutConfig.quota_viewer_fetch())
 
             if response.status_code == 401:
                 self.last_error = "Authentication failed. Check API key."
@@ -366,47 +320,30 @@ class QuotaViewer:
             return self.cached_stats
 
         except httpx.ConnectError as e:
-            return self._handle_httpx_error(e)
+            return self.handle_httpx_error(e)
         except httpx.TimeoutException as e:
-            return self._handle_httpx_error(e)
+            return self.handle_httpx_error(e)
         except Exception as e:
-            return self._handle_httpx_error(e)
+            return self.handle_httpx_error(e)
 
-    def _merge_provider_stats(self, provider: str, result: Dict[str, Any]) -> None:
-        """
-        Merge provider-specific stats into the existing cache.
-
-        Updates just the specified provider's data and recalculates the
-        summary fields to reflect the change.
-
-        Args:
-            provider: Provider name that was refreshed
-            result: API response containing the refreshed provider data
-        """
+    def merge_provider_stats(self, provider: str, result: Dict[str, Any]) -> None:
+        """Merge provider-specific stats into the existing cache."""
         if not self.cached_stats:
             self.cached_stats = result
             return
 
-        # Merge provider data
         if "providers" in result and provider in result["providers"]:
             if "providers" not in self.cached_stats:
                 self.cached_stats["providers"] = {}
             self.cached_stats["providers"][provider] = result["providers"][provider]
 
-        # Update timestamp
         if "timestamp" in result:
             self.cached_stats["timestamp"] = result["timestamp"]
 
-        # Recalculate summary from all providers
-        self._recalculate_summary()
+        self.recalculate_summary()
 
-    def _recalculate_summary(self) -> None:
-        """
-        Recalculate summary fields from all provider data in cache.
-
-        Updates both 'summary' and 'global_summary' based on current
-        provider stats.
-        """
+    def recalculate_summary(self) -> None:
+        """Recalculate summary fields from all provider data in cache."""
         stats = self.cached_stats
         if not stats:
             return
@@ -414,7 +351,6 @@ class QuotaViewer:
         if not providers:
             return
 
-        # Calculate summary from all providers
         total_creds = 0
         active_creds = 0
         exhausted_creds = 0
@@ -459,7 +395,6 @@ class QuotaViewer:
             "approx_total_cost": total_cost if total_cost > 0 else None,
         }
 
-        # Also recalculate global_summary if it exists
         if "global_summary" in stats:
             global_total_requests = 0
             global_input_cached = 0
@@ -507,19 +442,8 @@ class QuotaViewer:
         provider: Optional[str] = None,
         credential: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """
-        Post a refresh action to the proxy.
-
-        Args:
-            action: "reload" or "force_refresh"
-            scope: "all", "provider", or "credential"
-            provider: Provider name (required for scope != "all")
-            credential: Credential identifier (required for scope == "credential")
-
-        Returns:
-            Response dict or None on failure
-        """
-        url = self._build_endpoint_url("/v1/quota-stats")
+        """Post a refresh action to the proxy."""
+        url = self.build_endpoint_url("/v1/quota-stats")
         payload = {
             "action": action,
             "scope": scope,
@@ -531,7 +455,7 @@ class QuotaViewer:
 
         try:
             client = get_http_client()
-            response = client.post(url, headers=self._get_headers(), json=payload, timeout=TimeoutConfig.quota_viewer_action())
+            response = client.post(url, headers=self.get_headers(), json=payload, timeout=TimeoutConfig.quota_viewer_action())
 
             if response.status_code == 401:
                 self.last_error = "Authentication failed. Check API key."
@@ -548,22 +472,296 @@ class QuotaViewer:
                 self.last_error = f"Invalid JSON in response (HTTP {response.status_code})"
                 return None
 
-            # If scope is provider-specific, merge into existing cache
             if scope == "provider" and provider and self.cached_stats:
-                self._merge_provider_stats(provider, result)
+                self.merge_provider_stats(provider, result)
             else:
-                # Full refresh - replace everything
                 self.cached_stats = result
 
             self.last_error = None
             return result
 
         except httpx.ConnectError as e:
-            return self._handle_httpx_error(e)
+            return self.handle_httpx_error(e)
         except httpx.TimeoutException as e:
-            return self._handle_httpx_error(e)
+            return self.handle_httpx_error(e)
         except Exception as e:
-            return self._handle_httpx_error(e)
+            return self.handle_httpx_error(e)
+
+
+class QuotaRenderer:
+    """Rendering helpers for quota stats screens."""
+
+    def __init__(self, console: Console):
+        self.console = console
+
+    def render_credential_panel(
+        self, idx: int, cred: Dict[str, Any], provider: str, view_mode: str
+    ) -> None:
+        """Render a single credential as a panel."""
+        identifier = cred.get("identifier", f"credential {idx}")
+        email = cred.get("email")
+        tier = cred.get("tier", "")
+        status = cred.get("status", "unknown")
+
+        key_cooldown = cred.get("key_cooldown_remaining")
+        model_cooldowns = cred.get("model_cooldowns", {})
+        has_cooldown = key_cooldown or model_cooldowns
+
+        if status == "exhausted":
+            status_icon = "[red]⛔ Exhausted[/red]"
+        elif status == "cooldown" or has_cooldown:
+            if key_cooldown:
+                status_icon = f"[yellow]⚠️ Cooldown ({format_cooldown(int(key_cooldown))})[/yellow]"
+            else:
+                status_icon = "[yellow]⚠️ Cooldown[/yellow]"
+        else:
+            status_icon = "[green]✅ Active[/green]"
+
+        display_name = email if email else identifier
+        tier_str = f" ({tier})" if tier else ""
+        header = f"[{idx}] {display_name}{tier_str} {status_icon}"
+
+        if view_mode == "global":
+            stats_source = cred.get("global", cred)
+        else:
+            stats_source = cred
+
+        last_used = format_time_ago(cred.get("last_used_ts"))
+        requests = stats_source.get("requests", 0)
+        tokens = stats_source.get("tokens", {})
+        input_total = tokens.get("input_cached", 0) + tokens.get("input_uncached", 0)
+        output = tokens.get("output", 0)
+        cost = format_cost(stats_source.get("approx_cost"))
+
+        stats_line = (
+            f"Last used: {last_used} | Requests: {requests} | "
+            f"Tokens: {format_tokens(input_total)}/{format_tokens(output)}"
+        )
+        if cost != "-":
+            stats_line += f" | Cost: {cost}"
+
+        content_lines = [
+            f"[dim]{stats_line}[/dim]",
+        ]
+
+        model_groups = cred.get("model_groups", {})
+
+        if model_cooldowns:
+            if model_groups:
+                group_cooldowns: Dict[str, int] = {}
+                ungrouped_cooldowns: List[Tuple[str, int]] = []
+
+                for model_name, cooldown_info in model_cooldowns.items():
+                    remaining = cooldown_info.get("remaining_seconds", 0)
+                    if remaining <= 0:
+                        continue
+
+                    clean_model = model_name.split("/")[-1]
+                    found_group = None
+                    for group_name, group_info in model_groups.items():
+                        group_models = group_info.get("models", [])
+                        if clean_model in group_models:
+                            found_group = group_name
+                            break
+
+                    if found_group:
+                        group_cooldowns[found_group] = max(
+                            group_cooldowns.get(found_group, 0), remaining
+                        )
+                    else:
+                        ungrouped_cooldowns.append((model_name, remaining))
+
+                if group_cooldowns or ungrouped_cooldowns:
+                    content_lines.append("")
+                    content_lines.append("[yellow]Active Cooldowns:[/yellow]")
+
+                    for group_name in sorted(group_cooldowns.keys()):
+                        remaining = group_cooldowns[group_name]
+                        content_lines.append(
+                            f"  [yellow]⏱️ {group_name}: {format_cooldown(remaining)}[/yellow]"
+                        )
+
+                    for model_name, remaining in ungrouped_cooldowns:
+                        short_model = model_name.split("/")[-1][:35]
+                        content_lines.append(
+                            f"  [yellow]⏱️ {short_model}: {format_cooldown(remaining)}[/yellow]"
+                        )
+            else:
+                content_lines.append("")
+                content_lines.append("[yellow]Active Cooldowns:[/yellow]")
+                for model_name, cooldown_info in model_cooldowns.items():
+                    remaining = cooldown_info.get("remaining_seconds", 0)
+                    if remaining > 0:
+                        short_model = model_name.split("/")[-1][:35]
+                        content_lines.append(
+                            f"  [yellow]⏱️ {short_model}: {format_cooldown(int(remaining))}[/yellow]"
+                        )
+
+        if model_groups:
+            content_lines.append("")
+            for group_name, group_stats in model_groups.items():
+                remaining_pct = group_stats.get("remaining_pct")
+                requests_used = group_stats.get("requests_used", 0)
+                requests_max = group_stats.get("requests_max")
+                requests_remaining = group_stats.get("requests_remaining")
+                is_exhausted = group_stats.get("is_exhausted", False)
+                reset_time = format_reset_time(group_stats.get("reset_time_iso"))
+                confidence = group_stats.get("confidence", "low")
+
+                if requests_remaining is None and requests_max:
+                    requests_remaining = max(0, requests_max - requests_used)
+                display = group_stats.get(
+                    "display", f"{requests_remaining or 0}/{requests_max or '?'}"
+                )
+                bar = create_progress_bar(remaining_pct)
+
+                has_reset_time = reset_time and reset_time != "-"
+
+                if is_exhausted:
+                    color = "red"
+                    if has_reset_time:
+                        status_text = f"⛔ Resets: {reset_time}"
+                    else:
+                        status_text = "⛔ EXHAUSTED"
+                elif remaining_pct is not None and remaining_pct < 20:
+                    color = "yellow"
+                    if has_reset_time:
+                        status_text = f"⚠️ Resets: {reset_time}"
+                    else:
+                        status_text = "⚠️ LOW"
+                else:
+                    color = "green"
+                    if has_reset_time:
+                        status_text = f"Resets: {reset_time}"
+                    else:
+                        status_text = ""
+
+                conf_indicator = ""
+                if confidence == "low":
+                    conf_indicator = " [dim](~)[/dim]"
+                elif confidence == "medium":
+                    conf_indicator = " [dim](?)[/dim]"
+
+                pct_str = f"{remaining_pct}%" if remaining_pct is not None else "?%"
+                content_lines.append(
+                    f"  [{color}]{group_name:<18} {display:<10} {pct_str:>4} {bar}[/{color}]  {status_text}{conf_indicator}"
+                )
+        else:
+            models = cred.get("models", {})
+            if models:
+                content_lines.append("")
+                content_lines.append("  [dim]Models used:[/dim]")
+                for model_name, model_stats in models.items():
+                    req_count = model_stats.get("success_count", 0)
+                    model_cost = format_cost(model_stats.get("approx_cost"))
+                    short_name = model_name.split("/")[-1][:30]
+                    content_lines.append(
+                        f"    {short_name}: {req_count} requests, {model_cost}"
+                    )
+
+        self.console.print(
+            Panel(
+                "\n".join(content_lines),
+                title=header,
+                title_align="left",
+                border_style="dim",
+                expand=True,
+            )
+        )
+
+
+class QuotaViewer:
+    """Main Quota Viewer TUI class."""
+
+    def __init__(self, config: Optional[QuotaViewerConfig] = None):
+        """
+        Initialize the viewer.
+
+        Args:
+            config: Optional config object. If not provided, one will be created.
+        """
+        self.console = Console()
+        self.config = config or QuotaViewerConfig()
+        self.config.sync_with_launcher_config()
+        self.api_client = QuotaApiClient()
+        self.renderer = QuotaRenderer(self.console)
+
+        self._current_remote: Optional[Dict[str, Any]] = None
+        self._cached_stats: Optional[Dict[str, Any]] = None
+        self._last_error: Optional[str] = None
+        self.running = True
+        self.view_mode = "current"  # "current" or "global"
+
+    @property
+    def current_remote(self) -> Optional[Dict[str, Any]]:
+        """Current remote proxy config."""
+        return self.api_client.current_remote
+
+    @current_remote.setter
+    def current_remote(self, value: Optional[Dict[str, Any]]) -> None:
+        self.api_client.current_remote = value
+
+    @property
+    def cached_stats(self) -> Optional[Dict[str, Any]]:
+        """Cached quota stats."""
+        return self.api_client.cached_stats
+
+    @cached_stats.setter
+    def cached_stats(self, value: Optional[Dict[str, Any]]) -> None:
+        self.api_client.cached_stats = value
+
+    @property
+    def last_error(self) -> Optional[str]:
+        """Last API error message."""
+        return self.api_client.last_error
+
+    @last_error.setter
+    def last_error(self, value: Optional[str]) -> None:
+        self.api_client.last_error = value
+
+    def _get_headers(self) -> Dict[str, str]:
+        """Get HTTP headers including auth if configured."""
+        return self.api_client.get_headers()
+
+    def _get_base_url(self) -> str:
+        """Get base URL for the current remote."""
+        return self.api_client.get_base_url()
+
+    def _build_endpoint_url(self, endpoint: str) -> str:
+        """Build a full endpoint URL with smart path handling."""
+        return self.api_client.build_endpoint_url(endpoint)
+
+    def _handle_httpx_error(self, exc: Exception) -> None:
+        """Handle httpx exceptions by setting self.last_error and returning None."""
+        return self.api_client.handle_httpx_error(exc)
+
+    def check_connection(
+        self, remote: Dict[str, Any], timeout: Optional[float] = None
+    ) -> Tuple[bool, str]:
+        """Check if a remote proxy is reachable."""
+        return self.api_client.check_connection(remote, timeout)
+
+    def fetch_stats(self, provider: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Fetch quota stats from the current remote."""
+        return self.api_client.fetch_stats(provider)
+
+    def _merge_provider_stats(self, provider: str, result: Dict[str, Any]) -> None:
+        """Merge provider-specific stats into the existing cache."""
+        self.api_client.merge_provider_stats(provider, result)
+
+    def _recalculate_summary(self) -> None:
+        """Recalculate summary fields from all provider data in cache."""
+        self.api_client.recalculate_summary()
+
+    def post_action(
+        self,
+        action: str,
+        scope: str = "all",
+        provider: Optional[str] = None,
+        credential: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Post a refresh action to the proxy."""
+        return self.api_client.post_action(action, scope, provider, credential)
 
     # =========================================================================
     # DISPLAY SCREENS
@@ -909,7 +1107,7 @@ class QuotaViewer:
                     )
                 else:
                     for idx, cred in enumerate(credentials, 1):
-                        self._render_credential_panel(idx, cred, provider)
+                        self.renderer.render_credential_panel(idx, cred, provider, self.view_mode)
                         self.console.print()
 
             # Menu
@@ -1293,8 +1491,9 @@ class QuotaViewer:
                     # Try with API key from .env for Local
                     if selected["name"] == "Local" and not selected.get("api_key"):
                         env_key = self.config.get_api_key_from_env()
-                        if env_key:
-                            self.current_remote["api_key"] = env_key
+                        current_remote = self.current_remote
+                        if env_key and current_remote:
+                            current_remote["api_key"] = env_key
                             stats = self.fetch_stats()
 
             if stats is None:
@@ -1552,12 +1751,13 @@ class QuotaViewer:
         # Connection loop - allows retry after configuring remotes
         while True:
             # For Local remote, try to get API key from .env if not set
-            if self.current_remote["name"] == "Local" and not self.current_remote.get(
+            current_remote = self.current_remote
+            if current_remote and current_remote["name"] == "Local" and not current_remote.get(
                 "api_key"
             ):
                 env_key = self.config.get_api_key_from_env()
                 if env_key:
-                    self.current_remote["api_key"] = env_key
+                    current_remote["api_key"] = env_key
 
             # Try to connect
             with self.console.status("[bold]Connecting to proxy...", spinner="dots"):

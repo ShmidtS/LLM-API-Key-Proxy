@@ -13,11 +13,13 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 from proxy_app.dependencies import get_rotating_client, verify_api_key, make_error_response
-from proxy_app.routes._helpers import log_request_to_console
 from proxy_app.routes.error_handler import handle_route_errors
-from proxy_app.routes._helpers import proxy_provider_call
+from proxy_app.routes._helpers import _parse_and_log, complete_or_stream, proxy_zai_route
 
 router = APIRouter(tags=["tools"])
+_tool_tokenizer = proxy_zai_route("tool_tokenizer")
+_tool_layout_parsing = proxy_zai_route("tool_layout_parsing")
+_tool_web_reader = proxy_zai_route("tool_web_reader")
 
 
 @router.post("/v1/tools/web-search")
@@ -36,7 +38,7 @@ async def web_search(
     the model prefix in the request body.
     """
     try:
-        request_data = orjson.loads(await request.body())
+        request_data = await _parse_and_log(request)
     except orjson.JSONDecodeError:
         return JSONResponse(
             status_code=400,
@@ -48,12 +50,6 @@ async def web_search(
                 }
             },
         )
-
-    log_request_to_console(
-        url=str(request.url),
-        client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
-        request_data=request_data,
-    )
 
     model = request_data.get("model")
     query = request_data.get("query") or request_data.get("input")
@@ -89,18 +85,12 @@ async def web_search(
         if key in request_data:
             completion_kwargs[key] = request_data[key]
 
-    is_streaming = completion_kwargs.get("stream", False)
-
-    if is_streaming:
-        from proxy_app.streaming import streaming_response_wrapper, make_sse_response
-
-        response_generator = client.acompletion(request=request, **completion_kwargs)  # type: ignore[arg-type]
-        return make_sse_response(
-            streaming_response_wrapper(request, response_generator)  # type: ignore[arg-type]
-        )
-    else:
-        response = await client.acompletion(request=request, **completion_kwargs)  # type: ignore[reportGeneralTypeIssues]
-        return response
+    return await complete_or_stream(
+        request,
+        completion_kwargs,
+        client,
+        bool(completion_kwargs.get("stream", False)),
+    )
 
 
 @router.post("/v1/tools/tokenizer")
@@ -111,7 +101,7 @@ async def tool_tokenizer(
     _=Depends(verify_api_key),
 ) -> Any:
     """ZAI tokenizer tool endpoint."""
-    return await proxy_provider_call(request, client, "zai", "tool_tokenizer")
+    return await _tool_tokenizer(request, client)
 
 
 @router.post("/v1/tools/layout-parsing")
@@ -122,7 +112,7 @@ async def tool_layout_parsing(
     _=Depends(verify_api_key),
 ) -> Any:
     """ZAI layout parsing tool endpoint."""
-    return await proxy_provider_call(request, client, "zai", "tool_layout_parsing")
+    return await _tool_layout_parsing(request, client)
 
 
 @router.post("/v1/tools/web-reader")
@@ -133,4 +123,4 @@ async def tool_web_reader(
     _=Depends(verify_api_key),
 ) -> Any:
     """ZAI web reader tool endpoint."""
-    return await proxy_provider_call(request, client, "zai", "tool_web_reader")
+    return await _tool_web_reader(request, client)

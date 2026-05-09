@@ -12,9 +12,10 @@ from fastapi import APIRouter, Request, Depends
 
 from proxy_app.dependencies import get_rotating_client, verify_api_key
 from proxy_app.routes.error_handler import handle_route_errors
-from proxy_app.routes._helpers import proxy_provider_call
+from proxy_app.routes._helpers import proxy_provider_status_call, proxy_zai_route
 
 router = APIRouter(tags=["video"])
+_video_generate = proxy_zai_route("video_generate")
 
 
 @router.post("/v1/video/generate")
@@ -25,7 +26,7 @@ async def video_generate(
     _=Depends(verify_api_key),
 ) -> Any:
     """Submit an async video generation request (ZAI-specific)."""
-    return await proxy_provider_call(request, client, "zai", "video_generate")
+    return await _video_generate(request, client)
 
 
 @router.get("/v1/video/{video_id}/status")
@@ -37,6 +38,6 @@ async def video_status(
     _=Depends(verify_api_key),
 ) -> Any:
     """Check the status of an async video generation task (ZAI-specific)."""
-    return await client.call_provider_method(
-        "zai", "video_status", video_id=video_id
+    return await proxy_provider_status_call(
+        client, "zai", "video_status", "video_id", video_id
     )

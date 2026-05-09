@@ -12,7 +12,6 @@ import customtkinter as ctk
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from proxy_app.model_filter_models import (
-    ACCENT_BLUE,
     ACCENT_RED,
     BG_HOVER,
     BG_SECONDARY,

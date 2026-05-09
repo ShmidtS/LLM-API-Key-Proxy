@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 from fastapi import APIRouter, Request, HTTPException, Depends
 
 from proxy_app.dependencies import get_rotating_client, verify_api_key, make_error_response
+from proxy_app.routes._helpers import require_field
 from proxy_app.routes.error_handler import handle_route_errors
 
 router = APIRouter()
@@ -162,13 +163,8 @@ async def token_count(
     Calculates the token count for a given list of messages and a model.
     """
     data = orjson.loads(await request.body())
-    model = data.get("model")
-    messages = data.get("messages")
-
-    if not model or not messages:
-        raise HTTPException(
-            status_code=400, detail=make_error_response("'model' and 'messages' are required.", "invalid_request_error")
-        )
+    require_field(data, "model", "'model' and 'messages' are required.")
+    require_field(data, "messages", "'model' and 'messages' are required.")
 
     count = await asyncio.to_thread(client.token_count, **data)
     return {"token_count": count}
@@ -202,14 +198,11 @@ async def cost_estimate(request: Request, _=Depends(verify_api_key)) -> Dict[str
         }
     """
     data = orjson.loads(await request.body())
-    model = data.get("model")
+    model = require_field(data, "model")
     prompt_tokens = data.get("prompt_tokens", 0)
     completion_tokens = data.get("completion_tokens", 0)
     cache_read_tokens = data.get("cache_read_tokens", 0)
     cache_creation_tokens = data.get("cache_creation_tokens", 0)
-
-    if not model:
-        raise HTTPException(status_code=400, detail=make_error_response("'model' is required.", "invalid_request_error"))
 
     result = {
         "model": model,

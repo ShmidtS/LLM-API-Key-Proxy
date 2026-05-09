@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+import argparse
 import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -24,7 +25,7 @@ from proxy_app.config import (
     DEFAULT_UVICORN_BACKLOG,
     env_int,
 )
-from proxy_app.middleware import _NoGzipForSSE
+from proxy_app.middleware import SecurityHeadersMiddleware, _NoGzipForSSE
 
 
 @asynccontextmanager
@@ -62,6 +63,7 @@ app.add_middleware(
     ],
 )
 app.add_middleware(_NoGzipForSSE)
+app.add_middleware(SecurityHeadersMiddleware)
 
 def _register_routes(app: FastAPI) -> None:
     from proxy_app.routes import all_routers
@@ -117,27 +119,24 @@ def show_onboarding_message() -> None:
     console.input("[bold green]Press Enter to launch the credential setup tool...[/bold green]")
 
 
-def run_server() -> None:
+def parse_startup_args(args: list[str]) -> argparse.Namespace:
     parser = create_arg_parser()
-    args = default_args()
+    return parser.parse_args(args)
 
-    if len(sys.argv) == 1:
-        startup_state = bootstrap(args)
-        from proxy_app.launcher_tui import run_launcher_tui
 
-        run_launcher_tui()
-        args = parser.parse_args()
-    else:
-        args = parser.parse_args()
-        startup_state = bootstrap(args)
+def run_onboarding_if_needed(parsed) -> None:
+    startup_state = getattr(parsed, "startup_state", None)
+    if startup_state is None:
+        startup_state = bootstrap(parsed)
+        parsed.startup_state = startup_state
 
-    configure_app(app, args)
+    configure_app(app, parsed)
 
     from rotator_library.utils.paths import get_data_file
 
     env_file = get_data_file(".env")
 
-    if args.add_credential:
+    if parsed.add_credential:
         from rotator_library.credential_tool import ensure_env_defaults, run_credential_tool
 
         ensure_env_defaults()
@@ -164,8 +163,8 @@ def run_server() -> None:
             )
             sys.exit(1)
 
-    import uvicorn
 
+def setup_windows_signals() -> None:
     if sys.platform == "win32":
         import signal as _signal
 
@@ -174,10 +173,14 @@ def run_server() -> None:
                 _signal.SIGBREAK, lambda *_: _signal.raise_signal(_signal.SIGINT)
             )
 
+
+def start_uvicorn(parsed) -> None:
+    import uvicorn
+
     uvicorn.run(
         app,
-        host=args.host,
-        port=args.port,
+        host=parsed.host,
+        port=parsed.port,
         limit_concurrency=env_int(
             "MAX_CONCURRENT_REQUESTS", DEFAULT_MAX_CONCURRENT_REQUESTS
         ),
@@ -186,6 +189,23 @@ def run_server() -> None:
             "TIMEOUT_GRACEFUL_SHUTDOWN", DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT
         ),
     )
+
+
+def run_server() -> None:
+    if len(sys.argv) == 1:
+        args = default_args()
+        args.startup_state = bootstrap(args)
+        from proxy_app.launcher_tui import run_launcher_tui
+
+        run_launcher_tui()
+        parsed = parse_startup_args(sys.argv[1:])
+        parsed.startup_state = args.startup_state
+    else:
+        parsed = parse_startup_args(sys.argv[1:])
+
+    run_onboarding_if_needed(parsed)
+    setup_windows_signals()
+    start_uvicorn(parsed)
 
 
 if __name__ == "__main__":

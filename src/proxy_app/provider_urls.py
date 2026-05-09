@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
-import functools
 import os
 from typing import Optional
 
@@ -35,7 +34,6 @@ PROVIDER_URL_MAP = {
     "trybons": "https://go.trybons.ai",
 }
 
-@functools.lru_cache(maxsize=256)
 def get_provider_endpoint(provider: str, model_name: str, incoming_path: str) -> Optional[str]:
     """
     Constructs the full provider endpoint URL based on the provider and incoming request path.
@@ -44,7 +42,8 @@ def get_provider_endpoint(provider: str, model_name: str, incoming_path: str) ->
     # First, check the hardcoded map
     base_url = PROVIDER_URL_MAP.get(provider)
 
-    # If not found, check for custom provider via environment variable
+    # If not found, check for custom provider via environment variable.
+    # Intentionally uncached because API base env vars may change at runtime.
     if not base_url:
         api_base_env = f"{provider.upper()}_API_BASE"
         base_url = os.getenv(api_base_env)

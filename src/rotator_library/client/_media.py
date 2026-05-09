@@ -266,7 +266,7 @@ class MediaMixin:
             raise ValueError(f"Unsupported native image provider: {provider}")
         http_client = await self._get_http_client_async(streaming=False)
         data = await provider_plugin.native_image_generation(
-            http_client, api_key, timeout=kwargs.get("timeout", getattr(self, "global_timeout", 60)), **kwargs
+            http_client, api_key, timeout=kwargs.get("_global_timeout", kwargs.get("timeout", getattr(self, "global_timeout", 60))), **kwargs
         )
         return self._native_image_response(data)
 

@@ -28,7 +28,6 @@ from tkinter import Menu
 from typing import List, Optional
 
 from proxy_app.model_filter_models import (
-    ACCENT_BLUE,
     ACCENT_GREEN,
     ACCENT_YELLOW,
     BG_HOVER,
@@ -52,7 +51,6 @@ from proxy_app.model_filter_engine import FilterEngine
 from proxy_app.model_filter_fetcher import ModelFetcher
 from proxy_app.model_filter_dialogs import (
     HelpWindow,
-    ImportResultDialog,
     RulePanel,
     UnsavedChangesDialog,
 )
@@ -140,7 +138,6 @@ class ModelFilterGUI(ctk.CTk):
         self._create_model_lists()
         self._create_rule_panels()
         self._create_status_bar()
-        self._create_action_buttons()
 
     def _activate_window(self):
         """Activate and focus the window."""
@@ -374,10 +371,6 @@ class ModelFilterGUI(ctk.CTk):
         )
         save_btn.pack(side="right")
         ToolTip(save_btn, "Save changes (Ctrl+S)")
-
-    def _create_action_buttons(self):
-        """Action buttons are now part of status bar - this is a no-op for compatibility."""
-        pass
 
     def _create_context_menu(self):
         """Create the right-click context menu."""

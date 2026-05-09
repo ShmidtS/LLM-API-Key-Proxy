@@ -3,12 +3,11 @@
 
 from typing import Any
 
-import orjson
 import litellm  # type: ignore[import-untyped]
 from fastapi import APIRouter, Request, Depends
 
 from proxy_app.dependencies import verify_api_key
-from proxy_app.routes._helpers import log_request_to_console
+from proxy_app.routes._helpers import _parse_and_log
 from proxy_app.routes.error_handler import handle_route_errors
 
 router = APIRouter(tags=["batches"])
@@ -26,12 +25,7 @@ async def create_batch(
     Submits multiple API requests for asynchronous processing at reduced cost.
     Supports providers via LiteLLM: OpenAI, Azure, Anthropic, etc.
     """
-    request_data = orjson.loads(await request.body())
-    log_request_to_console(
-        url=str(request.url),
-        client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
-        request_data=request_data,
-    )
+    request_data = await _parse_and_log(request)
     response = await litellm.acreate_batch(**request_data)
     return response
 

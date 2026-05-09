@@ -38,6 +38,15 @@ def _is_classified_error(error: Exception) -> bool:
     return error.__class__.__name__ == "ClassifiedError"
 
 
+async def safe_aclose(stream: Any) -> None:
+    """Close async streams that expose aclose(), ignoring close failures."""
+    if hasattr(stream, "aclose"):
+        try:
+            await stream.aclose()
+        except Exception as e:
+            logger.debug("Error closing async stream: %s", e)
+
+
 async def streaming_response_wrapper(
     request: Request,
     response_stream: AsyncGenerator[Any, None],
@@ -140,8 +149,7 @@ async def streaming_response_wrapper(
                 if aggregator is not None:
                     aggregator.add_chunk(chunk)
     except (GeneratorExit, asyncio.CancelledError):
-        if hasattr(response_stream, "aclose"):
-            await response_stream.aclose()
+        await safe_aclose(response_stream)
         _buffer.clear()
         raise
     except Exception as e:
@@ -283,9 +291,11 @@ def handle_litellm_error(e: Exception, error_format: str = "openai") -> HTTPExce
             return HTTPException(status_code=status_code, detail=detail)
 
     # Fallback for unmatched litellm errors — use generic message to avoid information leakage
-    if error_format == "openai":
-        return HTTPException(status_code=500, detail="Internal server error")
-    return HTTPException(
-        status_code=500,
-        detail={"type": "error", "error": {"type": "api_error", "message": "Internal server error"}},
+    from proxy_app.routes.error_handler import internal_server_error_payload
+
+    detail = (
+        "Internal server error"
+        if error_format == "openai"
+        else internal_server_error_payload(error_format)
     )
+    return HTTPException(status_code=500, detail=detail)

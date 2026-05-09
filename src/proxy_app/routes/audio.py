@@ -10,14 +10,13 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from rotator_library import RotatingClient
 
-import orjson
 from fastapi import APIRouter, Request, Depends, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, Response
 
 logger = logging.getLogger(__name__)
 
 from proxy_app.dependencies import get_rotating_client, verify_api_key
-from proxy_app.routes._helpers import log_request_to_console
+from proxy_app.routes._helpers import _parse_and_log, log_request_data
 from proxy_app.routes.error_handler import handle_route_errors
 
 router = APIRouter(tags=["audio"])
@@ -36,13 +35,7 @@ async def audio_speech(
     Accepts model, input, voice, speed, response_format and returns
     streaming audio content.
     """
-    request_data = orjson.loads(await request.body())
-
-    log_request_to_console(
-        url=str(request.url),
-        client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
-        request_data=request_data,
-    )
+    request_data = await _parse_and_log(request)
 
     # Extract response_format for content-type mapping before passing to litellm.
     # litellm.aspeech misroutes response_format through get_optional_params
@@ -133,10 +126,9 @@ async def audio_transcriptions(
         if value is not None:
             kwargs[key] = value if key != "temperature" else float(str(value))  # type: ignore[arg-type]
 
-    log_request_to_console(
-        url=str(request.url),
-        client_info=(request.client.host if request.client else "unknown", request.client.port if request.client else 0),
-        request_data={"model": model, "file": file_filename, **{k: v for k, v in kwargs.items() if k not in ("file",)}},
+    log_request_data(
+        request,
+        {"model": model, "file": file_filename, **{k: v for k, v in kwargs.items() if k not in ("file",)}},
     )
 
     response = await client.atranscription(request=request, **kwargs)
