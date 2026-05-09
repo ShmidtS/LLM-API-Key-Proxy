@@ -1,17 +1,21 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from __future__ import annotations
+
 import hmac
 import asyncio
 import logging
-from typing import AsyncGenerator, Any
+from typing import TYPE_CHECKING, AsyncGenerator, Any
+
+if TYPE_CHECKING:
+    from rotator_library import RotatingClient
 
 logger = logging.getLogger(__name__)
 
 from fastapi import Request, HTTPException, Depends
 from fastapi.security import APIKeyHeader
 
-from rotator_library import RotatingClient
 from proxy_app.batch_manager import EmbeddingBatcher
 
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)

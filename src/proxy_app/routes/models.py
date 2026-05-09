@@ -1,18 +1,21 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from __future__ import annotations
+
 import asyncio
 import time
 
-from typing import Any, Dict, List, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Union
+
+if TYPE_CHECKING:
+    from rotator_library import RotatingClient
 
 import orjson
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import Response
 
-from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key
-from rotator_library import PROVIDER_PLUGINS
 
 router = APIRouter()
 
@@ -188,4 +191,6 @@ async def list_providers(_=Depends(verify_api_key)) -> List[str]:
     """
     Returns a list of all available providers.
     """
+    from rotator_library import PROVIDER_PLUGINS
+
     return list(PROVIDER_PLUGINS.keys())

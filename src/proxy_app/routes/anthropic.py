@@ -1,23 +1,22 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from __future__ import annotations
+
 import logging
 
 logger = logging.getLogger(__name__)
 
 import orjson
-import litellm  # type: ignore[import-untyped]
-from typing import Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
+
+if TYPE_CHECKING:
+    from rotator_library import RotatingClient
+    from rotator_library.anthropic_compat import AnthropicCountTokensRequest
 from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from rotator_library import RotatingClient
-from rotator_library.anthropic_compat import (
-    AnthropicMessagesRequest,
-    AnthropicCountTokensRequest,
-)
 from proxy_app.dependencies import get_rotating_client, verify_anthropic_api_key, track_stream
-from proxy_app.detailed_logger import RawIOLogger
 from proxy_app.streaming import make_sse_response
 from proxy_app.routes._helpers import log_request_to_console
 from proxy_app.routes.error_handler import handle_route_errors
@@ -41,9 +40,16 @@ async def anthropic_messages(
 
     This endpoint is compatible with Claude Code and other Anthropic API clients.
     """
+    from rotator_library.anthropic_compat import AnthropicMessagesRequest
+
     # Initialize raw I/O logger if enabled (for debugging proxy boundary)
     enable_raw_logging = getattr(request.app.state, "enable_raw_logging", False)
-    logger = RawIOLogger() if enable_raw_logging else None
+    if enable_raw_logging:
+        from proxy_app.detailed_logger import RawIOLogger
+
+        logger = RawIOLogger()
+    else:
+        logger = None
 
     # Parse raw body — use model_validate_json (single parse) unless raw logging
     # needs the original dict, in which case parse twice for correctness.
@@ -107,22 +113,12 @@ async def anthropic_count_tokens(
         result = await client.anthropic_count_tokens(body)
         return JSONResponse(content=result)
 
-    except (
-        litellm.InvalidRequestError,  # type: ignore[attr-defined]
-        litellm.ContextWindowExceededError,  # type: ignore[attr-defined]
-        ValueError,
-    ) as e:
+    except ValueError as e:
         error_response = {
             "type": "error",
             "error": {"type": "invalid_request_error", "message": str(e)},
         }
         raise HTTPException(status_code=400, detail=error_response)
-    except litellm.AuthenticationError as e:  # type: ignore[attr-defined]
-        error_response = {
-            "type": "error",
-            "error": {"type": "authentication_error", "message": str(e)},
-        }
-        raise HTTPException(status_code=401, detail=error_response)
     except (TypeError, AttributeError, KeyError):
         raise
     except Exception as e:

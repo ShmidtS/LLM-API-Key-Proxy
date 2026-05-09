@@ -10,14 +10,18 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from proxy_app.dependencies import make_error_response
-from proxy_app.streaming import handle_litellm_error, LITELLM_ERROR_MAP
-from rotator_library.error_types import NoAvailableKeysError
+from proxy_app.streaming import handle_litellm_error
 
 logger = logging.getLogger(__name__)
 
-LITELLM_ERROR_TYPES = tuple(
-    exc_type for row in LITELLM_ERROR_MAP for exc_type in row[0]
-)
+
+
+def _is_no_available_keys_error(error: Exception) -> bool:
+    return error.__class__.__name__ == "NoAvailableKeysError"
+
+
+def _is_litellm_error(error: Exception) -> bool:
+    return error.__class__.__module__.startswith("litellm")
 
 
 def handle_route_errors(
@@ -68,28 +72,28 @@ def handle_route_errors(
                     status_code=400,
                     detail=make_error_response(str(e), "invalid_request_error"),
                 )
-            except NoAvailableKeysError as e:
-                logger.warning(
-                    "Route availability error: context=%s detail=%s",
-                    log_context,
-                    str(e),
-                )
-                if error_format == "anthropic":
+            except Exception as e:
+                if _is_no_available_keys_error(e):
+                    logger.warning(
+                        "Route availability error: context=%s detail=%s",
+                        log_context,
+                        str(e),
+                    )
+                    if error_format == "anthropic":
+                        raise HTTPException(
+                            status_code=503,
+                            detail={
+                                "type": "error",
+                                "error": {"type": "api_error", "message": str(e)},
+                            },
+                        )
                     raise HTTPException(
                         status_code=503,
-                        detail={
-                            "type": "error",
-                            "error": {"type": "api_error", "message": str(e)},
-                        },
+                        detail=make_error_response(str(e), "api_error"),
                     )
-                raise HTTPException(
-                    status_code=503,
-                    detail=make_error_response(str(e), "api_error"),
-                )
-            except Exception as e:
                 # Capture only unexpected, non-litellm exceptions here
                 if error_format in ("openai", "anthropic"):
-                    if isinstance(e, LITELLM_ERROR_TYPES):
+                    if _is_litellm_error(e):
                         logger.error(
                             "Route litellm error: context=%s type=%s detail=%s",
                             log_context,

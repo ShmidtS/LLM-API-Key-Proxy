@@ -1,16 +1,20 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import time
 
 import orjson
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    from rotator_library import RotatingClient
 
 from fastapi import APIRouter, Request, HTTPException, Depends
 
-from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key, make_error_response
 from proxy_app.routes.error_handler import handle_route_errors
 

@@ -1,11 +1,15 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
-from typing import Any, Dict
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Dict
+
+if TYPE_CHECKING:
+    from rotator_library import RotatingClient
 
 from fastapi import APIRouter, Request, Depends
 
-from rotator_library import RotatingClient
 from proxy_app.dependencies import get_rotating_client, verify_api_key
 from proxy_app.routes.error_handler import handle_route_errors
 from proxy_app.routes._helpers import proxy_provider_call

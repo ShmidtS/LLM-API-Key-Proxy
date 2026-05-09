@@ -1,13 +1,17 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from __future__ import annotations
+
 import asyncio
-from typing import Optional, Any
+from typing import TYPE_CHECKING, Optional, Any
+
+if TYPE_CHECKING:
+    from rotator_library import RotatingClient
 
 import litellm  # type: ignore[import-untyped]
 from fastapi import APIRouter, Request, Depends
 
-from rotator_library import RotatingClient
 from proxy_app.models import EmbeddingRequest
 from proxy_app.dependencies import get_rotating_client, get_embedding_batcher, verify_api_key
 from proxy_app.batch_manager import EmbeddingBatcher

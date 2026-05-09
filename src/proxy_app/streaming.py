@@ -1,37 +1,41 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import AsyncGenerator, Any, Optional
+from typing import TYPE_CHECKING, AsyncGenerator, Any, Optional
 
-import litellm  # type: ignore[import-untyped]
-from litellm.exceptions import (  # type: ignore[import-untyped]
-    InvalidRequestError,
-    BadRequestError,
-    ContextWindowExceededError,
-    AuthenticationError,
-    NotFoundError,
-    RateLimitError,
-    ServiceUnavailableError,
-    APIConnectionError,
-    Timeout,
-    InternalServerError,
-    OpenAIError,
-)
+if TYPE_CHECKING:
+    from proxy_app.detailed_logger import RawIOLogger
 
 _GENERIC_STREAM_ERROR_MESSAGE = "An unexpected error occurred during the stream"
 
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
-from rotator_library import STREAM_DONE
-from rotator_library.error_types import ClassifiedError
-from rotator_library.utils.json_utils import sse_data_event
-from rotator_library.utils.chunk_aggregator import ChunkAggregator
 from proxy_app.dependencies import _inc_streams, _dec_streams
-from proxy_app.detailed_logger import RawIOLogger
 
 logger = logging.getLogger(__name__)
+_STREAM_DONE_FALLBACK = object()
+
+
+def _stream_done():
+    try:
+        from rotator_library.utils.json_utils import STREAM_DONE
+    except ImportError:
+        return _STREAM_DONE_FALLBACK
+    return STREAM_DONE
+
+
+def _sse_data_event(payload: Any) -> bytes:
+    from rotator_library.utils.json_utils import sse_data_event
+
+    return sse_data_event(payload)
+
+
+def _is_classified_error(error: Exception) -> bool:
+    return error.__class__.__name__ == "ClassifiedError"
 
 
 async def streaming_response_wrapper(
@@ -47,7 +51,12 @@ async def streaming_response_wrapper(
     serializes to SSE only at the HTTP yield boundary (single serialize).
     """
     # --- Aggregation state: only needed when logger is active ---
-    aggregator = ChunkAggregator() if logger is not None else None
+    if logger is not None:
+        from rotator_library.utils.chunk_aggregator import ChunkAggregator
+
+        aggregator = ChunkAggregator()
+    else:
+        aggregator = None
     final_status_code = 200
     final_error_log_context = None
     log_task: Optional[asyncio.Task] = None
@@ -91,7 +100,7 @@ async def streaming_response_wrapper(
         async for chunk in response_stream:
 
             # STREAM_DONE sentinel: flush buffer, emit SSE [DONE] and stop
-            if chunk is STREAM_DONE:
+            if chunk is _stream_done():
                 if _buffer:
                     yield b"".join(_buffer)
                     _buffer.clear()
@@ -104,7 +113,7 @@ async def streaming_response_wrapper(
                 continue
 
             # chunk is a dict — serialize to SSE only here (single serialize point)
-            chunk_str = sse_data_event(chunk)
+            chunk_str = _sse_data_event(chunk)
             _buffer.append(chunk_str)
             _buffer_size += len(chunk_str)
             _chunk_count += 1
@@ -142,17 +151,19 @@ async def streaming_response_wrapper(
             yield b"".join(_buffer)
             _buffer.clear()
         # Propagate classified error type so clients can distinguish 429/503/502
-        if isinstance(e, ClassifiedError) and e.status_code:
-            final_status_code = e.status_code
+        if _is_classified_error(e) and getattr(e, "status_code", None):
+            error_type = getattr(e, "error_type", "api_error")
+            status_code = getattr(e, "status_code", 500)
+            final_status_code = status_code
             final_error_log_context = {
-                "type": e.error_type,
-                "code": e.status_code,
+                "type": error_type,
+                "code": status_code,
             }
             error_payload = {
                 "error": {
                     "message": _GENERIC_STREAM_ERROR_MESSAGE,
-                    "type": e.error_type,
-                    "code": e.status_code,
+                    "type": error_type,
+                    "code": status_code,
                 }
             }
         else:
@@ -173,7 +184,7 @@ async def streaming_response_wrapper(
             final_error_log_context["type"] if final_error_log_context else "proxy_internal_error",
             final_error_log_context["code"] if final_error_log_context else 500,
         )
-        yield sse_data_event(error_payload)
+        yield _sse_data_event(error_payload)
         yield b"data: [DONE]\n\n"
         return  # Stop further processing
     finally:
@@ -214,35 +225,52 @@ def make_sse_response(generator) -> StreamingResponse:
     )
 
 
-LITELLM_ERROR_MAP = [
-    (
+def get_litellm_error_map():
+    from litellm.exceptions import (  # type: ignore[import-untyped]
+        APIConnectionError,
+        AuthenticationError,
+        BadRequestError,
+        ContextWindowExceededError,
+        InternalServerError,
+        InvalidRequestError,
+        NotFoundError,
+        OpenAIError,
+        RateLimitError,
+        ServiceUnavailableError,
+        Timeout,
+    )
+
+    return [
         (
-            InvalidRequestError,
-            BadRequestError,
-            ValueError,
-            ContextWindowExceededError,
+            (
+                InvalidRequestError,
+                BadRequestError,
+                ValueError,
+                ContextWindowExceededError,
+            ),
+            400,
+            "Invalid Request",
+            "invalid_request_error",
         ),
-        400,
-        "Invalid Request",
-        "invalid_request_error",
-    ),
-    ((AuthenticationError,), 401, "Authentication Error", "authentication_error"),
-    ((NotFoundError,), 404, "Not Found", "invalid_request_error"),
-    ((RateLimitError,), 429, "Rate Limit Exceeded", "rate_limit_error"),
-    (
-        (ServiceUnavailableError, APIConnectionError),
-        503,
-        "Service Unavailable",
-        "api_error",
-    ),
-    ((Timeout,), 504, "Gateway Timeout", "api_error"),
-    ((InternalServerError, OpenAIError), 502, "Bad Gateway", "api_error"),
-]
+        ((AuthenticationError,), 401, "Authentication Error", "authentication_error"),
+        ((NotFoundError,), 404, "Not Found", "invalid_request_error"),
+        ((RateLimitError,), 429, "Rate Limit Exceeded", "rate_limit_error"),
+        (
+            (ServiceUnavailableError, APIConnectionError),
+            503,
+            "Service Unavailable",
+            "api_error",
+        ),
+        ((Timeout,), 504, "Gateway Timeout", "api_error"),
+        ((InternalServerError, OpenAIError), 502, "Bad Gateway", "api_error"),
+    ]
 
 
 def handle_litellm_error(e: Exception, error_format: str = "openai") -> HTTPException:
     """Map litellm exceptions to HTTPException with OpenAI or Anthropic error format."""
-    for exc_types, status_code, openai_label, anthropic_error_type in LITELLM_ERROR_MAP:
+    from litellm.exceptions import Timeout  # type: ignore[import-untyped]
+
+    for exc_types, status_code, openai_label, anthropic_error_type in get_litellm_error_map():
         if isinstance(e, exc_types):
             if error_format == "openai":
                 detail = f"{openai_label}: {e!s}"

@@ -107,6 +107,42 @@ class UsageManagerCore(
                 Allows setting custom usage limits per tier, per model or quota group.
                 See ProviderInterface.default_custom_caps for format details.
         """
+        self._init_config_state(
+            file_path,
+            rotation_tolerance,
+            provider_rotation_modes,
+            provider_plugins,
+            priority_multipliers,
+            priority_multipliers_by_mode,
+            sequential_fallback_multipliers,
+            credential_to_provider,
+        )
+        self._init_fair_cycle_state(
+            fair_cycle_enabled,
+            fair_cycle_tracking_mode,
+            fair_cycle_cross_tier,
+            fair_cycle_duration,
+            exhaustion_cooldown_threshold,
+            custom_caps,
+        )
+        self._init_synchronization_state()
+        self._init_usage_caches()
+        self._init_persistence_state(file_path)
+        self._init_daily_reset_time(daily_reset_time_utc)
+
+    def _init_config_state(
+        self,
+        file_path: Optional[Union[str, Path]],
+        rotation_tolerance: float,
+        provider_rotation_modes: Optional[Dict[str, str]],
+        provider_plugins: Optional[Dict[str, Any]],
+        priority_multipliers: Optional[Dict[str, Dict[int, int]]],
+        priority_multipliers_by_mode: Optional[
+            Dict[str, Dict[str, Dict[int, int]]]
+        ],
+        sequential_fallback_multipliers: Optional[Dict[str, int]],
+        credential_to_provider: Optional[Dict[str, str]],
+    ) -> None:
         # Resolve file_path - use default if not provided
         if file_path is None:
             self.file_path = str(get_data_file("key_usage.json"))
@@ -126,6 +162,17 @@ class UsageManagerCore(
         self._provider_capability_cache: dict[str, dict[str, Any]] = {}
         self.key_states: Dict[str, Dict[str, Any]] = {}
 
+    def _init_fair_cycle_state(
+        self,
+        fair_cycle_enabled: Optional[Dict[str, bool]],
+        fair_cycle_tracking_mode: Optional[Dict[str, str]],
+        fair_cycle_cross_tier: Optional[Dict[str, bool]],
+        fair_cycle_duration: Optional[Dict[str, int]],
+        exhaustion_cooldown_threshold: Optional[Dict[str, int]],
+        custom_caps: Optional[
+            Dict[str, Dict[Union[int, Tuple[int, ...], str], Dict[str, Dict[str, Any]]]]
+        ],
+    ) -> None:
         # Fair cycle rotation configuration
         self.fair_cycle_enabled = fair_cycle_enabled or {}
         self.fair_cycle_tracking_mode = fair_cycle_tracking_mode or {}
@@ -136,6 +183,7 @@ class UsageManagerCore(
         # In-memory cycle state: {provider: {tier_key: {tracking_key: {"cycle_started_at": float, "exhausted": Set[str]}}}}
         self._cycle_exhausted: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = {}
 
+    def _init_synchronization_state(self) -> None:
         # Per-provider locks for parallel access (sharded locking)
         # This allows concurrent operations on different providers
         self._provider_lock_manager = ProviderLockManager()
@@ -146,7 +194,7 @@ class UsageManagerCore(
         self._initialized = asyncio.Event()
         self._init_lock = asyncio.Lock()
 
-
+    def _init_usage_caches(self) -> None:
         # Lazy caches for stable quota group config (OrderedDict for LRU eviction)
         # (key, model) -> group_name or None
         self._quota_group_cache: "OrderedDict[str, OrderedDict[str, Optional[str]]]" = OrderedDict()
@@ -156,6 +204,9 @@ class UsageManagerCore(
         # Used by record_success to skip syncing siblings when count unchanged
         self._grouped_models_cache: "OrderedDict[str, OrderedDict[str, Tuple[List[str], int]]]" = OrderedDict()
 
+    def _init_persistence_state(
+        self, file_path: Optional[Union[str, Path]]
+    ) -> None:
         # Resilient writer for usage data persistence
         self._state_writer = ResilientStateWriter(file_path or "", lib_logger)
 
@@ -164,6 +215,7 @@ class UsageManagerCore(
         self._batch_persistence: Optional[UsagePersistenceManager] = None
         self._use_batch_persistence = USAGE_BATCH_PERSISTENCE
 
+    def _init_daily_reset_time(self, daily_reset_time_utc: Optional[str]) -> None:
         if daily_reset_time_utc:
             hour, minute = map(int, daily_reset_time_utc.split(":"))
             self.daily_reset_time_utc = dt_time(

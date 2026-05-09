@@ -1,12 +1,16 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from __future__ import annotations
+
 import asyncio
 from collections import defaultdict
-from typing import Any
+from typing import TYPE_CHECKING, Any
 import logging
 import time
-from rotator_library import RotatingClient
+
+if TYPE_CHECKING:
+    from rotator_library import RotatingClient
 
 logger = logging.getLogger(__name__)
 

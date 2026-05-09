@@ -26,32 +26,54 @@ from .credential_providers import (
 console = Console()
 
 
-async def export_gemini_cli_to_env():
-    """
-    Export a Gemini CLI credential JSON file to .env format.
-    Uses the auth class's build_env_lines() and list_credentials() methods.
-    """
-    clear_screen("Export Gemini CLI Credential")
+_INDIVIDUAL_EXPORT_PROVIDERS = {
+    "gemini_cli": {
+        "display_name": "Gemini CLI",
+        "screen_title": "Export Gemini CLI Credential",
+        "env_prefix": "GEMINI_CLI",
+    },
+    "qwen_code": {
+        "display_name": "Qwen Code",
+        "screen_title": "Export Qwen Code Credential",
+        "env_prefix": "QWEN_CODE",
+    },
+    "iflow": {
+        "display_name": "iFlow",
+        "screen_title": "Export iFlow Credential",
+        "env_prefix": "IFLOW",
+    },
+    "antigravity": {
+        "display_name": "Antigravity",
+        "screen_title": "Export Antigravity Credential",
+        "env_prefix": "ANTIGRAVITY",
+    },
+}
 
-    # Get auth instance for this provider
+
+def _get_provider_auth_instance(provider_name: str):
     _ensure_providers_loaded()
-    auth_class = _get_provider_auth_class("gemini_cli")
-    auth_instance = auth_class()
+    auth_class = _get_provider_auth_class(provider_name)
+    return auth_class()
 
-    # List available credentials using auth class
+
+async def _export_credentials_to_env(export_config: dict[str, str], source_getter):
+    display_name = export_config["display_name"]
+    clear_screen(export_config["screen_title"])
+
+    auth_instance = source_getter()
+
     credentials = await asyncio.to_thread(auth_instance.list_credentials, _get_oauth_base_dir())
 
     if not credentials:
         console.print(
             Panel(
-                "No Gemini CLI credentials found. Please add one first using 'Add OAuth Credential'.",
+                f"No {display_name} credentials found. Please add one first using 'Add OAuth Credential'.",
                 style="bold red",
                 title="No Credentials",
             )
         )
         return
 
-    # Display available credentials
     cred_text = Text()
     for i, cred_info in enumerate(credentials):
         cred_text.append(
@@ -61,7 +83,7 @@ async def export_gemini_cli_to_env():
     console.print(
         Panel(
             cred_text,
-            title="Available Gemini CLI Credentials",
+            title=f"Available {display_name} Credentials",
             style="bold blue",
         )
     )
@@ -81,14 +103,12 @@ async def export_gemini_cli_to_env():
         choice_index = int(choice) - 1
         if 0 <= choice_index < len(credentials):
             cred_info = credentials[choice_index]
-
-            # Use auth class to export
             env_path = auth_instance.export_credential_to_env(
                 cred_info["file_path"], _get_oauth_base_dir()
             )
 
             if env_path:
-                numbered_prefix = f"GEMINI_CLI_{cred_info['number']}"
+                numbered_prefix = f"{export_config['env_prefix']}_{cred_info['number']}"
                 success_text = Text.from_markup(
                     f"Successfully exported credential to [bold yellow]'{Path(env_path).name}'[/bold yellow]\n\n"
                     f"[bold]Environment variable prefix:[/bold] [cyan]{numbered_prefix}_*[/cyan]\n\n"
@@ -126,312 +146,38 @@ async def export_gemini_cli_to_env():
                 f"An error occurred during export: {e}", style="bold red", title="Error"
             )
         )
+
+
+async def export_gemini_cli_to_env():
+    """Export a Gemini CLI credential JSON file to .env format."""
+    await _export_credentials_to_env(
+        _INDIVIDUAL_EXPORT_PROVIDERS["gemini_cli"],
+        lambda: _get_provider_auth_instance("gemini_cli"),
+    )
 
 
 async def export_qwen_code_to_env():
-    """
-    Export a Qwen Code credential JSON file to .env format.
-    Uses the auth class's build_env_lines() and list_credentials() methods.
-    """
-    clear_screen("Export Qwen Code Credential")
-
-    # Get auth instance for this provider
-    _ensure_providers_loaded()
-    auth_class = _get_provider_auth_class("qwen_code")
-    auth_instance = auth_class()
-
-    # List available credentials using auth class
-    credentials = await asyncio.to_thread(auth_instance.list_credentials, _get_oauth_base_dir())
-
-    if not credentials:
-        console.print(
-            Panel(
-                "No Qwen Code credentials found. Please add one first using 'Add OAuth Credential'.",
-                style="bold red",
-                title="No Credentials",
-            )
-        )
-        return
-
-    # Display available credentials
-    cred_text = Text()
-    for i, cred_info in enumerate(credentials):
-        cred_text.append(
-            f"  {i + 1}. {Path(cred_info['file_path']).name} ({cred_info['email']})\n"
-        )
-
-    console.print(
-        Panel(
-            cred_text,
-            title="Available Qwen Code Credentials",
-            style="bold blue",
-        )
+    """Export a Qwen Code credential JSON file to .env format."""
+    await _export_credentials_to_env(
+        _INDIVIDUAL_EXPORT_PROVIDERS["qwen_code"],
+        lambda: _get_provider_auth_instance("qwen_code"),
     )
-
-    choice = Prompt.ask(
-        Text.from_markup(
-            "[bold]Please select a credential to export or type [red]'b'[/red] to go back[/bold]"
-        ),
-        choices=[str(i + 1) for i in range(len(credentials))] + ["b"],
-        show_choices=False,
-    )
-
-    if choice.lower() == "b":
-        return
-
-    try:
-        choice_index = int(choice) - 1
-        if 0 <= choice_index < len(credentials):
-            cred_info = credentials[choice_index]
-
-            # Use auth class to export
-            env_path = auth_instance.export_credential_to_env(
-                cred_info["file_path"], _get_oauth_base_dir()
-            )
-
-            if env_path:
-                numbered_prefix = f"QWEN_CODE_{cred_info['number']}"
-                success_text = Text.from_markup(
-                    f"Successfully exported credential to [bold yellow]'{Path(env_path).name}'[/bold yellow]\n\n"
-                    f"[bold]Environment variable prefix:[/bold] [cyan]{numbered_prefix}_*[/cyan]\n\n"
-                    f"[bold]To use this credential:[/bold]\n"
-                    f"1. Copy the contents to your main .env file, OR\n"
-                    f"2. Source it: [bold cyan]source {Path(env_path).name}[/bold cyan] (Linux/Mac)\n"
-                    f"3. Or on Windows PowerShell: [bold cyan]$env:VAR = \"value\"[/bold cyan] for each variable\n\n"
-                    f"[bold]To combine multiple credentials:[/bold]\n"
-                    f"Copy lines from multiple .env files into one file.\n"
-                    f"Each credential uses a unique number ({numbered_prefix}_*)."
-                )
-                console.print(Panel(success_text, style="bold green", title="Success"))
-            else:
-                console.print(
-                    Panel(
-                        "Failed to export credential", style="bold red", title="Error"
-                    )
-                )
-        else:
-            console.print("[bold red]Invalid choice. Please try again.[/bold red]")
-    except ValueError:
-        console.print(
-            "[bold red]Invalid input. Please enter a number or 'b'.[/bold red]"
-        )
-    except (
-        httpx.HTTPError,
-        httpx.TimeoutException,
-        OSError,
-        KeyError,
-        TypeError,
-        json.JSONDecodeError,
-    ) as e:
-        console.print(
-            Panel(
-                f"An error occurred during export: {e}", style="bold red", title="Error"
-            )
-        )
 
 
 async def export_iflow_to_env():
-    """
-    Export an iFlow credential JSON file to .env format.
-    Uses the auth class's build_env_lines() and list_credentials() methods.
-    """
-    clear_screen("Export iFlow Credential")
-
-    # Get auth instance for this provider
-    _ensure_providers_loaded()
-    auth_class = _get_provider_auth_class("iflow")
-    auth_instance = auth_class()
-
-    # List available credentials using auth class
-    credentials = await asyncio.to_thread(auth_instance.list_credentials, _get_oauth_base_dir())
-
-    if not credentials:
-        console.print(
-            Panel(
-                "No iFlow credentials found. Please add one first using 'Add OAuth Credential'.",
-                style="bold red",
-                title="No Credentials",
-            )
-        )
-        return
-
-    # Display available credentials
-    cred_text = Text()
-    for i, cred_info in enumerate(credentials):
-        cred_text.append(
-            f"  {i + 1}. {Path(cred_info['file_path']).name} ({cred_info['email']})\n"
-        )
-
-    console.print(
-        Panel(
-            cred_text,
-            title="Available iFlow Credentials",
-            style="bold blue",
-        )
+    """Export an iFlow credential JSON file to .env format."""
+    await _export_credentials_to_env(
+        _INDIVIDUAL_EXPORT_PROVIDERS["iflow"],
+        lambda: _get_provider_auth_instance("iflow"),
     )
-
-    choice = Prompt.ask(
-        Text.from_markup(
-            "[bold]Please select a credential to export or type [red]'b'[/red] to go back[/bold]"
-        ),
-        choices=[str(i + 1) for i in range(len(credentials))] + ["b"],
-        show_choices=False,
-    )
-
-    if choice.lower() == "b":
-        return
-
-    try:
-        choice_index = int(choice) - 1
-        if 0 <= choice_index < len(credentials):
-            cred_info = credentials[choice_index]
-
-            # Use auth class to export
-            env_path = auth_instance.export_credential_to_env(
-                cred_info["file_path"], _get_oauth_base_dir()
-            )
-
-            if env_path:
-                numbered_prefix = f"IFLOW_{cred_info['number']}"
-                success_text = Text.from_markup(
-                    f"Successfully exported credential to [bold yellow]'{Path(env_path).name}'[/bold yellow]\n\n"
-                    f"[bold]Environment variable prefix:[/bold] [cyan]{numbered_prefix}_*[/cyan]\n\n"
-                    f"[bold]To use this credential:[/bold]\n"
-                    f"1. Copy the contents to your main .env file, OR\n"
-                    f"2. Source it: [bold cyan]source {Path(env_path).name}[/bold cyan] (Linux/Mac)\n"
-                    f"3. Or on Windows PowerShell: [bold cyan]$env:VAR = \"value\"[/bold cyan] for each variable\n\n"
-                    f"[bold]To combine multiple credentials:[/bold]\n"
-                    f"Copy lines from multiple .env files into one file.\n"
-                    f"Each credential uses a unique number ({numbered_prefix}_*)."
-                )
-                console.print(Panel(success_text, style="bold green", title="Success"))
-            else:
-                console.print(
-                    Panel(
-                        "Failed to export credential", style="bold red", title="Error"
-                    )
-                )
-        else:
-            console.print("[bold red]Invalid choice. Please try again.[/bold red]")
-    except ValueError:
-        console.print(
-            "[bold red]Invalid input. Please enter a number or 'b'.[/bold red]"
-        )
-    except (
-        httpx.HTTPError,
-        httpx.TimeoutException,
-        OSError,
-        KeyError,
-        TypeError,
-        json.JSONDecodeError,
-    ) as e:
-        console.print(
-            Panel(
-                f"An error occurred during export: {e}", style="bold red", title="Error"
-            )
-        )
 
 
 async def export_antigravity_to_env():
-    """
-    Export an Antigravity credential JSON file to .env format.
-    Uses the auth class's build_env_lines() and list_credentials() methods.
-    """
-    clear_screen("Export Antigravity Credential")
-
-    # Get auth instance for this provider
-    _ensure_providers_loaded()
-    auth_class = _get_provider_auth_class("antigravity")
-    auth_instance = auth_class()
-
-    # List available credentials using auth class
-    credentials = await asyncio.to_thread(auth_instance.list_credentials, _get_oauth_base_dir())
-
-    if not credentials:
-        console.print(
-            Panel(
-                "No Antigravity credentials found. Please add one first using 'Add OAuth Credential'.",
-                style="bold red",
-                title="No Credentials",
-            )
-        )
-        return
-
-    # Display available credentials
-    cred_text = Text()
-    for i, cred_info in enumerate(credentials):
-        cred_text.append(
-            f"  {i + 1}. {Path(cred_info['file_path']).name} ({cred_info['email']})\n"
-        )
-
-    console.print(
-        Panel(
-            cred_text,
-            title="Available Antigravity Credentials",
-            style="bold blue",
-        )
+    """Export an Antigravity credential JSON file to .env format."""
+    await _export_credentials_to_env(
+        _INDIVIDUAL_EXPORT_PROVIDERS["antigravity"],
+        lambda: _get_provider_auth_instance("antigravity"),
     )
-
-    choice = Prompt.ask(
-        Text.from_markup(
-            "[bold]Please select a credential to export or type [red]'b'[/red] to go back[/bold]"
-        ),
-        choices=[str(i + 1) for i in range(len(credentials))] + ["b"],
-        show_choices=False,
-    )
-
-    if choice.lower() == "b":
-        return
-
-    try:
-        choice_index = int(choice) - 1
-        if 0 <= choice_index < len(credentials):
-            cred_info = credentials[choice_index]
-
-            # Use auth class to export
-            env_path = auth_instance.export_credential_to_env(
-                cred_info["file_path"], _get_oauth_base_dir()
-            )
-
-            if env_path:
-                numbered_prefix = f"ANTIGRAVITY_{cred_info['number']}"
-                success_text = Text.from_markup(
-                    f"Successfully exported credential to [bold yellow]'{Path(env_path).name}'[/bold yellow]\n\n"
-                    f"[bold]Environment variable prefix:[/bold] [cyan]{numbered_prefix}_*[/cyan]\n\n"
-                    f"[bold]To use this credential:[/bold]\n"
-                    f"1. Copy the contents to your main .env file, OR\n"
-                    f"2. Source it: [bold cyan]source {Path(env_path).name}[/bold cyan] (Linux/Mac)\n"
-                    f"3. Or on Windows PowerShell: [bold cyan]$env:VAR = \"value\"[/bold cyan] for each variable\n\n"
-                    f"[bold]To combine multiple credentials:[/bold]\n"
-                    f"Copy lines from multiple .env files into one file.\n"
-                    f"Each credential uses a unique number ({numbered_prefix}_*)."
-                )
-                console.print(Panel(success_text, style="bold green", title="Success"))
-            else:
-                console.print(
-                    Panel(
-                        "Failed to export credential", style="bold red", title="Error"
-                    )
-                )
-        else:
-            console.print("[bold red]Invalid choice. Please try again.[/bold red]")
-    except ValueError:
-        console.print(
-            "[bold red]Invalid input. Please enter a number or 'b'.[/bold red]"
-        )
-    except (
-        httpx.HTTPError,
-        httpx.TimeoutException,
-        OSError,
-        KeyError,
-        TypeError,
-        json.JSONDecodeError,
-    ) as e:
-        console.print(
-            Panel(
-                f"An error occurred during export: {e}", style="bold red", title="Error"
-            )
-        )
 
 
 async def export_all_provider_credentials(provider_name: str):

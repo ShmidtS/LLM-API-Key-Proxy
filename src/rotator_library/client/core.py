@@ -22,7 +22,7 @@ from collections.abc import Callable
 import httpx
 import litellm  # type: ignore[import-untyped]
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, Optional, Union, TYPE_CHECKING
+from typing import Any, AsyncGenerator, Optional, Union, TYPE_CHECKING
 
 from ..env_cache import get_provider_env_cache
 
@@ -61,17 +61,12 @@ _STREAM_REQUIRED_PROVIDERS = {
 # Providers that don't support stream_options parameter
 # These providers return 400/406 errors when stream_options is sent
 _STREAM_OPTIONS_UNSUPPORTED_PROVIDERS = frozenset({"iflow", "kilocode"})
-_PROVIDER_METHOD_CACHE_MISS = object()
-_PROVIDER_METHOD_NO_PROVIDER = object()
-_PROVIDER_METHOD_NO_METHOD = object()
-
 from ..usage_manager import UsageManager
 
 from ..error_types import mask_credential
 from ..provider_routing_config import ProviderConfig
 from ..http_client_pool import HttpClientPool, close_http_pool
 from ..providers import PROVIDER_PLUGINS
-from ..providers.openai_compatible_provider import OpenAICompatibleProvider
 from ..model_info_service import get_model_info_service
 from ..resilience import ResilienceOrchestrator
 from ..credential_manager import CredentialManager
@@ -83,7 +78,6 @@ from ..utils.model_utils import (
     clear_model_match_cache,
     compile_model_patterns,
     extract_provider_from_model,
-    get_or_create_provider_instance,
     normalize_model_string,
     register_model_patterns,
 )
@@ -105,6 +99,7 @@ from ._media import MediaMixin, _IMAGE_PASSTHROUGH_PARAMS, _IMAGE_NATIVE_PROVIDE
 from ._models import ModelsMixin
 from ._quota import QuotaMixin
 from ._anthropic import AnthropicCompatibilityMixin
+from .provider_resolution import ProviderResolver
 
 
 class RotatingClient(
@@ -215,6 +210,16 @@ class RotatingClient(
         # Initialize provider plugins early so they can be used for rotation mode detection
         self._provider_plugins = PROVIDER_PLUGINS
         self._provider_instances = get_provider_registry()
+        self._provider_method_cache: dict[tuple[str, str], Any] = {}
+        self.provider_config = ProviderConfig()
+        self._provider_resolver = ProviderResolver(
+            provider_config=self.provider_config,
+            all_credentials=self.all_credentials,
+            oauth_providers=self.oauth_providers,
+            provider_plugins=self._provider_plugins,
+            provider_instances=self._provider_instances,
+            provider_method_cache=self._provider_method_cache,
+        )
 
         # Build all provider-specific configuration via extracted module
         from ..client_config import build_all_provider_configs
@@ -253,7 +258,6 @@ class RotatingClient(
         )
         self._model_list_cache: dict[str, tuple[list[str], float]] = {}
         self._model_fetch_tasks: dict[str, asyncio.Task] = {}
-        self._provider_method_cache: dict[tuple[str, str], Any] = {}
         # Use HttpClientPool singleton for optimized connection management
         self._http_pool: Optional[HttpClientPool] = None
         self._pool_initialized = False
@@ -268,7 +272,6 @@ class RotatingClient(
         # Model ID resolution cache — avoids repeated provider lookups per request
         self._resolve_model_id_cache: TTLCache = TTLCache(maxsize=256, ttl=300)
 
-        self.provider_config = ProviderConfig()
         self._resilience = ResilienceOrchestrator(
             provider_overrides=CIRCUIT_BREAKER_PROVIDER_OVERRIDES,
         )
@@ -396,135 +399,20 @@ class RotatingClient(
 
 
     def _is_custom_openai_compatible_provider(self, provider_name: str) -> bool:
-        """
-        Checks if a provider is a custom OpenAI-compatible provider.
-
-        Custom providers are identified by:
-        1. Having a _API_BASE environment variable set, AND
-        2. NOT being in the list of known LiteLLM providers
-        """
-        return self.provider_config.is_custom_provider(provider_name)
+        return self._provider_resolver.is_custom_openai_compatible_provider(provider_name)
 
     def _build_credential_to_provider_map(self) -> dict[str, str]:
-        """Build a reverse mapping from credential identifier to provider name."""
-        mapping: Dict[str, str] = {}
-        for provider, creds in self.all_credentials.items():
-            for cred in creds:
-                mapping[cred] = provider
-        return mapping
+        return self._provider_resolver.build_credential_to_provider_map()
 
     def _get_provider_method(
         self, provider_name: str, method_name: str, required: bool = False
     ):
-        cache_key = (provider_name, method_name)
-        cached = self._provider_method_cache.get(cache_key, _PROVIDER_METHOD_CACHE_MISS)
-        if cached is _PROVIDER_METHOD_NO_PROVIDER:
-            if required:
-                raise ValueError(f"No provider instance for '{provider_name}'")
-            return None
-        if cached is _PROVIDER_METHOD_NO_METHOD:
-            if required:
-                raise AttributeError(
-                    f"Provider '{provider_name}' has no method '{method_name}'"
-                )
-            return None
-        if cached is not _PROVIDER_METHOD_CACHE_MISS:
-            # Dynamically resolve on current provider instance to avoid stale references
-            provider_instance = self._get_provider_instance(provider_name)
-            if provider_instance is None:
-                if required:
-                    raise ValueError(f"No provider instance for '{provider_name}'")
-                return None
-            method = getattr(provider_instance, method_name, None)
-            if method is None and required:
-                raise AttributeError(
-                    f"Provider '{provider_name}' has no method '{method_name}'"
-                )
-            return method
-
-        provider_instance = self._get_provider_instance(provider_name)
-        cache_optional_missing = not required and method_name == "get_model_options"
-        if provider_instance is None:
-            if required:
-                raise ValueError(f"No provider instance for '{provider_name}'")
-            if cache_optional_missing:
-                self._provider_method_cache[cache_key] = _PROVIDER_METHOD_NO_PROVIDER
-            return None
-
-        method = getattr(provider_instance, method_name, None)
-        if method is None:
-            if required:
-                raise AttributeError(
-                    f"Provider '{provider_name}' has no method '{method_name}'"
-                )
-            if cache_optional_missing:
-                self._provider_method_cache[cache_key] = _PROVIDER_METHOD_NO_METHOD
-            return None
-
-        # Cache sentinel to avoid repeated introspection; resolve dynamically on hit
-        self._provider_method_cache[cache_key] = True
-        return method
+        return self._provider_resolver.get_provider_method(
+            provider_name, method_name, required
+        )
 
     def _get_provider_instance(self, provider_name: str):
-        """
-        Lazily initializes and returns a provider instance.
-        Only initializes providers that have configured credentials.
-
-        Args:
-            provider_name: The name of the provider to get an instance for.
-                          For OAuth providers, this may include "_oauth" suffix
-                          (e.g., "antigravity_oauth"), but credentials are stored
-                          under the base name (e.g., "antigravity").
-
-        Returns:
-            Provider instance if credentials exist, None otherwise.
-        """
-        # For OAuth providers, credentials are stored under base name (without _oauth suffix)
-        # e.g., "antigravity_oauth" plugin -> credentials under "antigravity"
-        credential_key = provider_name
-        if provider_name.endswith("_oauth"):
-            base_name = provider_name[:-6]  # Remove "_oauth"
-            if base_name in self.oauth_providers:
-                credential_key = base_name
-
-        # Only initialize providers for which we have credentials
-        if credential_key not in self.all_credentials:
-            lib_logger.debug(
-                "Skipping provider '%s' initialization: no credentials configured",
-                provider_name,
-            )
-            return None
-
-        # Try shared lazy-load path first
-        result = get_or_create_provider_instance(
-            provider_name, self._provider_plugins, self._provider_instances
-        )
-        if result is not None:
-            return result
-
-        # Client-specific fallback: custom OpenAI-compatible providers
-        if self._is_custom_openai_compatible_provider(provider_name):
-            try:
-                instance = OpenAICompatibleProvider(provider_name)
-                self._provider_instances.register(provider_name, instance)
-                return instance
-            except ValueError:
-                return None
-
-        # Fallback: known providers with api_base but no plugin get OpenAICompatibleProvider
-        # This fixes providers like openrouter, xai, openai, moonshot that have keys
-        # and api_base but no dedicated provider plugin class
-        api_base = self.provider_config.api_bases.get(provider_name)
-        if api_base:
-            try:
-                instance = OpenAICompatibleProvider(provider_name)
-                self._provider_instances.register(provider_name, instance)
-                return instance
-            except ValueError:
-                return None
-
-        # Check if already registered (e.g. by usage_manager)
-        return self._provider_instances.get(provider_name)
+        return self._provider_resolver.get_provider_instance(provider_name)
 
 
     async def __aenter__(self):
