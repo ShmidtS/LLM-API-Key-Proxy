@@ -5,7 +5,7 @@
 
 import time
 import asyncio
-from .manager import MAX_CACHE_ENTRIES
+from .manager import MAX_CACHE_ENTRIES, lib_logger
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 import litellm  # type: ignore[import-untyped]
@@ -40,6 +40,79 @@ def _new_model_data(**overrides):
     }
 
 
+def _new_key_data(reset_mode: str, today_utc_str: str) -> dict:
+    """Create a fresh key-level usage tracking dict for the given reset mode."""
+    if reset_mode == "per_model":
+        return {
+            "models": {},
+            "global": {"models": {}},
+            "model_cooldowns": {},
+            "failures": {},
+        }
+    return {
+        "daily": {"date": today_utc_str, "models": {}},
+        "global": {"models": {}},
+        "model_cooldowns": {},
+        "failures": {},
+    }
+
+
+def _was_already_on_cooldown(
+    model_cooldowns: dict, model: str, now_ts: float
+) -> bool:
+    """Check if a model already has an active cooldown before modification."""
+    existing = model_cooldowns.get(model)
+    return existing is not None and existing > now_ts
+
+
+def _sync_quota_group_fields(
+    usage_manager, models_data: dict, model: str, credential: str,
+    fields: Dict[str, Any],
+) -> list:
+    """Sync specified fields to all sibling models sharing a quota group.
+
+    Returns list of (sibling_model, sibling_data) tuples for callers that
+    need additional per-sibling processing (e.g., cooldown sync).
+    """
+    group = usage_manager._get_model_quota_group(credential, model)
+    if not group:
+        return []
+    grouped_models = usage_manager._get_grouped_models(credential, group)
+    siblings = []
+    for grouped_model in grouped_models:
+        if grouped_model == model:
+            continue
+        other_model_data = models_data.setdefault(grouped_model, _new_model_data())
+        for field_name, field_value in fields.items():
+            other_model_data[field_name] = field_value
+        siblings.append((grouped_model, other_model_data))
+    return siblings
+
+
+def _maybe_mark_fair_cycle_exhausted(
+    usage_manager, credential: str, model: str, cooldown_duration: float,
+    provider: Optional[str] = None, priority: Optional[int] = None,
+) -> None:
+    """Mark credential exhausted in fair cycle if cooldown exceeds threshold."""
+    if provider is None:
+        provider = usage_manager._get_provider_from_credential(credential)
+    if not provider:
+        return
+    threshold = usage_manager._get_exhaustion_cooldown_threshold(provider)
+    if cooldown_duration <= threshold:
+        return
+    rotation_mode = usage_manager._get_rotation_mode(provider)
+    if not usage_manager._is_fair_cycle_enabled(provider, rotation_mode):
+        return
+    if priority is None:
+        priority = usage_manager._get_credential_priority(credential, provider)
+    tier_key = usage_manager._get_tier_key(provider, priority)
+    tracking_key = usage_manager._get_tracking_key(credential, model, provider)
+    usage_manager._mark_credential_exhausted(
+        credential, provider, tier_key, tracking_key
+    )
+
+
 class UsageManagerRecordingMixin:
     async def record_success(
         self,
@@ -72,13 +145,7 @@ class UsageManagerRecordingMixin:
             if reset_mode == "per_model":
                 # New per-model structure
                 key_data = self._usage_data.setdefault(
-                    key,
-                    {
-                        "models": {},
-                        "global": {"models": {}},
-                        "model_cooldowns": {},
-                        "failures": {},
-                    },
+                    key, _new_key_data("per_model", today_utc_str),
                 )
 
                 # Ensure models dict exists
@@ -111,34 +178,16 @@ class UsageManagerRecordingMixin:
                 model_data["request_count"] = model_data.get("request_count", 0) + 1
 
                 # Sync request_count across quota group (for providers with shared quota pools)
-                # Uses cached grouped models list (quota groups are stable config).
-                # Only writes siblings whose request_count actually differs to avoid
-                # unnecessary setdefault + dict mutations on hot path.
                 new_request_count = model_data["request_count"]
-                group = self._get_model_quota_group(key, model)
-                if group:
-                    grouped_models = self._get_grouped_models(key, group)
-                    window_start = model_data.get("window_start_ts")
-                    max_req = model_data.get("quota_max_requests")
-                    for grouped_model in grouped_models:
-                        if grouped_model == model:
-                            continue
-                        other_model_data = key_data["models"].setdefault(
-                            grouped_model, _new_model_data(),
-                        )
-                        # Skip write if value already matches
-                        if other_model_data.get("request_count") == new_request_count:
-                            continue
-                        other_model_data["request_count"] = new_request_count
-                        # Sync window timing (shared quota pool = shared window)
-                        if window_start:
-                            other_model_data["window_start_ts"] = window_start
-                        # Also sync quota_max_requests if set
-                        if max_req:
-                            other_model_data["quota_max_requests"] = max_req
-                            other_model_data["quota_display"] = (
-                                f"{new_request_count}/{max_req}"
-                            )
+                sync_fields: Dict[str, Any] = {"request_count": new_request_count}
+                window_start = model_data.get("window_start_ts")
+                if window_start:
+                    sync_fields["window_start_ts"] = window_start
+                max_req = model_data.get("quota_max_requests")
+                if max_req:
+                    sync_fields["quota_max_requests"] = max_req
+                    sync_fields["quota_display"] = f"{new_request_count}/{max_req}"
+                _sync_quota_group_fields(self, key_data["models"], model, key, sync_fields)
 
                 # Update quota_display if max_requests is set (Antigravity-specific)
                 max_req = model_data.get("quota_max_requests")
@@ -160,13 +209,7 @@ class UsageManagerRecordingMixin:
             else:
                 # Legacy credential-level structure
                 key_data = self._usage_data.setdefault(
-                    key,
-                    {
-                        "daily": {"date": today_utc_str, "models": {}},
-                        "global": {"models": {}},
-                        "model_cooldowns": {},
-                        "failures": {},
-                    },
+                    key, _new_key_data("credential", today_utc_str),
                 )
 
                 if "last_daily_reset" not in key_data:
@@ -369,23 +412,11 @@ class UsageManagerRecordingMixin:
             # Initialize key data with appropriate structure
             if reset_mode == "per_model":
                 key_data = self._usage_data.setdefault(
-                    key,
-                    {
-                        "models": {},
-                        "global": {"models": {}},
-                        "model_cooldowns": {},
-                        "failures": {},
-                    },
+                    key, _new_key_data("per_model", today_utc_str),
                 )
             else:
                 key_data = self._usage_data.setdefault(
-                    key,
-                    {
-                        "daily": {"date": today_utc_str, "models": {}},
-                        "global": {"models": {}},
-                        "model_cooldowns": {},
-                        "failures": {},
-                    },
+                    key, _new_key_data("credential", today_utc_str),
                 )
 
             # Provider-level errors (transient issues) should not count against the key
@@ -403,10 +434,8 @@ class UsageManagerRecordingMixin:
 
             # Capture existing cooldown BEFORE we modify it
             # Used to determine if this is a fresh exhaustion vs re-processing
-            existing_cooldown_before = model_cooldowns.get(model)
-            was_already_on_cooldown = (
-                existing_cooldown_before is not None
-                and existing_cooldown_before > now_ts
+            was_already_on_cooldown = _was_already_on_cooldown(
+                model_cooldowns, model, now_ts
             )
 
             if classified_error.error_type == "quota_exceeded":
@@ -500,20 +529,9 @@ class UsageManagerRecordingMixin:
                         if quota_reset_ts
                         else (cooldown_seconds or 0)
                     )
-                    provider = self._get_provider_from_credential(key)
-                    if provider:
-                        threshold = self._get_exhaustion_cooldown_threshold(provider)
-                        if effective_cooldown > threshold:
-                            rotation_mode = self._get_rotation_mode(provider)
-                            if self._is_fair_cycle_enabled(provider, rotation_mode):
-                                priority = self._get_credential_priority(key, provider)
-                                tier_key = self._get_tier_key(provider, priority)
-                                tracking_key = self._get_tracking_key(
-                                    key, model, provider
-                                )
-                                self._mark_credential_exhausted(
-                                    key, provider, tier_key, tracking_key
-                                )
+                    _maybe_mark_fair_cycle_exhausted(
+                        self, key, model, effective_cooldown,
+                    )
 
             elif classified_error.error_type == "rate_limit":
                 # Transient rate limit - just set short cooldown (does NOT set quota_reset_ts)
@@ -581,22 +599,12 @@ class UsageManagerRecordingMixin:
 
                     # Sync request_count across quota group
                     new_request_count = model_data["request_count"]
-                    group = self._get_model_quota_group(key, model)
-                    if group:
-                        grouped_models = self._get_grouped_models(key, group)
-                        for grouped_model in grouped_models:
-                            if grouped_model != model:
-                                other_model_data = models_data.setdefault(
-                                    grouped_model, _new_model_data(),
-                                )
-                                other_model_data["request_count"] = new_request_count
-                                # Also sync quota_max_requests if set
-                                max_req = model_data.get("quota_max_requests")
-                                if max_req:
-                                    other_model_data["quota_max_requests"] = max_req
-                                    other_model_data["quota_display"] = (
-                                        f"{new_request_count}/{max_req}"
-                                    )
+                    sync_fields: Dict[str, Any] = {"request_count": new_request_count}
+                    max_req = model_data.get("quota_max_requests")
+                    if max_req:
+                        sync_fields["quota_max_requests"] = max_req
+                        sync_fields["quota_display"] = f"{new_request_count}/{max_req}"
+                    _sync_quota_group_fields(self, models_data, model, key, sync_fields)
 
             key_data["last_failure"] = {
                 "timestamp": now_ts,
@@ -646,13 +654,7 @@ class UsageManagerRecordingMixin:
 
             # Get or create key data structure
             key_data = self._usage_data.setdefault(
-                credential,
-                {
-                    "models": {},
-                    "global": {"models": {}},
-                    "model_cooldowns": {},
-                    "failures": {},
-                },
+                credential, _new_key_data("per_model", ""),
             )
 
             # Ensure models dict exists
@@ -734,12 +736,12 @@ class UsageManagerRecordingMixin:
             if is_exhausted and valid_reset_ts:
                 # Check if there was an existing ACTIVE cooldown before we update
                 # This distinguishes between fresh exhaustion vs refresh of existing state
-                existing_cooldown = model_cooldowns.get(model)
-                was_already_on_cooldown = (
-                    existing_cooldown is not None and existing_cooldown > now_ts
+                was_already_on_cooldown = _was_already_on_cooldown(
+                    model_cooldowns, model, now_ts
                 )
 
                 # Only update cooldown if not set or differs by more than 5 minutes
+                existing_cooldown = model_cooldowns.get(model)
                 should_update = (
                     existing_cooldown is None
                     or abs(existing_cooldown - reset_timestamp) > 300
@@ -759,22 +761,9 @@ class UsageManagerRecordingMixin:
                 # This prevents re-marking after cycle reset when quota refresh sees existing cooldown
                 if not was_already_on_cooldown:
                     cooldown_duration = reset_timestamp - now_ts  # type: ignore[operator]
-                    provider = self._get_provider_from_credential(credential)
-                    if provider:
-                        threshold = self._get_exhaustion_cooldown_threshold(provider)
-                        if cooldown_duration > threshold:
-                            rotation_mode = self._get_rotation_mode(provider)
-                            if self._is_fair_cycle_enabled(provider, rotation_mode):
-                                priority = self._get_credential_priority(
-                                    credential, provider
-                                )
-                                tier_key = self._get_tier_key(provider, priority)
-                                tracking_key = self._get_tracking_key(
-                                    credential, model, provider
-                                )
-                                self._mark_credential_exhausted(
-                                    credential, provider, tier_key, tracking_key
-                                )
+                    _maybe_mark_fair_cycle_exhausted(
+                        self, credential, model, cooldown_duration,
+                    )
 
                 # Defensive clamp: ensure request_count doesn't exceed max when exhausted
                 if (
@@ -793,51 +782,43 @@ class UsageManagerRecordingMixin:
                     group_cache = self._grouped_models_cache.get(credential)
                     if group_cache and group in group_cache:
                         del group_cache[group]
-                grouped_models = self._get_grouped_models(credential, group)
-                for grouped_model in grouped_models:
-                    if grouped_model != model:
-                        other_model_data = key_data["models"].setdefault(
-                            grouped_model, _new_model_data(),
+                # Build sync fields dict
+                sync_fields: Dict[str, Any] = {
+                    "request_count": synced_count,
+                    "baseline_remaining_fraction": remaining_fraction,
+                    "baseline_fetched_at": now_ts,
+                    "requests_at_baseline": synced_count,
+                }
+                if max_requests is not None:
+                    sync_fields["quota_max_requests"] = max_requests
+                    sync_fields["quota_display"] = f"{synced_count}/{max_requests}"
+                if valid_reset_ts:
+                    sync_fields["quota_reset_ts"] = reset_timestamp
+                window_start = model_data.get("window_start_ts")
+                if window_start:
+                    sync_fields["window_start_ts"] = window_start
+                siblings = _sync_quota_group_fields(
+                    self, key_data["models"], model, credential, sync_fields,
+                )
+                # Sync cooldown if exhausted (with ±5 min check)
+                if is_exhausted and valid_reset_ts:
+                    for grouped_model, other_model_data in siblings:
+                        existing_grouped = model_cooldowns.get(grouped_model)
+                        should_update_grouped = (
+                            existing_grouped is None
+                            or abs(existing_grouped - reset_timestamp) > 300
                         )
-                        # Sync request tracking (use synced_count to prevent reset bug)
-                        other_model_data["request_count"] = synced_count
-                        if max_requests is not None:
-                            other_model_data["quota_max_requests"] = max_requests
+                        if should_update_grouped:
+                            model_cooldowns[grouped_model] = reset_timestamp
+                        # Defensive clamp for grouped models when exhausted
+                        if (
+                            max_requests is not None
+                            and other_model_data["request_count"] > max_requests
+                        ):
+                            other_model_data["request_count"] = max_requests
                             other_model_data["quota_display"] = (
-                                f"{synced_count}/{max_requests}"
+                                f"{max_requests}/{max_requests}"
                             )
-                        # Sync baseline fields
-                        other_model_data["baseline_remaining_fraction"] = (
-                            remaining_fraction
-                        )
-                        other_model_data["baseline_fetched_at"] = now_ts
-                        other_model_data["requests_at_baseline"] = synced_count
-                        # Sync reset timestamp if valid
-                        if valid_reset_ts:
-                            other_model_data["quota_reset_ts"] = reset_timestamp
-                        # Sync window start time
-                        window_start = model_data.get("window_start_ts")
-                        if window_start:
-                            other_model_data["window_start_ts"] = window_start
-                        # Sync cooldown if exhausted (with В±5 min check)
-                        if is_exhausted and valid_reset_ts:
-                            existing_grouped = model_cooldowns.get(grouped_model)
-                            should_update_grouped = (
-                                existing_grouped is None
-                                or abs(existing_grouped - reset_timestamp) > 300
-                            )
-                            if should_update_grouped:
-                                model_cooldowns[grouped_model] = reset_timestamp
-
-                            # Defensive clamp for grouped models when exhausted
-                            if (
-                                max_requests is not None
-                                and other_model_data["request_count"] > max_requests
-                            ):
-                                other_model_data["request_count"] = max_requests
-                                other_model_data["quota_display"] = (
-                                    f"{max_requests}/{max_requests}"
-                                )
 
             lib_logger.log(
                 TRACE,
@@ -1346,10 +1327,6 @@ class UsageManagerQueryMixin:
         virtual_name = f"{provider}/_quota"
         return model_cooldowns.get(virtual_name) or 0
 
-    # Providers where request_count should be used for credential selection
-    # instead of success_count (because failed requests also consume quota)
-    _REQUEST_COUNT_PROVIDERS = {"antigravity", "gemini_cli", "chutes", "nanogpt", "zai"}
-
     def _get_baseline_remaining(self, key: str, model: str) -> Optional[float]:
         """
         Get baseline_remaining_fraction for a credential's model, checking quota groups.
@@ -1742,513 +1719,8 @@ class UsageManagerQueryMixin:
 
 
 
-# --- Statistics Mixin ---
-
-from pathlib import Path
-from typing import Any, Dict, Optional
 
 
-class UsageManagerStatisticsMixin:
-    pass
+# --- Statistics Mixin (extracted to statistics.py) ---
 
-
-# --- Statistics Formatters ---
-
-
-import time
-from pathlib import Path
-from typing import Any, Dict, Optional
-
-from .manager import lib_logger
-
-async def get_stats_for_endpoint(
-    self,
-    provider_filter: Optional[str] = None,
-    include_global: bool = True,
-) -> Dict[str, Any]:
-    """
-    Get usage stats formatted for the /v1/quota-stats endpoint.
-
-    Aggregates data from key_usage.json grouped by provider.
-    Includes both current period stats and global (lifetime) stats.
-
-    Args:
-        provider_filter: If provided, only return stats for this provider
-        include_global: If True, include global/lifetime stats alongside current
-
-    Returns:
-        {
-            "providers": {
-                "provider_name": {
-                    "credential_count": int,
-                    "active_count": int,
-                    "on_cooldown_count": int,
-                    "total_requests": int,
-                    "tokens": {
-                        "input_cached": int,
-                        "input_uncached": int,
-                        "input_cache_pct": float,
-                        "output": int
-                    },
-                    "approx_cost": float | None,
-                    "credentials": [...],
-                    "global": {...}  # If include_global is True
-                }
-            },
-            "summary": {...},
-            "global_summary": {...},  # If include_global is True
-            "timestamp": float
-        }
-    """
-    await self._lazy_init()
-
-    now_ts = time.time()
-    providers: Dict[str, Dict[str, Any]] = {}
-    # Track global stats separately
-    global_providers: Dict[str, Dict[str, Any]] = {}
-
-    async with self._data_lock.read():
-        if not self._usage_data:
-            return {
-                "providers": {},
-                "summary": {
-                    "total_providers": 0,
-                    "total_credentials": 0,
-                    "active_credentials": 0,
-                    "exhausted_credentials": 0,
-                    "total_requests": 0,
-                    "tokens": {
-                        "input_cached": 0,
-                        "input_uncached": 0,
-                        "input_cache_pct": 0,
-                        "output": 0,
-                    },
-                    "approx_total_cost": 0.0,
-                },
-                "global_summary": {
-                    "total_providers": 0,
-                    "total_credentials": 0,
-                    "total_requests": 0,
-                    "tokens": {
-                        "input_cached": 0,
-                        "input_uncached": 0,
-                        "input_cache_pct": 0,
-                        "output": 0,
-                    },
-                    "approx_total_cost": 0.0,
-                },
-                "data_source": "cache",
-                "timestamp": now_ts,
-            }
-
-        for credential, cred_data in self._usage_data.items():
-            # Extract provider from credential path
-            provider = self._get_provider_from_credential(credential)
-            if not provider:
-                continue
-
-            # Apply filter if specified
-            if provider_filter and provider != provider_filter:
-                continue
-
-            # Initialize provider entry
-            if provider not in providers:
-                providers[provider] = {
-                    "credential_count": 0,
-                    "active_count": 0,
-                    "on_cooldown_count": 0,
-                    "exhausted_count": 0,
-                    "total_requests": 0,
-                    "tokens": {
-                        "input_cached": 0,
-                        "input_uncached": 0,
-                        "input_cache_pct": 0,
-                        "output": 0,
-                    },
-                    "approx_cost": 0.0,
-                    "credentials": [],
-                }
-                global_providers[provider] = {
-                    "total_requests": 0,
-                    "tokens": {
-                        "input_cached": 0,
-                        "input_uncached": 0,
-                        "input_cache_pct": 0,
-                        "output": 0,
-                    },
-                    "approx_cost": 0.0,
-                }
-
-            prov_stats = providers[provider]
-            prov_stats["credential_count"] += 1
-
-            # Determine credential status and cooldowns
-            key_cooldown = cred_data.get("key_cooldown_until", 0) or 0
-            model_cooldowns = cred_data.get("model_cooldowns", {})
-
-            # Build active cooldowns with remaining time
-            active_cooldowns = {}
-            for model, cooldown_ts in model_cooldowns.items():
-                if cooldown_ts > now_ts:
-                    remaining_seconds = int(cooldown_ts - now_ts)
-                    active_cooldowns[model] = {
-                        "until_ts": cooldown_ts,
-                        "remaining_seconds": remaining_seconds,
-                    }
-
-            key_cooldown_remaining = None
-            if key_cooldown > now_ts:
-                key_cooldown_remaining = int(key_cooldown - now_ts)
-
-            has_active_cooldown = key_cooldown > now_ts or len(active_cooldowns) > 0
-
-            # Check if exhausted (all quota groups exhausted for Antigravity)
-            is_exhausted = False
-            models_data = cred_data.get("models", {})
-            if models_data:
-                # Check if any model has remaining quota
-                all_exhausted = True
-                for model_stats in models_data.values():
-                    if isinstance(model_stats, dict):
-                        baseline = model_stats.get("baseline_remaining_fraction")
-                        if baseline is None or baseline > 0:
-                            all_exhausted = False
-                            break
-                if all_exhausted and len(models_data) > 0:
-                    is_exhausted = True
-
-            if is_exhausted:
-                prov_stats["exhausted_count"] += 1
-                status = "exhausted"
-            elif has_active_cooldown:
-                prov_stats["on_cooldown_count"] += 1
-                status = "cooldown"
-            else:
-                prov_stats["active_count"] += 1
-                status = "active"
-
-            # Aggregate token stats (current period)
-            cred_tokens = {
-                "input_cached": 0,
-                "input_uncached": 0,
-                "input_cache_creation": 0,
-                "output": 0,
-            }
-            cred_requests = 0
-            cred_cost = 0.0
-
-            # Aggregate global token stats
-            cred_global_tokens = {
-                "input_cached": 0,
-                "input_uncached": 0,
-                "input_cache_creation": 0,
-                "output": 0,
-            }
-            cred_global_requests = 0
-            cred_global_cost = 0.0
-
-            # Handle per-model structure (current period)
-            if models_data:
-                for model_name, model_stats in models_data.items():
-                    if not isinstance(model_stats, dict):
-                        continue
-                    # Prefer request_count if available and non-zero, else fall back to success+failure
-                    req_count = model_stats.get("request_count", 0)
-                    if req_count > 0:
-                        cred_requests += req_count
-                    else:
-                        cred_requests += model_stats.get("success_count", 0)
-                        cred_requests += model_stats.get("failure_count", 0)
-                    # Token stats - track cached separately
-                    cred_tokens["input_cached"] += model_stats.get(
-                        "prompt_tokens_cached", 0
-                    )
-                    cred_tokens["input_cache_creation"] += model_stats.get(
-                        "prompt_tokens_cache_creation", 0
-                    )
-                    cred_tokens["input_uncached"] += model_stats.get(
-                        "prompt_tokens", 0
-                    )
-                    cred_tokens["output"] += model_stats.get("completion_tokens", 0)
-                    cred_cost += model_stats.get("approx_cost", 0.0)
-
-            # Handle legacy daily structure
-            daily_data = cred_data.get("daily", {})
-            daily_models = daily_data.get("models", {})
-            for model_name, model_stats in daily_models.items():
-                if not isinstance(model_stats, dict):
-                    continue
-                cred_requests += model_stats.get("success_count", 0)
-                cred_tokens["input_cached"] += model_stats.get(
-                    "prompt_tokens_cached", 0
-                )
-                cred_tokens["input_cache_creation"] += model_stats.get(
-                    "prompt_tokens_cache_creation", 0
-                )
-                cred_tokens["input_uncached"] += model_stats.get("prompt_tokens", 0)
-                cred_tokens["output"] += model_stats.get("completion_tokens", 0)
-                cred_cost += model_stats.get("approx_cost", 0.0)
-
-            # Handle global stats
-            global_data = cred_data.get("global", {})
-            global_models = global_data.get("models", {})
-            for model_name, model_stats in global_models.items():
-                if not isinstance(model_stats, dict):
-                    continue
-                req_count = model_stats.get("request_count", 0)
-                if req_count > 0:
-                    cred_global_requests += req_count
-                else:
-                    cred_global_requests += model_stats.get("success_count", 0)
-                    cred_global_requests += model_stats.get("failure_count", 0)
-                cred_global_tokens["input_cached"] += model_stats.get(
-                    "prompt_tokens_cached", 0
-                )
-                cred_global_tokens["input_cache_creation"] += model_stats.get(
-                    "prompt_tokens_cache_creation", 0
-                )
-                cred_global_tokens["input_uncached"] += model_stats.get(
-                    "prompt_tokens", 0
-                )
-                cred_global_tokens["output"] += model_stats.get(
-                    "completion_tokens", 0
-                )
-                cred_global_cost += model_stats.get("approx_cost", 0.0)
-
-            # Add current period stats to global totals
-            cred_global_requests += cred_requests
-            cred_global_tokens["input_cached"] += cred_tokens["input_cached"]
-            cred_global_tokens["input_cache_creation"] += cred_tokens[
-                "input_cache_creation"
-            ]
-            cred_global_tokens["input_uncached"] += cred_tokens["input_uncached"]
-            cred_global_tokens["output"] += cred_tokens["output"]
-            cred_global_cost += cred_cost
-
-            # Build credential entry
-            # Mask credential identifier for display
-            if credential.startswith("env://"):
-                identifier = credential
-            else:
-                identifier = Path(credential).name
-
-            cred_entry = {
-                "identifier": identifier,
-                "full_path": credential,
-                "status": status,
-                "last_used_ts": cred_data.get("last_used_ts"),
-                "requests": cred_requests,
-                "tokens": cred_tokens,
-                "approx_cost": cred_cost if cred_cost > 0 else None,
-            }
-
-            # Add cooldown info
-            if key_cooldown_remaining is not None:
-                cred_entry["key_cooldown_remaining"] = key_cooldown_remaining
-            if active_cooldowns:
-                cred_entry["model_cooldowns"] = active_cooldowns
-
-            # Add global stats for this credential
-            if include_global:
-                # Calculate global cache percentage
-                global_total_input = (
-                    cred_global_tokens["input_cached"]
-                    + cred_global_tokens["input_uncached"]
-                )
-                global_cache_pct = (
-                    round(
-                        cred_global_tokens["input_cached"]
-                        / global_total_input
-                        * 100,
-                        1,
-                    )
-                    if global_total_input > 0
-                    else 0
-                )
-
-                cred_entry["global"] = {
-                    "requests": cred_global_requests,
-                    "tokens": {
-                        "input_cached": cred_global_tokens["input_cached"],
-                        "input_cache_creation": cred_global_tokens[
-                            "input_cache_creation"
-                        ],
-                        "input_uncached": cred_global_tokens["input_uncached"],
-                        "input_cache_pct": global_cache_pct,
-                        "output": cred_global_tokens["output"],
-                    },
-                    "approx_cost": (
-                        cred_global_cost if cred_global_cost > 0 else None
-                    ),
-                }
-
-            # Add model-specific data for providers with per-model tracking
-            if models_data:
-                cred_entry["models"] = {}
-                for model_name, model_stats in models_data.items():
-                    if not isinstance(model_stats, dict):
-                        continue
-                    cred_entry["models"][model_name] = {
-                        "requests": model_stats.get("success_count", 0)
-                        + model_stats.get("failure_count", 0),
-                        "request_count": model_stats.get("request_count", 0),
-                        "success_count": model_stats.get("success_count", 0),
-                        "failure_count": model_stats.get("failure_count", 0),
-                        "prompt_tokens": model_stats.get("prompt_tokens", 0),
-                        "prompt_tokens_cached": model_stats.get(
-                            "prompt_tokens_cached", 0
-                        ),
-                        "prompt_tokens_cache_creation": model_stats.get(
-                            "prompt_tokens_cache_creation", 0
-                        ),
-                        "completion_tokens": model_stats.get(
-                            "completion_tokens", 0
-                        ),
-                        "approx_cost": model_stats.get("approx_cost", 0.0),
-                        "window_start_ts": model_stats.get("window_start_ts"),
-                        "quota_reset_ts": model_stats.get("quota_reset_ts"),
-                        # Quota baseline fields (Antigravity-specific)
-                        "baseline_remaining_fraction": model_stats.get(
-                            "baseline_remaining_fraction"
-                        ),
-                        "baseline_fetched_at": model_stats.get(
-                            "baseline_fetched_at"
-                        ),
-                        "quota_max_requests": model_stats.get("quota_max_requests"),
-                        "quota_display": model_stats.get("quota_display"),
-                    }
-
-            prov_stats["credentials"].append(cred_entry)
-
-            # Aggregate to provider totals (current period)
-            prov_stats["total_requests"] += cred_requests
-            prov_stats["tokens"]["input_cached"] += cred_tokens["input_cached"]
-            prov_stats["tokens"]["input_uncached"] += cred_tokens["input_uncached"]
-            prov_stats["tokens"]["output"] += cred_tokens["output"]
-            if cred_cost > 0:
-                prov_stats["approx_cost"] += cred_cost
-
-            # Aggregate to global provider totals
-            global_providers[provider]["total_requests"] += cred_global_requests
-            global_providers[provider]["tokens"][
-                "input_cached"
-            ] += cred_global_tokens["input_cached"]
-            global_providers[provider]["tokens"][
-                "input_uncached"
-            ] += cred_global_tokens["input_uncached"]
-            global_providers[provider]["tokens"]["output"] += cred_global_tokens[
-                "output"
-            ]
-            global_providers[provider]["approx_cost"] += cred_global_cost
-
-    # Calculate cache percentages for each provider
-    for provider, prov_stats in providers.items():
-        total_input = (
-            prov_stats["tokens"]["input_cached"]
-            + prov_stats["tokens"]["input_uncached"]
-        )
-        if total_input > 0:
-            prov_stats["tokens"]["input_cache_pct"] = round(
-                prov_stats["tokens"]["input_cached"] / total_input * 100, 1
-            )
-        # Set cost to None if 0
-        if prov_stats["approx_cost"] == 0:
-            prov_stats["approx_cost"] = None
-
-        # Calculate global cache percentages
-        if include_global and provider in global_providers:
-            gp = global_providers[provider]
-            global_total = (
-                gp["tokens"]["input_cached"] + gp["tokens"]["input_uncached"]
-            )
-            if global_total > 0:
-                gp["tokens"]["input_cache_pct"] = round(
-                    gp["tokens"]["input_cached"] / global_total * 100, 1
-                )
-            if gp["approx_cost"] == 0:
-                gp["approx_cost"] = None
-            prov_stats["global"] = gp
-
-    # Build summary (current period)
-    total_creds = sum(p["credential_count"] for p in providers.values())
-    active_creds = sum(p["active_count"] for p in providers.values())
-    exhausted_creds = sum(p["exhausted_count"] for p in providers.values())
-    total_requests = sum(p["total_requests"] for p in providers.values())
-    total_input_cached = sum(
-        p["tokens"]["input_cached"] for p in providers.values()
-    )
-    total_input_uncached = sum(
-        p["tokens"]["input_uncached"] for p in providers.values()
-    )
-    total_output = sum(p["tokens"]["output"] for p in providers.values())
-    total_cost = sum(p["approx_cost"] or 0 for p in providers.values())
-
-    total_input = total_input_cached + total_input_uncached
-    input_cache_pct = (
-        round(total_input_cached / total_input * 100, 1) if total_input > 0 else 0
-    )
-
-    result = {
-        "providers": providers,
-        "summary": {
-            "total_providers": len(providers),
-            "total_credentials": total_creds,
-            "active_credentials": active_creds,
-            "exhausted_credentials": exhausted_creds,
-            "total_requests": total_requests,
-            "tokens": {
-                "input_cached": total_input_cached,
-                "input_uncached": total_input_uncached,
-                "input_cache_pct": input_cache_pct,
-                "output": total_output,
-            },
-            "approx_total_cost": total_cost if total_cost > 0 else None,
-        },
-        "data_source": "cache",
-        "timestamp": now_ts,
-    }
-
-    # Build global summary
-    if include_global:
-        global_total_requests = sum(
-            gp["total_requests"] for gp in global_providers.values()
-        )
-        global_total_input_cached = sum(
-            gp["tokens"]["input_cached"] for gp in global_providers.values()
-        )
-        global_total_input_uncached = sum(
-            gp["tokens"]["input_uncached"] for gp in global_providers.values()
-        )
-        global_total_output = sum(
-            gp["tokens"]["output"] for gp in global_providers.values()
-        )
-        global_total_cost = sum(
-            gp["approx_cost"] or 0 for gp in global_providers.values()
-        )
-
-        global_total_input = global_total_input_cached + global_total_input_uncached
-        global_input_cache_pct = (
-            round(global_total_input_cached / global_total_input * 100, 1)
-            if global_total_input > 0
-            else 0
-        )
-
-        result["global_summary"] = {
-            "total_providers": len(global_providers),
-            "total_credentials": total_creds,
-            "total_requests": global_total_requests,
-            "tokens": {
-                "input_cached": global_total_input_cached,
-                "input_uncached": global_total_input_uncached,
-                "input_cache_pct": global_input_cache_pct,
-                "output": global_total_output,
-            },
-            "approx_total_cost": (
-                global_total_cost if global_total_cost > 0 else None
-            ),
-        }
-
-    return result
-
-
-UsageManagerStatisticsMixin.get_stats_for_endpoint = get_stats_for_endpoint
+from .statistics import UsageManagerStatisticsMixin, get_stats_for_endpoint

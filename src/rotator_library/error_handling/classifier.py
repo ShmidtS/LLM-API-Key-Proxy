@@ -88,6 +88,16 @@ _AUTHENTICATION_ERROR_PATTERNS = (
     "invalid iam token",
 )
 
+_SERVER_ERROR_PATTERNS = (
+    "server had an error",
+    "the server had an error",
+)
+
+
+def _match_patterns(text: str, patterns: tuple[str, ...]) -> bool:
+    """Check if any pattern string is a substring of *text*."""
+    return any(p in text for p in patterns)
+
 
 def classify_rate_limit(
     e: Exception,
@@ -184,7 +194,7 @@ def classify_stream_error(raw_response: Dict) -> ClassifiedError:
     """
     raw_str = str(raw_response).lower()
     if "inception" in raw_str:
-        if "server had an error" in raw_str or "the server had an error" in raw_str:
+        if _match_patterns(raw_str, _SERVER_ERROR_PATTERNS):
             return ClassifiedError(
                 error_type="server_error",
                 status_code=503,
@@ -286,21 +296,21 @@ def _classify_http_status_error(
 def _classify_http_400(
     e: Exception, status_code: int, error_body_lower: str
 ) -> ClassifiedError:
-    if any(pattern in error_body_lower for pattern in _CONTEXT_WINDOW_ERROR_PATTERNS):
+    if _match_patterns(error_body_lower, _CONTEXT_WINDOW_ERROR_PATTERNS):
         return ClassifiedError(
             error_type="context_window_exceeded",
             original_exception=e,
             status_code=status_code,
         )
 
-    if any(pattern in error_body_lower for pattern in _POLICY_ERROR_PATTERNS):
+    if _match_patterns(error_body_lower, _POLICY_ERROR_PATTERNS):
         return ClassifiedError(
             error_type="invalid_request",
             original_exception=e,
             status_code=status_code,
         )
 
-    if any(pattern in error_body_lower for pattern in _UPSTREAM_ERROR_PATTERNS):
+    if _match_patterns(error_body_lower, _UPSTREAM_ERROR_PATTERNS):
         return ClassifiedError(
             error_type="server_error",
             original_exception=e,
@@ -367,21 +377,21 @@ def _classify_invalid_request_error(
     error_str_lower: str,
     status_code: Optional[int],
 ) -> ClassifiedError:
-    if any(pattern in error_str_lower for pattern in _AUTHENTICATION_ERROR_PATTERNS):
+    if _match_patterns(error_str_lower, _AUTHENTICATION_ERROR_PATTERNS):
         return ClassifiedError(
             error_type="authentication",
             original_exception=e,
             status_code=401,
         )
 
-    if any(pattern in error_str_lower for pattern in _UPSTREAM_ERROR_PATTERNS):
+    if _match_patterns(error_str_lower, _UPSTREAM_ERROR_PATTERNS):
         return ClassifiedError(
             error_type="server_error",
             original_exception=e,
             status_code=status_code or 503,
         )
 
-    if any(pattern in error_str_lower for pattern in _ACCOUNT_BILLING_ERROR_PATTERNS):
+    if _match_patterns(error_str_lower, _ACCOUNT_BILLING_ERROR_PATTERNS):
         return ClassifiedError(
             error_type="quota_exceeded",
             original_exception=e,
@@ -405,7 +415,7 @@ def _classify_invalid_request_error(
 def _classify_api_connection_error(
     e: Exception, error_str_lower: str, status_code: Optional[int]
 ) -> ClassifiedError:
-    if 'server had an error' in error_str_lower or 'the server had an error' in error_str_lower:
+    if _match_patterns(error_str_lower, _SERVER_ERROR_PATTERNS):
         return ClassifiedError(
             error_type='api_connection',
             original_exception=e,
@@ -458,7 +468,7 @@ def _classify_not_found_error(
 def _classify_litellm_api_error(
     e: Exception, error_str_lower: str, status_code: Optional[int]
 ) -> ClassifiedError:
-    if any(p in error_str_lower for p in _ACCOUNT_BILLING_ERROR_PATTERNS):
+    if _match_patterns(error_str_lower, _ACCOUNT_BILLING_ERROR_PATTERNS):
         return ClassifiedError(
             error_type="quota_exceeded",
             original_exception=e,
@@ -466,7 +476,7 @@ def _classify_litellm_api_error(
             retry_after=7200,
             reason="account_billing_issue",
         )
-    if any(p in error_str_lower for p in _LITELLM_API_CREDIT_PATTERNS):
+    if _match_patterns(error_str_lower, _LITELLM_API_CREDIT_PATTERNS):
         return ClassifiedError(
             error_type="quota_exceeded",
             original_exception=e,
@@ -483,7 +493,7 @@ def _classify_litellm_api_error(
     if (
         "invalid api key" in error_str_lower
         or "invalid_api_key" in error_str_lower
-        or any(pattern in error_str_lower for pattern in _AUTHENTICATION_ERROR_PATTERNS)
+        or _match_patterns(error_str_lower, _AUTHENTICATION_ERROR_PATTERNS)
     ):
         return ClassifiedError(
             error_type="authentication",

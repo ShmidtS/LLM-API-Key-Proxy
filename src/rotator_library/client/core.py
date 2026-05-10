@@ -167,169 +167,20 @@ class RotatingClient(
         configure_client_logging(self.data_dir, configure_logging)
         configure_litellm_runtime()
 
-        api_keys = api_keys or {}
-        oauth_credentials = oauth_credentials or {}
-
-        # Filter out providers with empty lists of credentials to ensure validity
-        api_keys = {provider: keys for provider, keys in api_keys.items() if keys}
-        oauth_credentials = {
-            provider: paths for provider, paths in oauth_credentials.items() if paths
-        }
-
-        if not api_keys and not oauth_credentials:
-            lib_logger.warning(
-                "No provider credentials configured. The client will be unable to make any API requests."
-            )
-
-        self.api_keys = api_keys
-        # Use provided oauth_credentials directly if available (already discovered by main.py)
-        # Only call discover_and_prepare() if no credentials were passed
-        if oauth_credentials:
-            self.oauth_credentials = oauth_credentials
-        else:
-            self.credential_manager = CredentialManager(
-                dict(os.environ), oauth_dir=get_oauth_dir(self.data_dir)
-            )
-            self.oauth_credentials = self.credential_manager.discover_and_prepare()
-        self.background_refresher = BackgroundRefresher(self)
-        self.oauth_providers = set(self.oauth_credentials.keys())
-
-        all_credentials = {}
-        for provider, keys in api_keys.items():
-            all_credentials.setdefault(provider, []).extend(keys)
-        for provider, paths in self.oauth_credentials.items():
-            all_credentials.setdefault(provider, []).extend(paths)
-        self.all_credentials = all_credentials
-        self._cred_offset: dict[str, int] = {}
-        self._lock_manager = ProviderLockManager()
-
         self.max_retries = max_retries
         self.global_timeout = global_timeout
         self.abort_on_callback_error = abort_on_callback_error
 
-        # Initialize provider plugins early so they can be used for rotation mode detection
-        self._provider_plugins = PROVIDER_PLUGINS
-        self._provider_instances = get_provider_registry()
-        self._provider_method_cache: dict[tuple[str, str], Any] = {}
-        self.provider_config = ProviderConfig()
-        self._provider_resolver = ProviderResolver(
-            provider_config=self.provider_config,
-            all_credentials=self.all_credentials,
-            oauth_providers=self.oauth_providers,
-            provider_plugins=self._provider_plugins,
-            provider_instances=self._provider_instances,
-            provider_method_cache=self._provider_method_cache,
+        self._init_credential_setup(api_keys, oauth_credentials)
+        self._init_provider_resolver()
+        self._init_usage_manager(usage_file_path, rotation_tolerance)
+        self._init_http_pool()
+        self._init_resilience()
+        self._init_model_patterns(
+            litellm_provider_params, ignore_models, whitelist_models,
+            enable_request_logging, max_concurrent_requests_per_key,
         )
-
-        # Build all provider-specific configuration via extracted module
-        from ..client_config import build_all_provider_configs
-
-        provider_configs = build_all_provider_configs(
-            self.all_credentials, self._provider_plugins
-        )
-
-        # Resolve usage file path - use provided path or default to data_dir
-        if usage_file_path is not None:
-            resolved_usage_path = Path(usage_file_path)
-        else:
-            resolved_usage_path = self.data_dir / "key_usage.json"
-
-        self.usage_manager = UsageManager(
-            file_path=resolved_usage_path,
-            rotation_tolerance=rotation_tolerance,
-            provider_rotation_modes=provider_configs["provider_rotation_modes"],
-            provider_plugins=PROVIDER_PLUGINS,
-            priority_multipliers=provider_configs["priority_multipliers"],
-            priority_multipliers_by_mode=provider_configs[
-                "priority_multipliers_by_mode"
-            ],
-            sequential_fallback_multipliers=provider_configs[
-                "sequential_fallback_multipliers"
-            ],
-            fair_cycle_enabled=provider_configs["fair_cycle_enabled"],
-            fair_cycle_tracking_mode=provider_configs["fair_cycle_tracking_mode"],
-            fair_cycle_cross_tier=provider_configs["fair_cycle_cross_tier"],
-            fair_cycle_duration=provider_configs["fair_cycle_duration"],
-            exhaustion_cooldown_threshold=provider_configs[
-                "exhaustion_cooldown_threshold"
-            ],
-            custom_caps=provider_configs["custom_caps"],
-            credential_to_provider=self._build_credential_to_provider_map(),
-        )
-        self._model_list_cache: dict[str, tuple[list[str], float]] = {}
-        self._model_fetch_tasks: dict[str, asyncio.Task] = {}
-        # Use HttpClientPool singleton for optimized connection management
-        self._http_pool: Optional[HttpClientPool] = None
-        self._pool_initialized = False
-        # Cache for provider API endpoints (for pre-warming)
-        self._provider_endpoints: dict[str, str] = {}
-
-        # Credential priority cache for fast lookups (TTL=300s, auto-expiry)
-        from cachetools import TTLCache
-
-        self._credential_priority_cache: TTLCache = TTLCache(maxsize=64, ttl=300)
-
-        # Model ID resolution cache — avoids repeated provider lookups per request
-        self._resolve_model_id_cache: TTLCache = TTLCache(maxsize=256, ttl=300)
-
-        self._resilience = ResilienceOrchestrator(
-            provider_overrides=CIRCUIT_BREAKER_PROVIDER_OVERRIDES,
-        )
-        # Expose sub-components for backward compatibility
-        self.cooldown_manager = self._resilience.cooldown
-        self.ip_throttle_detector = self._resilience.ip_throttle
-        self.circuit_breaker = self._resilience.circuit_breaker
-        self.rate_limiter = self._resilience.rate_limiter
-        self.litellm_provider_params = litellm_provider_params or {}
-        self.ignore_models = compile_model_patterns(ignore_models or {})
-        self.whitelist_models = compile_model_patterns(whitelist_models or {})
-        register_model_patterns(self.ignore_models)
-        register_model_patterns(self.whitelist_models)
-        clear_model_match_cache()
-        self.enable_request_logging = enable_request_logging
-        self._model_definitions = None  # lazy-init
-
-        # Lazy-init ModelRegistry for context window lookups (used by token calculator)
-        self._model_registry = None
-
-        # Store and validate max concurrent requests per key
-        self.max_concurrent_requests_per_key = dict(
-            max_concurrent_requests_per_key or {}
-        )
-
-        for provider in self.api_keys:
-            self.max_concurrent_requests_per_key.setdefault(
-                provider, DEFAULT_API_KEY_MAX_CONCURRENT_REQUESTS
-            )
-
-        # Validate all values are >= 1
-        for provider, max_val in self.max_concurrent_requests_per_key.items():
-            if max_val < 1:
-                lib_logger.warning(
-                    "Invalid max_concurrent for '%s': %s. Setting to 1.",
-                    provider,
-                    max_val,
-                )
-                self.max_concurrent_requests_per_key[provider] = 1
-
-        # Track consecutive quota failures per credential for intelligent rotation
-        self._consecutive_quota_failures: dict[str, int] = {}
-
-        # Global backpressure semaphore — limits total concurrent outbound
-        # API requests across all providers/keys. Prevents resource exhaustion.
-        _default_max_concurrent = 128 if sys.platform == "win32" else 256
-        try:
-            _max_concurrent = int(
-                get_provider_env_cache().get(
-                    "MAX_CONCURRENT_REQUESTS", str(_default_max_concurrent)
-                )
-            )
-        except ValueError:
-            lib_logger.warning(
-                "Invalid integer value for MAX_CONCURRENT_REQUESTS env var, using default"
-            )
-            _max_concurrent = _default_max_concurrent
-        self._global_semaphore = asyncio.Semaphore(_max_concurrent)
+        self._init_semaphores()
 
     # --- Core methods that remain in this module ---
 
@@ -390,19 +241,11 @@ class RotatingClient(
 
         return litellm_kwargs
 
-
-
+    # --- Pass-through delegators (called from outside this class) ---
 
     def get_oauth_credentials(self) -> dict[str, list[str]]:
+        """Pass-through to self.oauth_credentials. Called by BackgroundRefresher."""
         return self.oauth_credentials
-
-
-
-    def _is_custom_openai_compatible_provider(self, provider_name: str) -> bool:
-        return self._provider_resolver.is_custom_openai_compatible_provider(provider_name)
-
-    def _build_credential_to_provider_map(self) -> dict[str, str]:
-        return self._provider_resolver.build_credential_to_provider_map()
 
     def _get_provider_method(
         self, provider_name: str, method_name: str, required: bool = False
@@ -412,7 +255,180 @@ class RotatingClient(
         )
 
     def _get_provider_instance(self, provider_name: str):
+        """Pass-through to ProviderResolver. Called from mixins and usage_manager."""
         return self._provider_resolver.get_provider_instance(provider_name)
+
+    # --- Init sub-methods (decomposed from __init__) ---
+
+    def _init_credential_setup(
+        self,
+        api_keys: Optional[dict[str, list[str]]],
+        oauth_credentials: Optional[dict[str, list[str]]],
+    ) -> None:
+        """Scan and merge credential sources (api_keys + oauth)."""
+        api_keys = api_keys or {}
+        oauth_credentials = oauth_credentials or {}
+
+        api_keys = {provider: keys for provider, keys in api_keys.items() if keys}
+        oauth_credentials = {
+            provider: paths for provider, paths in oauth_credentials.items() if paths
+        }
+
+        if not api_keys and not oauth_credentials:
+            lib_logger.warning(
+                "No provider credentials configured. The client will be unable to make any API requests."
+            )
+
+        self.api_keys = api_keys
+        if oauth_credentials:
+            self.oauth_credentials = oauth_credentials
+        else:
+            self.credential_manager = CredentialManager(
+                dict(os.environ), oauth_dir=get_oauth_dir(self.data_dir)
+            )
+            self.oauth_credentials = self.credential_manager.discover_and_prepare()
+        self.background_refresher = BackgroundRefresher(self)
+        self.oauth_providers = set(self.oauth_credentials.keys())
+
+        all_credentials: dict[str, list[str]] = {}
+        for provider, keys in api_keys.items():
+            all_credentials.setdefault(provider, []).extend(keys)
+        for provider, paths in self.oauth_credentials.items():
+            all_credentials.setdefault(provider, []).extend(paths)
+        self.all_credentials = all_credentials
+        self._cred_offset: dict[str, int] = {}
+        self._lock_manager = ProviderLockManager()
+
+    def _init_provider_resolver(self) -> None:
+        """Initialize provider plugins and the ProviderResolver."""
+        self._provider_plugins = PROVIDER_PLUGINS
+        self._provider_instances = get_provider_registry()
+        self._provider_method_cache: dict[tuple[str, str], Any] = {}
+        self.provider_config = ProviderConfig()
+        self._provider_resolver = ProviderResolver(
+            provider_config=self.provider_config,
+            all_credentials=self.all_credentials,
+            oauth_providers=self.oauth_providers,
+            provider_plugins=self._provider_plugins,
+            provider_instances=self._provider_instances,
+            provider_method_cache=self._provider_method_cache,
+        )
+
+    def _init_usage_manager(
+        self,
+        usage_file_path: Optional[Union[str, Path]],
+        rotation_tolerance: float,
+    ) -> None:
+        """Build provider configs and construct the UsageManager."""
+        from ..client_config import build_all_provider_configs
+
+        provider_configs = build_all_provider_configs(
+            self.all_credentials, self._provider_plugins
+        )
+
+        if usage_file_path is not None:
+            resolved_usage_path = Path(usage_file_path)
+        else:
+            resolved_usage_path = self.data_dir / "key_usage.json"
+
+        self.usage_manager = UsageManager(
+            file_path=resolved_usage_path,
+            rotation_tolerance=rotation_tolerance,
+            provider_rotation_modes=provider_configs["provider_rotation_modes"],
+            provider_plugins=PROVIDER_PLUGINS,
+            priority_multipliers=provider_configs["priority_multipliers"],
+            priority_multipliers_by_mode=provider_configs[
+                "priority_multipliers_by_mode"
+            ],
+            sequential_fallback_multipliers=provider_configs[
+                "sequential_fallback_multipliers"
+            ],
+            fair_cycle_enabled=provider_configs["fair_cycle_enabled"],
+            fair_cycle_tracking_mode=provider_configs["fair_cycle_tracking_mode"],
+            fair_cycle_cross_tier=provider_configs["fair_cycle_cross_tier"],
+            fair_cycle_duration=provider_configs["fair_cycle_duration"],
+            exhaustion_cooldown_threshold=provider_configs[
+                "exhaustion_cooldown_threshold"
+            ],
+            custom_caps=provider_configs["custom_caps"],
+            credential_to_provider=self._provider_resolver.build_credential_to_provider_map(),
+        )
+
+    def _init_http_pool(self) -> None:
+        """Set up HTTP client pool and caches."""
+        self._model_list_cache: dict[str, tuple[list[str], float]] = {}
+        self._model_fetch_tasks: dict[str, asyncio.Task] = {}
+        self._http_pool: Optional[HttpClientPool] = None
+        self._pool_initialized = False
+        self._provider_endpoints: dict[str, str] = {}
+
+        from cachetools import TTLCache
+
+        self._credential_priority_cache: TTLCache = TTLCache(maxsize=64, ttl=300)
+        self._resolve_model_id_cache: TTLCache = TTLCache(maxsize=256, ttl=300)
+
+    def _init_resilience(self) -> None:
+        """Wire the ResilienceOrchestrator and expose sub-components."""
+        self._resilience = ResilienceOrchestrator(
+            provider_overrides=CIRCUIT_BREAKER_PROVIDER_OVERRIDES,
+        )
+        self.cooldown_manager = self._resilience.cooldown
+        self.ip_throttle_detector = self._resilience.ip_throttle
+        self.circuit_breaker = self._resilience.circuit_breaker
+        self.rate_limiter = self._resilience.rate_limiter
+
+    def _init_model_patterns(
+        self,
+        litellm_provider_params: Optional[dict[str, Any]],
+        ignore_models: Optional[dict[str, list[str]]],
+        whitelist_models: Optional[dict[str, list[str]]],
+        enable_request_logging: bool,
+        max_concurrent_requests_per_key: Optional[dict[str, int]],
+    ) -> None:
+        """Compile model patterns, store runtime config, validate concurrency limits."""
+        self.litellm_provider_params = litellm_provider_params or {}
+        self.ignore_models = compile_model_patterns(ignore_models or {})
+        self.whitelist_models = compile_model_patterns(whitelist_models or {})
+        register_model_patterns(self.ignore_models)
+        register_model_patterns(self.whitelist_models)
+        clear_model_match_cache()
+        self.enable_request_logging = enable_request_logging
+        self._model_definitions = None
+        self._model_registry = None
+
+        self.max_concurrent_requests_per_key = dict(
+            max_concurrent_requests_per_key or {}
+        )
+        for provider in self.api_keys:
+            self.max_concurrent_requests_per_key.setdefault(
+                provider, DEFAULT_API_KEY_MAX_CONCURRENT_REQUESTS
+            )
+        for provider, max_val in self.max_concurrent_requests_per_key.items():
+            if max_val < 1:
+                lib_logger.warning(
+                    "Invalid max_concurrent for '%s': %s. Setting to 1.",
+                    provider,
+                    max_val,
+                )
+                self.max_concurrent_requests_per_key[provider] = 1
+
+        self._consecutive_quota_failures: dict[str, int] = {}
+
+    def _init_semaphores(self) -> None:
+        """Create global backpressure semaphore."""
+        _default_max_concurrent = 128 if sys.platform == "win32" else 256
+        try:
+            _max_concurrent = int(
+                get_provider_env_cache().get(
+                    "MAX_CONCURRENT_REQUESTS", str(_default_max_concurrent)
+                )
+            )
+        except ValueError:
+            lib_logger.warning(
+                "Invalid integer value for MAX_CONCURRENT_REQUESTS env var, using default"
+            )
+            _max_concurrent = _default_max_concurrent
+        self._global_semaphore = asyncio.Semaphore(_max_concurrent)
 
 
     async def __aenter__(self):

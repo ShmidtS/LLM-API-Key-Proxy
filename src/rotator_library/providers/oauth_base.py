@@ -16,8 +16,9 @@ by GoogleOAuthBase -> {GeminiAuthBase, AntigravityAuthBase, QwenAuthBase, IFlowA
 import asyncio
 import logging
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, NoReturn, Optional, Union
 
 import httpx
 
@@ -82,6 +83,87 @@ class BaseTokenManager:
         self._credentials_cache.pop(credential, None)
         self._unavailable_credentials.pop(credential, None)
         self._refresh_locks.pop(credential, None)
+
+    def _set_refresh_backoff(self, path: str, last_error: Optional[Exception] = None) -> NoReturn:
+        """Increment refresh failure count and set exponential backoff timer.
+
+        Called after all retry attempts are exhausted.  Raises the original
+        error (or a generic Exception) so callers propagate the failure.
+        """
+        self._refresh_failures[path] = self._refresh_failures.get(path, 0) + 1
+        backoff_seconds = min(300, 30 * (2 ** self._refresh_failures[path]))
+        self._next_refresh_after[path] = time.time() + backoff_seconds
+        lib_logger.debug(f"Setting backoff for '{Path(path).name}': {backoff_seconds}s")
+        raise last_error or Exception("Token refresh failed after all retries")
+
+    async def _reload_creds_from_disk(self, path: str) -> None:
+        """Re-read credentials from disk into cache (rotating-token fix).
+
+        Silently skips if the file is missing.  Requires ``json_loads`` to be
+        importable from ``..utils.json_utils`` — subclasses that already import
+        it directly can use their own reference; this base uses a lazy import.
+        """
+        if path in self._credentials_cache:
+            try:
+                from ..utils.json_utils import json_loads as _json_loads
+                creds_raw = await asyncio.to_thread(Path(path).read_text, encoding="utf-8")
+                self._credentials_cache[path] = _json_loads(creds_raw)
+            except FileNotFoundError:
+                lib_logger.debug("Credential file not found, skipping")
+
+    @staticmethod
+    def _parse_expiry_timestamp(creds: dict) -> float:
+        """Parse expiry from credentials into a float unix timestamp.
+
+        Handles three formats used across providers:
+        - Cached ``_parsed_expiry`` (float, returned as-is)
+        - Numeric ``expiry_date`` in milliseconds (Google / Qwen)
+        - ISO 8601 ``expiry_date`` string (iFlow, e.g. "2025-01-17T12:00:00Z")
+        - gcloud ``token_expiry`` string (e.g. "2025-01-17T12:00:00Z")
+
+        Returns 0.0 when the expiry cannot be determined (caller should treat as expired).
+        """
+        # Fast path: already parsed
+        cached = creds.get("_parsed_expiry")
+        if cached is not None:
+            return cached
+
+        # gcloud token_expiry string
+        token_expiry = creds.get("token_expiry")
+        if token_expiry:
+            try:
+                ts = time.mktime(time.strptime(token_expiry, "%Y-%m-%dT%H:%M:%SZ"))
+                creds["_parsed_expiry"] = ts
+                return ts
+            except (ValueError, TypeError):
+                pass
+
+        expiry_raw = creds.get("expiry_date")
+        if expiry_raw is None:
+            return 0.0
+
+        # ISO 8601 string (iFlow format)
+        if isinstance(expiry_raw, str):
+            try:
+                expiry_dt = datetime.fromisoformat(expiry_raw.replace("Z", "+00:00"))
+                ts = expiry_dt.timestamp()
+                creds["_parsed_expiry"] = ts
+                return ts
+            except (ValueError, AttributeError):
+                try:
+                    ts = float(expiry_raw)
+                    creds["_parsed_expiry"] = ts
+                    return ts
+                except (ValueError, TypeError):
+                    return 0.0
+
+        # Numeric (milliseconds, Google/Qwen format)
+        try:
+            ts = float(expiry_raw) / 1000
+            creds["_parsed_expiry"] = ts
+            return ts
+        except (ValueError, TypeError):
+            return 0.0
 
 
 # =========================================================================

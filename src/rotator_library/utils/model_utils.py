@@ -106,7 +106,7 @@ def match_model_pattern(
     )
 
 
-@functools.lru_cache(maxsize=256)
+@functools.lru_cache(maxsize=256)  # type: ignore[arg-type]
 def extract_provider_from_model(model: str) -> str:
     """
     Extract provider prefix from ``provider/model`` format.
@@ -125,7 +125,7 @@ def extract_provider_from_model(model: str) -> str:
     return normalized.split("/", 1)[0].strip().lower()
 
 
-@functools.lru_cache(maxsize=256)
+@functools.lru_cache(maxsize=256)  # type: ignore[arg-type]
 def normalize_model_string(model: str) -> str:
     """
     Normalize incoming model string for consistent routing.

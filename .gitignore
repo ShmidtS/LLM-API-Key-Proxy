@@ -141,3 +141,4 @@ context_portal/
 tests/
 pytest.ini
 context-mode/
+CONTEXT.md

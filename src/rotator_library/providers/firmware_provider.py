@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from .provider_interface import ProviderInterface, build_bearer_headers
 from .utilities import fetch_provider_models
 from .utilities.lightweight_quota_mixin import LightweightQuotaMixin
+from .utilities.quota_utils import parse_iso_timestamp
 from ..config.defaults import env_int
 
 lib_logger = logging.getLogger("rotator_library")
@@ -82,7 +83,7 @@ class FirmwareProvider(LightweightQuotaMixin, ProviderInterface):
         remaining_fraction = max(0.0, min(1.0, 1.0 - used))
         reset_at = None
         if reset_iso is not None:
-            reset_at = self._parse_iso_timestamp(reset_iso)
+            reset_at = parse_iso_timestamp(reset_iso)
         has_active_window = reset_at is not None
 
         return {

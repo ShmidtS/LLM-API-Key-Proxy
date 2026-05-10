@@ -433,15 +433,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
             return False
 
     def _is_token_expired(self, creds: Dict[str, Any]) -> bool:
-        expiry = creds.get("_parsed_expiry")
-        if expiry is None:
-            expiry_str = creds.get("token_expiry")  # gcloud format
-            if not expiry_str:  # gemini-cli format
-                expiry = creds.get("expiry_date", 0) / 1000
-            else:
-                expiry = time.mktime(time.strptime(expiry_str, "%Y-%m-%dT%H:%M:%SZ"))
-            creds["_parsed_expiry"] = expiry
-        return expiry < time.time() + self.REFRESH_EXPIRY_BUFFER_SECONDS
+        return self._parse_expiry_timestamp(creds) < time.time() + self.REFRESH_EXPIRY_BUFFER_SECONDS
 
     async def _refresh_token(
         self, path: str, creds: Dict[str, Any], force: bool = False
@@ -644,12 +636,7 @@ class GoogleOAuthBase(AuthQueueMixin, OAuthMixin, OAuthFlowMixin, BaseTokenManag
         This is different from _is_token_expired() which uses a buffer for proactive refresh.
         This method checks if the token is actually unusable.
         """
-        expiry = creds.get("token_expiry")  # gcloud format
-        if not expiry:  # gemini-cli format
-            expiry_timestamp = creds.get("expiry_date", 0) / 1000
-        else:
-            expiry_timestamp = time.mktime(time.strptime(expiry, "%Y-%m-%dT%H:%M:%SZ"))
-        return expiry_timestamp < time.time()
+        return self._parse_expiry_timestamp(creds) < time.time()
 
     def _is_invalid_grant_error(self, error_body: str, status_code: int, error_type: str = "") -> bool:
         """Check if an HTTP error indicates an invalid/expired refresh token needing re-auth.

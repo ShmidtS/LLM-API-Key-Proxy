@@ -27,7 +27,7 @@ import httpx
 import json
 
 from ...http_client_pool import get_http_pool
-from .quota_utils import parse_iso_timestamp, make_bearer_header
+from .quota_utils import make_bearer_header
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -158,15 +158,6 @@ class LightweightQuotaMixin:
         Kept as static method for backward compatibility.
         """
         return make_bearer_header(api_key)
-
-    @staticmethod
-    def _parse_iso_timestamp(iso_string: str) -> Optional[float]:
-        """Parse ISO 8601 timestamp to Unix timestamp.
-
-        Delegates to quota_utils.parse_iso_timestamp for the actual implementation.
-        Kept as static method for backward compatibility.
-        """
-        return parse_iso_timestamp(iso_string)
 
     def _error_result(self, **overrides) -> Dict[str, Any]:
         """Build a standardized error result dict. Subclasses can override defaults."""

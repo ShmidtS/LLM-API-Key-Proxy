@@ -11,414 +11,36 @@ Data retrieval happens asynchronously post-startup to keep initialization fast.
 """
 
 import asyncio
-import functools
 import json
 import logging
-from .utils.json_utils import json_loads
-from .config.defaults import env_int
 import time
-from dataclasses import dataclass, field
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from .utils.json_utils import json_loads
+from .config.defaults import env_int
 from .utils.singleton import SingletonMeta
 
+# Re-export from extracted modules for backward compatibility
+from .model_info._types import (  # noqa: F401
+    ModelPricing,
+    ModelLimits,
+    ModelCapabilities,
+    ModelInfo,
+    ModelMetadata,
+)
+from .model_info._constants import (  # noqa: F401
+    NATIVE_PROVIDER_PRIORITY,
+    PROVIDER_ALIASES,
+    _get_provider_priority,
+    _extract_provider_from_source_id,
+)
+from .model_info.model_index import ModelIndex  # noqa: F401
+from .model_info.data_merger import DataMerger  # noqa: F401
+
 logger = logging.getLogger(__name__)
-
-
-# ============================================================================
-# Provider Priority Configuration
-# ============================================================================
-
-# Native/authoritative providers - prefer these over proxy/aggregator providers
-# Lower index = higher priority
-NATIVE_PROVIDER_PRIORITY = [
-    "anthropic",
-    "openai",
-    "google",
-    "google-vertex",
-    "mistral",
-    "mistralai",
-    "cohere",
-    "deepseek",
-    "deepseek-ai",  # Used in nvidia_nim/deepseek-ai/model format
-    "qwen",
-    "alibaba",
-    "alibaba-cn",
-    "meta-llama",
-    "nvidia",
-    "moonshotai",  # Used in nvidia_nim/moonshotai/model format
-    "iflow",
-    "iflowcn",
-    # These are aggregators/proxies - lower priority
-    "openrouter",
-    "azure",
-    "azure-cognitive-services",
-    "aws-bedrock",
-    "github-copilot",
-    "opencode",
-    "requesty",
-    "helicone",
-    "vercel",
-    "aihubmix",
-    "venice",
-    "poe",
-    "cortecs",
-    "fastrouter",
-    "ollama-cloud",
-    "nebius",
-    "fireworks-ai",
-    "groq",
-    "sap-ai-core",
-    "zenmux",
-]
-
-# ============================================================================
-# Provider Alias Mapping (for direct lookup)
-# ============================================================================
-#
-# Maps custom/proxy provider names to their canonical equivalents in data sources.
-# When looking up "nvidia_nim/org/model", we first try "nvidia/org/model" directly.
-# This allows direct matches before falling back to fuzzy suffix matching.
-#
-# Format: "custom_provider": ["canonical_provider1", "canonical_provider2", ...]
-# Multiple aliases are tried in order until a match is found.
-#
-PROVIDER_ALIASES = {
-    "nvidia": ["nvidia_nim"],
-    "gemini_cli": ["google"],
-    "gemini": ["google"],
-    "iflow": ["iflow", "iflowcn"],  # iflow may exist as either
-}
-
-
-def _get_provider_priority(provider: str) -> int:
-    """
-    Get priority score for a provider (lower = better).
-    Native providers get priority over proxy/aggregator providers.
-    """
-    try:
-        return NATIVE_PROVIDER_PRIORITY.index(provider.lower())
-    except ValueError:
-        # Unknown providers get lowest priority
-        return len(NATIVE_PROVIDER_PRIORITY) + 1
-
-
-def _extract_provider_from_source_id(source_id: str) -> str:
-    """
-    Extract the actual data provider from a source model ID.
-
-    Examples:
-        "anthropic/claude-opus-4.5" -> "anthropic"
-        "openrouter/google/gemini-2.5-pro" -> "google" (skip openrouter prefix)
-        "nvidia/mistralai/mistral-large" -> "mistralai" (3-segment, use middle)
-    """
-    parts = source_id.split("/")
-    if len(parts) >= 2:
-        # Skip openrouter prefix if present
-        if parts[0].lower() == "openrouter" and len(parts) >= 3:
-            return parts[1].lower()
-        # For 3-segment IDs like nvidia/mistralai/model, use middle segment
-        if len(parts) == 3:
-            return parts[1].lower()
-        return parts[0].lower()
-    return source_id.lower()
-
-
-# ============================================================================
-# Data Structures
-# ============================================================================
-
-
-@dataclass
-class ModelPricing:
-    """Token-level pricing information."""
-
-    prompt: Optional[float] = None
-    completion: Optional[float] = None
-    cached_input: Optional[float] = None
-    cache_write: Optional[float] = None
-
-
-@dataclass
-class ModelLimits:
-    """Context and output token limits."""
-
-    context_window: Optional[int] = None
-    max_output: Optional[int] = None
-
-
-@dataclass
-class ModelCapabilities:
-    """Feature flags for model capabilities."""
-
-    tools: bool = False
-    functions: bool = False
-    reasoning: bool = False
-    vision: bool = False
-    system_prompt: bool = True
-    caching: bool = False
-    prefill: bool = False
-    # Extended capabilities from Models.dev
-    structured_output: bool = False
-    temperature: bool = True  # Most models support temperature
-    attachments: bool = False  # File/document attachments
-    interleaved: bool = False  # Interleaved content support
-
-
-@dataclass
-class ModelInfo:
-    """Extended model information and metadata."""
-
-    family: str = ""  # Model family (e.g., "claude-opus", "gpt-4")
-    description: str = ""  # Model description
-    knowledge_cutoff: str = ""  # Knowledge cutoff date (e.g., "2025-03-31")
-    release_date: str = ""  # Model release date
-    open_weights: bool = False  # Whether model weights are open
-    status: str = "active"  # Model status: active, deprecated, preview
-    tokenizer: str = ""  # Tokenizer type
-    huggingface_id: str = ""  # HuggingFace model ID
-
-
-@dataclass
-class ModelMetadata:
-    """Complete model information record."""
-
-    model_id: str
-    display_name: str = ""
-    provider: str = ""
-    category: str = "chat"  # chat, embedding, image, audio
-
-    pricing: ModelPricing = field(default_factory=ModelPricing)
-    limits: ModelLimits = field(default_factory=ModelLimits)
-    capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
-    info: ModelInfo = field(default_factory=ModelInfo)  # Extended info
-
-    input_types: List[str] = field(default_factory=lambda: ["text"])
-    output_types: List[str] = field(default_factory=lambda: ["text"])
-    supported_parameters: List[str] = field(
-        default_factory=list
-    )  # Supported API params
-
-    timestamp: int = field(default_factory=lambda: int(time.time()))
-    origin: str = ""
-    match_quality: str = "unknown"
-
-    def as_api_response(self) -> Dict[str, Any]:
-        """
-        Format for OpenAI-compatible /v1/models response.
-
-        Standard OpenAI fields come first, then extended fields,
-        then debug/meta fields prefixed with underscore.
-        """
-        # === Core OpenAI-compatible fields ===
-        response: Dict[str, Any] = {
-            "id": self.model_id,
-            "object": "model",
-            "created": self.timestamp,
-            "owned_by": self.provider or "proxy",
-        }
-
-        # === Token limits (standard) ===
-        if self.limits.context_window:
-            response["context_length"] = self.limits.context_window
-        if self.limits.max_output:
-            response["max_completion_tokens"] = self.limits.max_output
-
-        # === Pricing fields (extended but common) ===
-        if self.pricing.prompt is not None:
-            response["pricing"] = {"prompt": self.pricing.prompt}
-            if self.pricing.completion is not None:
-                response["pricing"]["completion"] = self.pricing.completion
-            if self.pricing.cached_input is not None:
-                response["pricing"]["cached_input"] = self.pricing.cached_input
-            if self.pricing.cache_write is not None:
-                response["pricing"]["cache_write"] = self.pricing.cache_write
-
-        # === Architecture/modalities (OpenRouter-style) ===
-        response["architecture"] = {
-            "input_modalities": self.input_types,
-            "output_modalities": self.output_types,
-        }
-        if self.info.tokenizer:
-            response["architecture"]["tokenizer"] = self.info.tokenizer  # type: ignore[assignment]
-
-        # === Capabilities (extended) ===
-        response["capabilities"] = {
-            "tool_choice": self.capabilities.tools,
-            "function_calling": self.capabilities.functions,
-            "reasoning": self.capabilities.reasoning,
-            "vision": self.capabilities.vision,
-            "system_messages": self.capabilities.system_prompt,
-            "prompt_caching": self.capabilities.caching,
-            "assistant_prefill": self.capabilities.prefill,
-            "structured_output": self.capabilities.structured_output,
-            "temperature": self.capabilities.temperature,
-            "attachments": self.capabilities.attachments,
-            "interleaved": self.capabilities.interleaved,
-        }
-
-        # === Supported parameters (if available) ===
-        if self.supported_parameters:
-            response["supported_parameters"] = self.supported_parameters
-
-        # === Extended model info ===
-        if self.info.family:
-            response["family"] = self.info.family
-        if self.info.description:
-            response["description"] = self.info.description
-        if self.info.knowledge_cutoff:
-            response["knowledge_cutoff"] = self.info.knowledge_cutoff
-        if self.info.release_date:
-            response["release_date"] = self.info.release_date
-        if self.info.open_weights:
-            response["open_weights"] = self.info.open_weights
-        if self.info.status and self.info.status != "active":
-            response["status"] = self.info.status
-        if self.info.huggingface_id:
-            response["huggingface_id"] = self.info.huggingface_id
-
-        # === Legacy fields for backward compatibility ===
-        # Some tools may expect these field names
-        if self.limits.context_window:
-            response["max_input_tokens"] = self.limits.context_window
-            response["context_window"] = self.limits.context_window
-        if self.limits.max_output:
-            response["max_output_tokens"] = self.limits.max_output
-        if self.pricing.prompt is not None:
-            response["input_cost_per_token"] = self.pricing.prompt
-        if self.pricing.completion is not None:
-            response["output_cost_per_token"] = self.pricing.completion
-        if self.pricing.cached_input is not None:
-            response["cache_read_input_token_cost"] = self.pricing.cached_input
-        if self.pricing.cache_write is not None:
-            response["cache_creation_input_token_cost"] = self.pricing.cache_write
-        response["mode"] = self.category
-        response["supported_modalities"] = self.input_types
-        response["supported_output_modalities"] = self.output_types
-
-        # === Debug/meta fields (underscore prefix) ===
-        if self.origin:
-            origin_parts = self.origin.split("|")
-            main_origin = origin_parts[0]
-
-            response["_sources"] = [main_origin]
-            response["_match_type"] = self.match_quality
-
-            for part in origin_parts[1:]:
-                if part.startswith("parent:"):
-                    response["_parent_model"] = part[len("parent:") :]
-                    break
-
-        return response
-
-    def as_minimal(self) -> Dict[str, Any]:
-        """Minimal OpenAI format."""
-        return {
-            "id": self.model_id,
-            "object": "model",
-            "created": self.timestamp,
-            "owned_by": self.provider or "proxy",
-        }
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Alias for as_api_response() - backward compatibility."""
-        return self.as_api_response()
-
-    def to_openai_format(self) -> Dict[str, Any]:
-        """Alias for as_minimal() - backward compatibility."""
-        return self.as_minimal()
-
-    # Backward-compatible property aliases
-    @property
-    def id(self) -> str:
-        return self.model_id
-
-    @property
-    def name(self) -> str:
-        return self.display_name
-
-    @property
-    def input_cost_per_token(self) -> Optional[float]:
-        return self.pricing.prompt
-
-    @property
-    def output_cost_per_token(self) -> Optional[float]:
-        return self.pricing.completion
-
-    @property
-    def cache_read_input_token_cost(self) -> Optional[float]:
-        return self.pricing.cached_input
-
-    @property
-    def cache_creation_input_token_cost(self) -> Optional[float]:
-        return self.pricing.cache_write
-
-    @property
-    def max_input_tokens(self) -> Optional[int]:
-        return self.limits.context_window
-
-    @property
-    def max_output_tokens(self) -> Optional[int]:
-        return self.limits.max_output
-
-    @property
-    def mode(self) -> str:
-        return self.category
-
-    @property
-    def supported_modalities(self) -> List[str]:
-        return self.input_types
-
-    @property
-    def supported_output_modalities(self) -> List[str]:
-        return self.output_types
-
-    @property
-    def supports_tool_choice(self) -> bool:
-        return self.capabilities.tools
-
-    @property
-    def supports_function_calling(self) -> bool:
-        return self.capabilities.functions
-
-    @property
-    def supports_reasoning(self) -> bool:
-        return self.capabilities.reasoning
-
-    @property
-    def supports_vision(self) -> bool:
-        return self.capabilities.vision
-
-    @property
-    def supports_system_messages(self) -> bool:
-        return self.capabilities.system_prompt
-
-    @property
-    def supports_prompt_caching(self) -> bool:
-        return self.capabilities.caching
-
-    @property
-    def supports_assistant_prefill(self) -> bool:
-        return self.capabilities.prefill
-
-    @property
-    def litellm_provider(self) -> str:
-        return self.provider
-
-    @property
-    def created(self) -> int:
-        return self.timestamp
-
-    @property
-    def _sources(self) -> List[str]:
-        return [self.origin] if self.origin else []
-
-    @property
-    def _match_type(self) -> str:
-        return self.match_quality
 
 
 # ============================================================================
@@ -442,6 +64,19 @@ class DataSourceAdapter:
         with urlopen(req, timeout=timeout) as resp:
             return json_loads(resp.read().decode("utf-8"))
 
+    def _fetch_json(self) -> Any:
+        """
+        Fetch JSON from self.endpoint with unified error handling.
+
+        Wraps _http_get with the try/except + ConnectionError rewrite
+        shared by all adapters.
+        """
+        try:
+            return self._http_get(self.endpoint)
+        except (URLError, json.JSONDecodeError, TimeoutError, ConnectionError) as err:
+            logger.error("%s fetch failed: %s", self.source_name, err)
+            raise ConnectionError(f"{self.source_name} unavailable: {err}") from err
+
 
 class OpenRouterAdapter(DataSourceAdapter):
     """Fetches model data from OpenRouter's public API."""
@@ -450,23 +85,19 @@ class OpenRouterAdapter(DataSourceAdapter):
     endpoint = "https://openrouter.ai/api/v1/models"
 
     def fetch(self) -> Dict[str, Dict]:
-        try:
-            raw = self._http_get(self.endpoint)
-            entries = raw.get("data", [])
+        raw = self._fetch_json()
+        entries = raw.get("data", [])
 
-            catalog = {}
-            for entry in entries:
-                mid = entry.get("id")
-                if not mid:
-                    continue
+        catalog = {}
+        for entry in entries:
+            mid = entry.get("id")
+            if not mid:
+                continue
 
-                full_id = f"openrouter/{mid}"
-                catalog[full_id] = self._normalize(entry)
+            full_id = f"openrouter/{mid}"
+            catalog[full_id] = self._normalize(entry)
 
-            return catalog
-        except (URLError, json.JSONDecodeError, TimeoutError, ConnectionError) as err:
-            logger.error("OpenRouter fetch failed: %s", err)
-            raise ConnectionError(f"OpenRouter unavailable: {err}") from err
+        return catalog
 
     def _normalize(self, raw: Dict) -> Dict:
         """Transform OpenRouter schema to internal format."""
@@ -534,31 +165,27 @@ class ModelsDevAdapter(DataSourceAdapter):
         self.skip_providers = skip_providers or []
 
     def fetch(self) -> Dict[str, Dict]:
-        try:
-            raw = self._http_get(self.endpoint)
+        raw = self._fetch_json()
 
-            catalog = {}
-            for provider_key, provider_block in raw.items():
-                if not isinstance(provider_block, dict):
+        catalog = {}
+        for provider_key, provider_block in raw.items():
+            if not isinstance(provider_block, dict):
+                continue
+            if provider_key in self.skip_providers:
+                continue
+
+            models_block = provider_block.get("models", {})
+            if not isinstance(models_block, dict):
+                continue
+
+            for model_key, model_data in models_block.items():
+                if not isinstance(model_data, dict):
                     continue
-                if provider_key in self.skip_providers:
-                    continue
 
-                models_block = provider_block.get("models", {})
-                if not isinstance(models_block, dict):
-                    continue
+                full_id = f"{provider_key}/{model_key}"
+                catalog[full_id] = self._normalize(model_data, provider_key)
 
-                for model_key, model_data in models_block.items():
-                    if not isinstance(model_data, dict):
-                        continue
-
-                    full_id = f"{provider_key}/{model_key}"
-                    catalog[full_id] = self._normalize(model_data, provider_key)
-
-            return catalog
-        except (URLError, json.JSONDecodeError, TimeoutError, ConnectionError) as err:
-            logger.error("Models.dev fetch failed: %s", err)
-            raise ConnectionError(f"Models.dev unavailable: {err}") from err
+        return catalog
 
     def _normalize(self, raw: Dict, provider_key: str) -> Dict:
         """Transform Models.dev schema to internal format."""
@@ -614,290 +241,6 @@ class ModelsDevAdapter(DataSourceAdapter):
             "open_weights": raw.get("open_weights", False),
             "status": raw.get("status", "active"),
         }
-
-
-# ============================================================================
-# Lookup Index
-# ============================================================================
-
-
-@functools.lru_cache(maxsize=128)
-def _normalize_version_pattern(name: str) -> str:
-    """
-    Normalize version patterns in model names for fuzzy matching.
-
-    Converts various version formats to a canonical form:
-    - claude-opus-4-5 -> claude-opus-4.5
-    - claude-opus-4.5 -> claude-opus-4.5
-    - gemini-2-0-flash -> gemini-2.0-flash
-    - gemini-2-5-pro -> gemini-2.5-pro
-
-    Only applies to patterns that look like versions (digit-digit at end).
-    """
-    import re
-
-    # Pattern matches: -X-Y at end of string or before another dash/segment
-    # where X and Y are digits (like -4-5, -2-0, -2-5)
-    # This converts 4-5 to 4.5, 2-0 to 2.0, etc.
-    normalized = re.sub(r"-(\d+)-(\d+)(?=-|$)", r"-\1.\2", name)
-    return normalized
-
-
-class ModelIndex:
-    """Fast lookup structure for model ID resolution."""
-
-    def __init__(self):
-        self._by_full_id: Dict[str, str] = {}  # normalized_id -> canonical_id
-        self._by_suffix: Dict[str, List[str]] = {}  # short_name -> [canonical_ids]
-        self._by_normalized: Dict[
-            str, List[str]
-        ] = {}  # normalized_name -> [canonical_ids]
-
-    def clear(self):
-        """Reset the index."""
-        self._by_full_id.clear()
-        self._by_suffix.clear()
-        self._by_normalized.clear()
-
-    def entry_count(self) -> int:
-        """Return total number of suffix index entries."""
-        return sum(len(v) for v in self._by_suffix.values())
-
-    def add(self, canonical_id: str):
-        """Index a canonical model ID for various lookup patterns."""
-        self._by_full_id[canonical_id] = canonical_id
-
-        segments = canonical_id.split("/")
-        if len(segments) >= 2:
-            # Index by everything after first segment
-            partial = "/".join(segments[1:])
-            self._by_suffix.setdefault(partial, []).append(canonical_id)
-
-            # Index by final segment only
-            if len(segments) >= 3:
-                tail = segments[-1]
-                self._by_suffix.setdefault(tail, []).append(canonical_id)
-
-            # Index by normalized version pattern (e.g., claude-opus-4.5)
-            # This allows 4-5 queries to match 4.5 entries and vice versa
-            normalized_partial = _normalize_version_pattern(partial)
-            if normalized_partial != partial:
-                self._by_normalized.setdefault(normalized_partial, []).append(
-                    canonical_id
-                )
-
-    def resolve(self, query: str) -> List[str]:
-        """Find all canonical IDs matching a query."""
-        # Direct match
-        if query in self._by_full_id:
-            return [self._by_full_id[query]]
-
-        # Try with openrouter prefix
-        prefixed = f"openrouter/{query}"
-        if prefixed in self._by_full_id:
-            return [self._by_full_id[prefixed]]
-
-        # Extract search terms from query
-        search_keys = []
-        parts = query.split("/")
-        if len(parts) >= 2:
-            search_keys.append("/".join(parts[1:]))
-            search_keys.append(parts[-1])
-        else:
-            search_keys.append(query)
-
-        # Find matches in suffix index
-        matches = []
-        seen = set()
-        for key in search_keys:
-            for cid in self._by_suffix.get(key, []):
-                if cid not in seen:
-                    seen.add(cid)
-                    matches.append(cid)
-
-        # If no matches, try normalized version pattern matching
-        # This allows claude-opus-4-5 to match claude-opus-4.5
-        if not matches:
-            for key in search_keys:
-                normalized_key = _normalize_version_pattern(key)
-                # Check in normalized index
-                for cid in self._by_normalized.get(normalized_key, []):
-                    if cid not in seen:
-                        seen.add(cid)
-                        matches.append(cid)
-                # Also check if normalized key matches regular suffix
-                # (for when source has 4-5 and query uses 4.5)
-                for cid in self._by_suffix.get(normalized_key, []):
-                    if cid not in seen:
-                        seen.add(cid)
-                        matches.append(cid)
-
-        return matches
-
-
-# ============================================================================
-# Data Merger
-# ============================================================================
-
-
-class DataMerger:
-    """
-    Selects best source and creates ModelMetadata for queried model.
-
-    Key principle: For custom provider models (like antigravity/claude-opus-4-5),
-    we inherit technical specs from the best matching native provider source
-    (like anthropic/claude-opus-4.5), but keep the queried model's identity.
-    """
-
-    @staticmethod
-    def create_metadata(
-        queried_model_id: str,
-        records: List[Tuple[Dict, str]],
-        quality: str,
-    ) -> ModelMetadata:
-        """
-        Create ModelMetadata for the queried model.
-
-        For fuzzy matches, picks the best source based on provider priority
-        rather than merging multiple sources (which would average pricing incorrectly).
-
-        The queried model's provider is preserved in owned_by, while technical
-        specs come from the best matching source.
-        """
-        if not records:
-            raise ValueError("No records to create metadata from")
-
-        # Extract the queried provider from the model ID
-        queried_parts = queried_model_id.split("/")
-        queried_provider = queried_parts[0] if queried_parts else "unknown"
-
-        # Pick the best source based on provider priority
-        best_record, best_origin = DataMerger._select_best_source(records)
-
-        # Extract parent model ID from origin for transparency
-        parent_model_id = DataMerger._extract_model_id_from_origin(best_origin)
-
-        return ModelMetadata(
-            model_id=queried_model_id,
-            display_name=best_record.get("name", queried_model_id.split("/")[-1]),
-            # Use QUERIED provider, not source provider
-            provider=queried_provider,
-            category=best_record.get("category", "chat"),
-            pricing=ModelPricing(
-                prompt=best_record.get("prompt_cost"),
-                completion=best_record.get("completion_cost"),
-                cached_input=best_record.get("cache_read_cost"),
-                cache_write=best_record.get("cache_write_cost"),
-            ),
-            limits=ModelLimits(
-                context_window=best_record.get("context") or None,
-                max_output=best_record.get("max_out") or None,
-            ),
-            capabilities=ModelCapabilities(
-                tools=best_record.get("has_tools", False),
-                functions=best_record.get("has_functions", False),
-                reasoning=best_record.get("has_reasoning", False),
-                vision=best_record.get("has_vision", False),
-                # Extended capabilities
-                structured_output=best_record.get("has_structured_output", False),
-                temperature=best_record.get("has_temperature", True),
-                attachments=best_record.get("has_attachments", False),
-                interleaved=best_record.get("has_interleaved", False),
-            ),
-            info=ModelInfo(
-                family=best_record.get("family", ""),
-                description=best_record.get("description", ""),
-                knowledge_cutoff=best_record.get("knowledge_cutoff", ""),
-                release_date=best_record.get("release_date", ""),
-                open_weights=best_record.get("open_weights", False),
-                status=best_record.get("status", "active"),
-                tokenizer=best_record.get("tokenizer", ""),
-                huggingface_id=best_record.get("huggingface_id", ""),
-            ),
-            input_types=best_record.get("inputs", ["text"]),
-            output_types=best_record.get("outputs", ["text"]),
-            supported_parameters=best_record.get("supported_parameters", []),
-            origin=f"{best_origin}|parent:{parent_model_id}"
-            if parent_model_id
-            else best_origin,
-            match_quality=quality,
-        )
-
-    @staticmethod
-    def _select_best_source(records: List[Tuple[Dict, str]]) -> Tuple[Dict, str]:
-        """
-        Select the best source from multiple candidates based on provider priority.
-
-        Prefers native providers (anthropic, openai, google) over proxy/aggregator
-        providers (azure, openrouter, requesty, etc.).
-
-        When multiple sources have the same extracted provider (e.g., both
-        requesty/anthropic/model and anthropic/model extract to anthropic),
-        prefer the source where the first segment is the native provider
-        (i.e., anthropic/model is preferred over requesty/anthropic/model).
-        """
-        if len(records) == 1:
-            return records[0]
-
-        def get_sort_key(record_tuple: Tuple[Dict, str]) -> Tuple[int, int, int]:
-            data, origin = record_tuple
-            # Extract source_id from origin string like "modelsdev:fuzzy:anthropic/claude-opus-4.5"
-            source_id = origin.split(":")[-1] if ":" in origin else origin
-
-            # Primary: priority of extracted provider (handles nested paths)
-            provider = _extract_provider_from_source_id(source_id)
-            primary_priority = _get_provider_priority(provider)
-
-            # Secondary: prefer sources where first segment is a native provider
-            # This ensures anthropic/model wins over requesty/anthropic/model
-            parts = source_id.split("/")
-            first_segment = parts[0].lower() if parts else ""
-            first_segment_priority = _get_provider_priority(first_segment)
-
-            # Tertiary: prefer shorter paths (2-segment over 3-segment)
-            # This is a tiebreaker when both have same first segment priority
-            path_length = len(parts)
-
-            return (primary_priority, first_segment_priority, path_length)
-
-        # Sort by priority tuple (lower is better) and return the best
-        sorted_records = sorted(records, key=get_sort_key)
-        return sorted_records[0]
-
-    @staticmethod
-    def _extract_model_id_from_origin(origin: str) -> Optional[str]:
-        """
-        Extract the source model ID from an origin string.
-
-        Examples:
-            "modelsdev:fuzzy:anthropic/claude-opus-4.5" -> "anthropic/claude-opus-4.5"
-            "openrouter:exact:openrouter/google/gemini-2.5-pro" -> "google/gemini-2.5-pro"
-        """
-        if ":" not in origin:
-            return None
-
-        parts = origin.split(":")
-        if len(parts) >= 3:
-            source_id = parts[-1]
-            # Remove openrouter prefix if present
-            if source_id.startswith("openrouter/"):
-                source_id = source_id[len("openrouter/") :]
-            return source_id
-        return None
-
-    # Legacy method for backward compatibility
-    @staticmethod
-    def single(model_id: str, data: Dict, origin: str, quality: str) -> ModelMetadata:
-        """Create ModelMetadata from a single source record. Legacy method."""
-        return DataMerger.create_metadata(model_id, [(data, origin)], quality)
-
-    # Legacy method for backward compatibility
-    @staticmethod
-    def combine(
-        model_id: str, records: List[Tuple[Dict, str]], quality: str
-    ) -> ModelMetadata:
-        """Create ModelMetadata from records. Now uses best-source selection."""
-        return DataMerger.create_metadata(model_id, records, quality)
 
 
 # ============================================================================
@@ -1094,7 +437,6 @@ class ModelRegistry(metaclass=SingletonMeta):
             quality = "exact"
 
         # Step 2: Try provider alias substitution for direct match
-        # This handles cases like nvidia_nim/org/model -> nvidia/org/model
         if not records:
             alias_candidates = self._get_alias_candidates(model_id)
             for alias_id in alias_candidates:

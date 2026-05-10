@@ -50,6 +50,40 @@ class SettingsTool:
         self.provider_settings_mgr = ProviderSettingsManager(self.settings)
         self.running = True
 
+    def _press_enter(self, msg: str = "\nPress Enter to continue...") -> None:
+        """Pause for user acknowledgment."""
+        input(msg)
+
+    def _show_menu_panel(
+        self,
+        title: str,
+        body_items: Optional[List[str]] = None,
+        extra_rows: Optional[List[str]] = None,
+    ) -> None:
+        """Clear screen, display panel header, and optionally render body rows."""
+        clear_screen()
+        self.console.print(Panel.fit(title, border_style="cyan"))
+        self.console.print()
+        if body_items:
+            for item in body_items:
+                self.console.print(item)
+        if extra_rows:
+            for row in extra_rows:
+                self.console.print(row)
+
+    def _prompt_choice(
+        self, label: str, choices: List[str], default: Optional[str] = None
+    ) -> str:
+        """Prompt user to select from numbered choices."""
+        kwargs: Dict[str, Any] = {
+            "choices": choices,
+            "show_choices": False,
+            "console": self.console,
+        }
+        if default is not None:
+            kwargs["default"] = default
+        return Prompt.ask(label, **kwargs)
+
     def _format_item(
         self,
         name: str,
@@ -128,7 +162,7 @@ class SettingsTool:
 
         if not removable and not pending_adds:
             self.console.print(f"\n[yellow]{empty_msg}[/yellow]")
-            input("\nPress Enter to continue...")
+            self._press_enter()
             return None
 
         self.console.print(f"\n[bold]{header}[/bold]")
@@ -183,38 +217,28 @@ class SettingsTool:
 
     def show_main_menu(self):
         """Display settings categories"""
-        clear_screen()
-
-        self.console.print(
-            Panel.fit(
-                "[bold cyan]🔧 Advanced Settings Configuration[/bold cyan]",
-                border_style="cyan",
-            )
+        self._show_menu_panel(
+            "[bold cyan]🔧 Advanced Settings Configuration[/bold cyan]",
+            body_items=[
+                "[bold]⚙️  Configuration Categories[/bold]",
+                "",
+                "   1. 🌐 Custom Provider API Bases",
+                "   2. 📦 Provider Model Definitions",
+                "   3. ⚡ Concurrency Limits",
+                "   4. 🔄 Rotation Modes",
+                "   5. 🔬 Provider-Specific Settings",
+                "   6. 🎯 Model Filters (Ignore/Whitelist)",
+                "   7. 💾 Save & Exit",
+                "   8. 🚫 Exit Without Saving",
+                "",
+                SEPARATOR_70,
+                self._get_pending_status_text(),
+                "",
+            ],
         )
 
-        self.console.print()
-        self.console.print("[bold]⚙️  Configuration Categories[/bold]")
-        self.console.print()
-        self.console.print("   1. 🌐 Custom Provider API Bases")
-        self.console.print("   2. 📦 Provider Model Definitions")
-        self.console.print("   3. ⚡ Concurrency Limits")
-        self.console.print("   4. 🔄 Rotation Modes")
-        self.console.print("   5. 🔬 Provider-Specific Settings")
-        self.console.print("   6. 🎯 Model Filters (Ignore/Whitelist)")
-        self.console.print("   7. 💾 Save & Exit")
-        self.console.print("   8. 🚫 Exit Without Saving")
-
-        self.console.print()
-        self.console.print(SEPARATOR_70)
-
-        self.console.print(self._get_pending_status_text())
-
-        self.console.print()
-
-        choice = Prompt.ask(
-            "Select option",
-            choices=["1", "2", "3", "4", "5", "6", "7", "8"],
-            show_choices=False,
+        choice = self._prompt_choice(
+            "Select option", ["1", "2", "3", "4", "5", "6", "7", "8"]
         )
 
         if choice == "1":
@@ -237,21 +261,16 @@ class SettingsTool:
     def manage_custom_providers(self):
         """Manage custom provider API bases"""
         while True:
-            clear_screen()
-
             # Get current providers from env
             providers = self.provider_mgr.get_current_providers()
 
-            self.console.print(
-                Panel.fit(
-                    "[bold cyan]🌐 Custom Provider API Bases[/bold cyan]",
-                    border_style="cyan",
-                )
+            self._show_menu_panel(
+                "[bold cyan]🌐 Custom Provider API Bases[/bold cyan]",
+                body_items=[
+                    "[bold]📋 Configured Custom Providers[/bold]",
+                    SEPARATOR_70,
+                ],
             )
-
-            self.console.print()
-            self.console.print("[bold]📋 Configured Custom Providers[/bold]")
-            self.console.print(SEPARATOR_70)
 
             # Build combined view with pending changes
             all_providers: Dict[str, Dict[str, Any]] = {}
@@ -312,9 +331,7 @@ class SettingsTool:
             self.console.print(SEPARATOR_70)
             self.console.print()
 
-            choice = Prompt.ask(
-                "Select option", choices=["1", "2", "3", "4"], show_choices=False
-            )
+            choice = self._prompt_choice("Select option", ["1", "2", "3", "4"])
 
             if choice == "1":
                 name = Prompt.ask("Provider name (e.g., 'opencode')").strip().lower()
@@ -328,7 +345,7 @@ class SettingsTool:
                         self.console.print(
                             f"   To use: set {name.upper()}_API_KEY in credentials"
                         )
-                        input("\nPress Enter to continue...")
+                        self._press_enter()
 
             elif choice == "2":
                 # Get editable providers (existing + pending additions, excluding pending removals)
@@ -337,7 +354,7 @@ class SettingsTool:
                 }
                 if not editable:
                     self.console.print("\n[yellow]No providers to edit[/yellow]")
-                    input("\nPress Enter to continue...")
+                    self._press_enter()
                     continue
 
                 # Show numbered list
@@ -367,7 +384,7 @@ class SettingsTool:
                     )
                 else:
                     self.console.print("\n[yellow]No changes made[/yellow]")
-                input("\nPress Enter to continue...")
+                self._press_enter()
 
             elif choice == "3":
                 result = self._select_removable_item(
@@ -391,7 +408,7 @@ class SettingsTool:
                         self.console.print(
                             f"\n[green]✅ Provider '{name}' marked for removal![/green]"
                         )
-                    input("\nPress Enter to continue...")
+                    self._press_enter()
 
             elif choice == "4":
                 break
@@ -399,21 +416,16 @@ class SettingsTool:
     def manage_model_definitions(self):
         """Manage provider model definitions"""
         while True:
-            clear_screen()
-
             # Get current providers with models from env
             all_providers_env = self.model_mgr.get_all_providers_with_models()
 
-            self.console.print(
-                Panel.fit(
-                    "[bold cyan]📦 Provider Model Definitions[/bold cyan]",
-                    border_style="cyan",
-                )
+            self._show_menu_panel(
+                "[bold cyan]📦 Provider Model Definitions[/bold cyan]",
+                body_items=[
+                    "[bold]📋 Configured Provider Models[/bold]",
+                    SEPARATOR_70,
+                ],
             )
-
-            self.console.print()
-            self.console.print("[bold]📋 Configured Provider Models[/bold]")
-            self.console.print(SEPARATOR_70)
 
             # Build combined view with pending changes
             all_models: Dict[str, Dict[str, Any]] = {}
@@ -497,9 +509,7 @@ class SettingsTool:
             self.console.print(SEPARATOR_70)
             self.console.print()
 
-            choice = Prompt.ask(
-                "Select option", choices=["1", "2", "3", "4", "5"], show_choices=False
-            )
+            choice = self._prompt_choice("Select option", ["1", "2", "3", "4", "5"])
 
             if choice == "1":
                 self.add_model_definitions()
@@ -510,7 +520,7 @@ class SettingsTool:
                 }
                 if not editable:
                     self.console.print("\n[yellow]No providers to edit[/yellow]")
-                    input("\nPress Enter to continue...")
+                    self._press_enter()
                     continue
                 self.edit_model_definitions(sorted(editable.keys()))
             elif choice == "3":
@@ -519,7 +529,7 @@ class SettingsTool:
                 }
                 if not viewable:
                     self.console.print("\n[yellow]No providers to view[/yellow]")
-                    input("\nPress Enter to continue...")
+                    self._press_enter()
                     continue
                 self.view_model_definitions(sorted(viewable.keys()))
             elif choice == "4":
@@ -546,7 +556,7 @@ class SettingsTool:
                         self.console.print(
                             f"\n[green]✅ Model definitions marked for removal for '{provider}'![/green]"
                         )
-                    input("\nPress Enter to continue...")
+                    self._press_enter()
             elif choice == "5":
                 break
 
@@ -559,7 +569,7 @@ class SettingsTool:
             self.console.print(
                 "\n[yellow]No providers with credentials found. Please add credentials first.[/yellow]"
             )
-            input("\nPress Enter to continue...")
+            self._press_enter()
             return
 
         # Show provider selection menu
@@ -647,7 +657,7 @@ class SettingsTool:
         else:
             self.console.print("\n[yellow]No models added[/yellow]")
 
-        input("\nPress Enter to continue...")
+        self._press_enter()
 
     def edit_model_definitions(self, providers: List[str]):
         """Edit existing model definitions"""
@@ -664,7 +674,7 @@ class SettingsTool:
         current_models = self.model_mgr.get_current_provider_models(provider)
         if not current_models:
             self.console.print(f"\n[yellow]No models found for '{provider}'[/yellow]")
-            input("\nPress Enter to continue...")
+            self._press_enter()
             return
 
         # Convert to dict if list
@@ -687,9 +697,7 @@ class SettingsTool:
             self.console.print("   3. Remove model")
             self.console.print("   4. Done")
 
-            choice = Prompt.ask(
-                "\nSelect option", choices=["1", "2", "3", "4"], show_choices=False
-            )
+            choice = self._prompt_choice("\nSelect option", ["1", "2", "3", "4"])
 
             if choice == "1":
                 name = Prompt.ask("New model name").strip()
@@ -748,7 +756,7 @@ class SettingsTool:
             )
             self.model_mgr.remove_models(provider)
 
-        input("\nPress Enter to continue...")
+        self._press_enter()
 
     def view_model_definitions(self, providers: List[str]):
         """View model definitions for a provider"""
@@ -765,7 +773,7 @@ class SettingsTool:
         models = self.model_mgr.get_current_provider_models(provider)
         if not models:
             self.console.print(f"\n[yellow]No models found for '{provider}'[/yellow]")
-            input("\nPress Enter to continue...")
+            self._press_enter()
             return
 
         clear_screen()
@@ -791,7 +799,7 @@ class SettingsTool:
                 self.console.print(f"   Name: {name}")
                 self.console.print()
 
-        input("Press Enter to return...")
+        self._press_enter("Press Enter to return...")
 
     def launch_model_filter_gui(self):
         """Launch the Model Filter GUI for managing ignore/whitelist rules"""
@@ -813,27 +821,20 @@ class SettingsTool:
             )
             self.console.print("  [cyan]pip install customtkinter[/cyan]")
             self.console.print()
-            input("Press Enter to continue...")
+            self._press_enter()
 
     def manage_provider_settings(self):
         """Manage provider-specific settings (Antigravity, Gemini CLI)"""
         while True:
-            clear_screen()
-
             available_providers = self.provider_settings_mgr.get_available_providers()
 
-            self.console.print(
-                Panel.fit(
-                    "[bold cyan]🔬 Provider-Specific Settings[/bold cyan]",
-                    border_style="cyan",
-                )
+            self._show_menu_panel(
+                "[bold cyan]🔬 Provider-Specific Settings[/bold cyan]",
+                body_items=[
+                    "[bold]📋 Available Providers with Custom Settings[/bold]",
+                    SEPARATOR_70,
+                ],
             )
-
-            self.console.print()
-            self.console.print(
-                "[bold]📋 Available Providers with Custom Settings[/bold]"
-            )
-            self.console.print(SEPARATOR_70)
 
             for provider in available_providers:
                 modified = self.provider_settings_mgr.get_modified_settings(provider)
@@ -863,7 +864,7 @@ class SettingsTool:
             self.console.print()
 
             choices = [str(i) for i in range(1, len(available_providers) + 2)]
-            choice = Prompt.ask("Select option", choices=choices, show_choices=False)
+            choice = self._prompt_choice("Select option", choices)
             choice_idx = int(choice)
 
             if choice_idx == len(available_providers) + 1:
@@ -996,10 +997,9 @@ class SettingsTool:
             self.console.print(SEPARATOR_70)
             self.console.print()
 
-            choice = Prompt.ask(
+            choice = self._prompt_choice(
                 "Select action",
-                choices=["e", "r", "a", "b", "E", "R", "A", "B"],
-                show_choices=False,
+                ["e", "r", "a", "b", "E", "R", "A", "B"],
             ).lower()
 
             if choice == "b":
@@ -1054,7 +1054,7 @@ class SettingsTool:
             else:
                 self.console.print("\n[yellow]No changes made[/yellow]")
 
-        input("\nPress Enter to continue...")
+        self._press_enter()
 
     def _reset_provider_setting(
         self,
@@ -1079,7 +1079,7 @@ class SettingsTool:
         else:
             self.console.print("\n[yellow]No changes made[/yellow]")
 
-        input("\nPress Enter to continue...")
+        self._press_enter()
 
     def _reset_all_provider_settings(self, provider: str, settings_list: List[str]):
         """Reset all provider settings to defaults"""
@@ -1096,27 +1096,22 @@ class SettingsTool:
         else:
             self.console.print("\n[yellow]No changes made[/yellow]")
 
-        input("\nPress Enter to continue...")
+        self._press_enter()
 
     def manage_rotation_modes(self):
         """Manage credential rotation modes (sequential vs balanced)"""
         while True:
-            clear_screen()
-
             # Get current modes from env
             modes = self.rotation_mgr.get_current_modes()
             available_providers = self.get_available_providers()
 
-            self.console.print(
-                Panel.fit(
-                    "[bold cyan]🔄 Credential Rotation Mode Configuration[/bold cyan]",
-                    border_style="cyan",
-                )
+            self._show_menu_panel(
+                "[bold cyan]🔄 Credential Rotation Mode Configuration[/bold cyan]",
+                body_items=[
+                    "[bold]📋 Rotation Modes Explained[/bold]",
+                    SEPARATOR_70,
+                ],
             )
-
-            self.console.print()
-            self.console.print("[bold]📋 Rotation Modes Explained[/bold]")
-            self.console.print(SEPARATOR_70)
             self.console.print(
                 "   [cyan]balanced[/cyan]   - Rotate credentials evenly across requests (default)"
             )
@@ -1230,16 +1225,14 @@ class SettingsTool:
             self.console.print(SEPARATOR_70)
             self.console.print()
 
-            choice = Prompt.ask(
-                "Select option", choices=["1", "2", "3", "4"], show_choices=False
-            )
+            choice = self._prompt_choice("Select option", ["1", "2", "3", "4"])
 
             if choice == "1":
                 if not available_providers:
                     self.console.print(
                         "\n[yellow]No providers with credentials found. Please add credentials first.[/yellow]"
                     )
-                    input("\nPress Enter to continue...")
+                    self._press_enter()
                     continue
 
                 # Show provider selection menu
@@ -1288,7 +1281,7 @@ class SettingsTool:
                     self.console.print(
                         f"\n[green]✅ Rotation mode for '{provider}' staged as {new_mode}![/green]"
                     )
-                    input("\nPress Enter to continue...")
+                    self._press_enter()
 
             elif choice == "2":
                 # Get resettable modes (existing + pending adds, excluding pending removes)
@@ -1299,7 +1292,7 @@ class SettingsTool:
                     self.console.print(
                         "\n[yellow]No custom rotation modes to reset[/yellow]"
                     )
-                    input("\nPress Enter to continue...")
+                    self._press_enter()
                     continue
 
                 # Show numbered list
@@ -1337,7 +1330,7 @@ class SettingsTool:
                         self.console.print(
                             f"\n[green]✅ Rotation mode for '{provider}' marked for reset to default ({default_mode})![/green]"
                         )
-                    input("\nPress Enter to continue...")
+                    self._press_enter()
 
             elif choice == "3":
                 self.manage_priority_multipliers()
@@ -1416,14 +1409,12 @@ class SettingsTool:
         self.console.print("   2. 🔄 Reset to Provider Default")
         self.console.print("   3. ↩️  Back")
 
-        choice = Prompt.ask(
-            "Select option", choices=["1", "2", "3"], show_choices=False
-        )
+        choice = self._prompt_choice("Select option", ["1", "2", "3"])
 
         if choice == "1":
             if not available_providers:
                 self.console.print("\n[yellow]No providers available[/yellow]")
-                input("\nPress Enter to continue...")
+                self._press_enter()
                 return
 
             # Select provider
@@ -1460,7 +1451,7 @@ class SettingsTool:
                 self.console.print(
                     "\n[yellow]Multiplier must be between 1 and 10[/yellow]"
                 )
-            input("\nPress Enter to continue...")
+            self._press_enter()
 
         elif choice == "2":
             # Find providers with overrides
@@ -1469,7 +1460,7 @@ class SettingsTool:
             ]
             if not providers_with_overrides:
                 self.console.print("\n[yellow]No custom multipliers to reset[/yellow]")
-                input("\nPress Enter to continue...")
+                self._press_enter()
                 return
 
             self.console.print("\n[bold]Select provider to reset:[/bold]")
@@ -1502,26 +1493,21 @@ class SettingsTool:
                 self.console.print(
                     f"\n[yellow]No override for priority {priority}[/yellow]"
                 )
-            input("\nPress Enter to continue...")
+            self._press_enter()
 
     def manage_concurrency_limits(self):
         """Manage concurrency limits"""
         while True:
-            clear_screen()
-
             # Get current limits from env
             limits = self.concurrency_mgr.get_current_limits()
 
-            self.console.print(
-                Panel.fit(
-                    "[bold cyan]⚡ Concurrency Limits Configuration[/bold cyan]",
-                    border_style="cyan",
-                )
+            self._show_menu_panel(
+                "[bold cyan]⚡ Concurrency Limits Configuration[/bold cyan]",
+                body_items=[
+                    "[bold]📋 Current Concurrency Settings[/bold]",
+                    SEPARATOR_70,
+                ],
             )
-
-            self.console.print()
-            self.console.print("[bold]📋 Current Concurrency Settings[/bold]")
-            self.console.print(SEPARATOR_70)
 
             # Build combined view with pending changes
             all_limits: Dict[str, Dict[str, Any]] = {}
@@ -1591,9 +1577,7 @@ class SettingsTool:
             self.console.print(SEPARATOR_70)
             self.console.print()
 
-            choice = Prompt.ask(
-                "Select option", choices=["1", "2", "3", "4"], show_choices=False
-            )
+            choice = self._prompt_choice("Select option", ["1", "2", "3", "4"])
 
             if choice == "1":
                 # Get available providers
@@ -1603,7 +1587,7 @@ class SettingsTool:
                     self.console.print(
                         "\n[yellow]No providers with credentials found. Please add credentials first.[/yellow]"
                     )
-                    input("\nPress Enter to continue...")
+                    self._press_enter()
                     continue
 
                 # Show provider selection menu
@@ -1637,7 +1621,7 @@ class SettingsTool:
                         self.console.print(
                             "\n[red]❌ Limit must be between 1-100[/red]"
                         )
-                    input("\nPress Enter to continue...")
+                    self._press_enter()
 
             elif choice == "2":
                 # Get editable limits (existing + pending additions, excluding pending removals)
@@ -1646,7 +1630,7 @@ class SettingsTool:
                 }
                 if not editable:
                     self.console.print("\n[yellow]No limits to edit[/yellow]")
-                    input("\nPress Enter to continue...")
+                    self._press_enter()
                     continue
 
                 # Show numbered list
@@ -1679,7 +1663,7 @@ class SettingsTool:
                         self.console.print("\n[yellow]No changes made[/yellow]")
                 else:
                     self.console.print("\n[red]Limit must be between 1-100[/red]")
-                input("\nPress Enter to continue...")
+                self._press_enter()
 
             elif choice == "3":
                 result = self._select_removable_item(
@@ -1707,7 +1691,7 @@ class SettingsTool:
                         self.console.print(
                             f"\n[green]✅ Limit marked for removal for '{provider}'[/green]"
                         )
-                    input("\nPress Enter to continue...")
+                    self._press_enter()
 
             elif choice == "4":
                 break
@@ -1810,14 +1794,14 @@ class SettingsTool:
             if Confirm.ask("\n[bold yellow]Save all pending changes?[/bold yellow]"):
                 self.settings.save()
                 self.console.print("\n[green]✅ All changes saved to .env![/green]")
-                input("\nPress Enter to return to launcher...")
+                self._press_enter("\nPress Enter to return to launcher...")
             else:
                 self.console.print("\n[yellow]Changes not saved[/yellow]")
-                input("\nPress Enter to continue...")
+                self._press_enter()
                 return
         else:
             self.console.print("\n[dim]No changes to save[/dim]")
-            input("\nPress Enter to return to launcher...")
+            self._press_enter("\nPress Enter to return to launcher...")
 
         self.running = False
 
@@ -1830,7 +1814,7 @@ class SettingsTool:
             if Confirm.ask("\n[bold red]Discard all pending changes?[/bold red]"):
                 self.settings.discard()
                 self.console.print("\n[yellow]Changes discarded[/yellow]")
-                input("\nPress Enter to return to launcher...")
+                self._press_enter("\nPress Enter to return to launcher...")
                 self.running = False
             else:
                 return

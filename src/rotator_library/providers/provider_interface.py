@@ -147,7 +147,7 @@ class ProviderInterface(ABC):
         ...
 
     has_custom_logic: bool = False
-    """Returns True if the provider implements its own acompletion/aembedding logic."""
+    """Returns True if the provider implements its own acompletion logic."""
 
     async def acompletion(
         self, client: httpx.AsyncClient, **kwargs
@@ -155,14 +155,6 @@ class ProviderInterface(ABC):
         """Handles the entire completion call for non-standard providers."""
         raise NotImplementedError(
             f"{self.__class__.__name__} does not implement custom acompletion."
-        )
-
-    async def aembedding(
-        self, client: httpx.AsyncClient, **kwargs
-    ) -> litellm.EmbeddingResponse:
-        """Handles the entire embedding call for non-standard providers."""
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not implement custom aembedding."
         )
 
     async def get_auth_header(self, credential_identifier: str) -> Dict[str, str]:

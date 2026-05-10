@@ -40,7 +40,6 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from ...utils.paths import get_cache_dir
 from ...utils.json_utils import json_loads
-from .quota_utils import parse_iso_timestamp
 
 if TYPE_CHECKING:
     from ...usage_manager import UsageManager
@@ -182,21 +181,6 @@ class BaseQuotaTracker:
             Provider prefix (e.g., "gemini_cli", "antigravity")
         """
         return self.provider_env_prefix.lower() if self.provider_env_prefix else self.cache_subdir
-
-    @staticmethod
-    def _parse_iso_timestamp(iso_string: str) -> Optional[float]:
-        """Parse ISO 8601 timestamp to Unix timestamp.
-
-        Delegates to quota_utils.parse_iso_timestamp for the actual implementation.
-        Kept as static method for backward compatibility.
-
-        Args:
-            iso_string: ISO 8601 formatted timestamp (e.g., "2026-01-20T18:12:03.000Z")
-
-        Returns:
-            Unix timestamp in seconds, or None if parsing fails
-        """
-        return parse_iso_timestamp(iso_string)
 
     @staticmethod
     def _clean_model_name(model: str) -> str:

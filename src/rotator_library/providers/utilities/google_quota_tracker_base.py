@@ -7,11 +7,11 @@ Google OAuth Quota Tracker Base
 
 import logging
 import httpx
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 from pathlib import Path
 import time
 from .base_quota_tracker import BaseQuotaTracker
-from .quota_utils import post_json_with_error_handling
+from .quota_utils import parse_iso_timestamp, post_json_with_error_handling
 from ...http_client_pool import get_http_pool
 
 if TYPE_CHECKING:
@@ -34,13 +34,80 @@ class GoogleQuotaTrackerBase(BaseQuotaTracker):
     def _get_quota_endpoint_suffix(self) -> str:
         raise NotImplementedError
     def _get_quota_headers(self, auth_header: Dict[str, str]) -> Dict[str, str]:
-        raise NotImplementedError
+        """Default: Bearer token + Content-Type + provider-specific API headers."""
+        access_token = auth_header["Authorization"].split(" ")[1]
+        return {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            **self._get_api_headers(),
+        }
     def _parse_quota_response(self, data: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
         raise NotImplementedError
     def _get_quota_error_response_key(self) -> str:
         return "models"
     def _get_empty_quota_container(self) -> Any:
         return {}
+
+    # ------------------------------------------------------------------
+    # Shared quota response parser
+    # ------------------------------------------------------------------
+
+    def _parse_remaining_fraction_response(
+        self,
+        data: Dict[str, Any],
+        *,
+        container_key: str,
+        entries: Callable[[Any], Iterable[Tuple[str, Dict[str, Any], Any]]],
+        extra_fields: Callable[[str, Any], Dict[str, Any]],
+    ) -> List[Tuple[str, Dict[str, Any]]]:
+        """
+        Shared parser for quota responses built around ``remainingFraction``.
+
+        Both Antigravity and Gemini CLI responses share the same core shape:
+        iterate entries, extract ``remainingFraction``, compute ``is_exhausted``,
+        and parse ``resetTime`` via :func:`parse_iso_timestamp`.
+
+        Providers parameterize the differences through callables:
+
+        Args:
+            data: Raw API response dict.
+            container_key: Top-level key in *data* holding the entries
+                (``"models"`` for Antigravity, ``"buckets"`` for Gemini CLI).
+            entries: Callable receiving the container value and yielding
+                ``(name, quota_info, raw_entry)`` triples.  *quota_info*
+                is the sub-dict containing ``remainingFraction`` / ``resetTime``.
+                *raw_entry* is the full original entry (for ``extra_fields``).
+            extra_fields: Callable receiving ``(name, raw_entry)`` and
+                returning a dict of provider-specific fields to merge into
+                the result info dict.
+
+        Returns:
+            List of ``(name, info_dict)`` tuples.
+        """
+        container = data.get(container_key)
+        if container is None:
+            container = {} if container_key == "models" else []
+        results: List[Tuple[str, Dict[str, Any]]] = []
+        for name, quota_info, raw_entry in entries(container):
+            remaining = quota_info.get("remainingFraction")
+            if remaining is None:
+                remaining = 0.0
+                is_exhausted = True
+            else:
+                is_exhausted = remaining <= 0
+            reset_time_iso = quota_info.get("resetTime")
+            reset_timestamp: Optional[float] = None
+            if reset_time_iso:
+                reset_timestamp = parse_iso_timestamp(reset_time_iso)
+            info: Dict[str, Any] = {
+                "remaining_fraction": remaining,
+                "is_exhausted": is_exhausted,
+                "reset_time_iso": reset_time_iso,
+                "reset_timestamp": reset_timestamp,
+                **extra_fields(name, raw_entry),
+            }
+            results.append((name, info))
+        return results
 
     async def fetch_quota_from_api(self, credential_path: str) -> Dict[str, Any]:
         identifier = (

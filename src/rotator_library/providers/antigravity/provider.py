@@ -319,41 +319,18 @@ class AntigravityProvider(
     def _get_quota_endpoint_suffix(self) -> str:
         return "fetchAvailableModels"
 
-    def _get_quota_headers(self, auth_header: Dict[str, str]) -> Dict[str, str]:
-        access_token = auth_header["Authorization"].split(" ")[1]
-        return {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-            **self._get_antigravity_headers(),
-        }
-
     def _parse_quota_response(self, data: Dict[str, Any]) -> List:
-        results = []
-        for model_name, model_info in data.get("models", {}).items():
-            quota_info = model_info.get("quotaInfo", {})
-            remaining = quota_info.get("remainingFraction")
-            if remaining is None:
-                remaining = 0.0
-                is_exhausted = True
-            else:
-                is_exhausted = remaining <= 0
-            reset_time_iso = quota_info.get("resetTime")
-            reset_timestamp = None
-            if reset_time_iso:
-                reset_timestamp = self._parse_iso_timestamp(reset_time_iso)
-            results.append(
-                (
-                    model_name,
-                    {
-                        "remaining_fraction": remaining,
-                        "is_exhausted": is_exhausted,
-                        "reset_time_iso": reset_time_iso,
-                        "reset_timestamp": reset_timestamp,
-                        "display_name": model_info.get("displayName"),
-                    },
-                )
-            )
-        return results
+        return self._parse_remaining_fraction_response(
+            data,
+            container_key="models",
+            entries=lambda container: (
+                (name, info.get("quotaInfo", {}), info)
+                for name, info in container.items()
+            ),
+            extra_fields=lambda _name, entry: {
+                "display_name": entry.get("displayName"),
+            },
+        )
 
     async def _fetch_quota_for_credential(self, credential_path: str) -> Dict[str, Any]:
         return await self.fetch_quota_from_api(credential_path)

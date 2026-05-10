@@ -377,15 +377,10 @@ class UsageManagerConfigMixin:
 
         # Check if this should trigger fair cycle exhaustion
         cooldown_duration = cooldown_until - now_ts
-        threshold = self._get_exhaustion_cooldown_threshold(provider)
-        if cooldown_duration > threshold:
-            rotation_mode = self._get_rotation_mode(provider)
-            if self._is_fair_cycle_enabled(provider, rotation_mode):
-                tier_key = self._get_tier_key(provider, priority)
-                tracking_key = self._get_tracking_key(credential, model, provider)
-                self._mark_credential_exhausted(
-                    credential, provider, tier_key, tracking_key
-                )
+        _maybe_mark_fair_cycle_exhausted(
+            self, credential, model, cooldown_duration,
+            provider=provider, priority=priority,
+        )
 
         return True
 
@@ -394,6 +389,7 @@ from .tracking import (
     UsageManagerQueryMixin,
     UsageManagerRecordingMixin,
     UsageManagerStatisticsMixin,
+    _maybe_mark_fair_cycle_exhausted,
 )
 from .rotation import (
     UsageManagerCycleMixin,

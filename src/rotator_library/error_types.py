@@ -248,7 +248,7 @@ def _mask_credential_uncached(credential: str) -> str:
         return "***"
 
 
-_mask_credential_cache = functools.lru_cache(maxsize=512)
+_mask_credential_cache = functools.lru_cache(maxsize=512)  # type: ignore[arg-type]
 mask_credential = _mask_credential_cache(_mask_credential_uncached)
 
 from .error_accumulator import RequestErrorAccumulator  # noqa: E402 \u2014 re-export for backwards compat

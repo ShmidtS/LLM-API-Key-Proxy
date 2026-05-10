@@ -21,7 +21,6 @@ from rich.text import Text
 from rich.markup import escape as rich_escape
 
 from ..utils.headless_detection import is_headless_environment
-from ..utils.json_utils import json_loads
 from ..error_types import CredentialNeedsReauthError
 from ..error_handler import get_retry_after
 
@@ -83,12 +82,7 @@ class QwenAuthBase(GoogleOAuthBase):
 
             # [ROTATING TOKEN FIX] Always read fresh from disk before refresh.
             # Qwen uses rotating refresh tokens - each refresh invalidates the previous token.
-            if path in self._credentials_cache:
-                try:
-                    creds_raw = await asyncio.to_thread(Path(path).read_text, encoding="utf-8")
-                    self._credentials_cache[path] = json_loads(creds_raw)
-                except FileNotFoundError:
-                    lib_logger.debug("Credential file not found, skipping")
+            await self._reload_creds_from_disk(path)
             creds_from_file = self._credentials_cache[path]
 
             lib_logger.debug(f"Refreshing Qwen OAuth token for '{Path(path).name}'...")
@@ -223,15 +217,7 @@ class QwenAuthBase(GoogleOAuthBase):
 
             if new_token_data is None:
                 # [BACKOFF TRACKING] Increment failure count and set backoff timer
-                self._refresh_failures[path] = self._refresh_failures.get(path, 0) + 1
-                backoff_seconds = min(
-                    300, 30 * (2 ** self._refresh_failures[path])
-                )  # Max 5 min backoff
-                self._next_refresh_after[path] = time.time() + backoff_seconds
-                lib_logger.debug(
-                    f"Setting backoff for '{Path(path).name}': {backoff_seconds}s"
-                )
-                raise last_error or Exception("Token refresh failed after all retries")
+                self._set_refresh_backoff(path, last_error)
 
             creds_from_file["access_token"] = new_token_data["access_token"]
             creds_from_file["refresh_token"] = new_token_data.get(
