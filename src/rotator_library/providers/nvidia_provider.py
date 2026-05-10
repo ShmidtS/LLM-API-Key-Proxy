@@ -48,6 +48,11 @@ _QWEN_THINKING_MODELS = frozenset([
     "qwen/qwen3-coder-480b-a35b-instruct",
 ])
 
+# Moonshot AI models that support thinking via chat_template_kwargs.thinking
+_MOONSHOT_THINKING_MODELS = frozenset([
+    "moonshotai/kimi-k2.6",
+])
+
 # Top-level payload fields that are Anthropic-specific and not supported by NVIDIA NIM
 _ANTHROPIC_UNSUPPORTED_FIELDS = frozenset([
     "thinking",          # Anthropic thinking control {type: "adaptive"} / {type: "enabled", budget_tokens: N}
@@ -147,8 +152,10 @@ class NvidiaProvider(ProviderInterface, BaseQuotaTracker):
         Strips Anthropic-specific fields from all messages in the payload.
 
         - Removes 'cache_control' from every content block in every message.
-        - Converts system messages with list content to plain strings if all
-          blocks are text-only (NVIDIA expects string system prompts).
+        - Removes 'thinking_signature' (Anthropic-specific) while preserving
+          'reasoning_content' which NVIDIA NIM documents as a valid string field.
+        - Converts messages with list content to plain strings if all blocks are
+          text-only (NVIDIA NIM expects string content for many models).
         """
         messages = payload.get("messages")
         if not isinstance(messages, list):
@@ -157,6 +164,13 @@ class NvidiaProvider(ProviderInterface, BaseQuotaTracker):
         for msg in messages:
             if not isinstance(msg, dict):
                 continue
+
+            # Strip Anthropic-only fields that NVIDIA NIM does not document.
+            # reasoning_content is intentionally preserved: NVIDIA NIM documents it
+            # as a valid message field (string) for preserved reasoning content.
+            msg.pop("thinking_signature", None)
+            msg.pop("cache_control", None)
+
             content = msg.get("content")
             if content is None:
                 continue
@@ -164,10 +178,12 @@ class NvidiaProvider(ProviderInterface, BaseQuotaTracker):
             # Strip cache_control from content blocks
             cleaned = self._strip_cache_control_from_content(content)
 
-            # For system messages with list content, collapse to a single string
-            # NVIDIA NIM (OpenAI-compatible) expects system content as a plain string
-            role = msg.get("role", "")
-            if role == "system" and isinstance(cleaned, list):
+            # For ALL messages with list content, collapse to a single string
+            # if every block is text-only.  NVIDIA NIM (OpenAI-compatible) accepts
+            # string content far more reliably than array content, and some server
+            # internals hash messages for deduplication / caching, which breaks
+            # when a message dict contains unhashable nested dicts/lists.
+            if isinstance(cleaned, list):
                 text_parts = []
                 all_text = True
                 for block in cleaned:
@@ -229,11 +245,88 @@ class NvidiaProvider(ProviderInterface, BaseQuotaTracker):
         # Strip the first component (provider prefix) to get the actual model ID
         model_name = model.split('/', 1)[1] if '/' in model else model
 
+        lib_logger.info(
+            f"[NvidiaProvider] handle_thinking_parameter called for model '{model_name}'. "
+            f"Initial payload keys: {list(payload.keys())}"
+        )
+
         # --- Step 1: Strip all Anthropic-specific top-level fields ---
         self._strip_anthropic_fields(payload)
 
         # --- Step 2: Strip cache_control and normalize messages ---
         self._sanitize_messages(payload)
+
+        # --- Step 2.1: Strip stream_options ---
+        # NVIDIA NIM OpenAI-compatible endpoint crashes with 'unhashable type: dict'
+        # when stream_options (a dict) is present in the request payload.
+        if payload.pop("stream_options", None) is not None:
+            lib_logger.debug(
+                "[NvidiaProvider] Stripped stream_options from payload for NVIDIA NIM."
+            )
+
+        # --- Step 2.5: Sanitize tool_choice ---
+        # NVIDIA NIM's OpenAI-compatible endpoint does not accept a dict-form
+        # tool_choice (e.g. {"type": "function", "function": {"name": ...}})
+        # for several models.  Attempting to send one causes an internal server
+        # error: "unhashable type: 'dict'".  Convert to "required" which forces
+        # the model to use a tool without specifying the exact one.
+        tool_choice = payload.get("tool_choice")
+        if isinstance(tool_choice, dict):
+            payload["tool_choice"] = "required"
+            lib_logger.debug(
+                f"[NvidiaProvider] Converted dict tool_choice to 'required' "
+                f"for model '{model_name}'."
+            )
+
+        # --- Step 2.6: Strip extra_body.chat_template_kwargs ---
+        # extra_body is unpacked by LiteLLM/OpenAI SDK into top-level fields.
+        # chat_template_kwargs (a dict) causes NVIDIA NIM to crash with
+        # "unhashable type: 'dict'" because the server attempts to hash it.
+        extra_body = payload.get("extra_body")
+        if isinstance(extra_body, dict) and "chat_template_kwargs" in extra_body:
+            del extra_body["chat_template_kwargs"]
+            lib_logger.debug(
+                f"[NvidiaProvider] Stripped chat_template_kwargs from extra_body "
+                f"for model '{model_name}'."
+            )
+            if not extra_body:
+                payload.pop("extra_body", None)
+
+        # --- Step 2.7: Simplify tools for all NVIDIA NIM models ---
+        # vLLM-backed NVIDIA NIM endpoints crash with "unhashable type: 'dict'"
+        # on deeply nested dicts inside tools[].function.parameters (properties,
+        # required, etc.) because the server attempts to hash request parameters
+        # for deduplication / caching.  Strip nested schemas while keeping the
+        # top-level tools list so tool calling still works.
+        if "tools" in payload:
+            tools = payload.get("tools")
+            if isinstance(tools, list) and tools:
+                simplified = []
+                for tool in tools:
+                    if not isinstance(tool, dict) or tool.get("type") != "function":
+                        simplified.append(tool)
+                        continue
+                    func = tool.get("function", {})
+                    if not isinstance(func, dict):
+                        simplified.append(tool)
+                        continue
+                    # Keep only name, description, and a minimal parameters stub.
+                    # Remove deeply nested properties / required that may trigger
+                    # the vLLM hashing bug.
+                    clean_func = {
+                        "name": func.get("name"),
+                        "description": func.get("description", ""),
+                    }
+                    # Preserve parameters only as an empty object schema.
+                    # If the model needs arguments it will still generate JSON,
+                    # but we drop the property-level schemas that crash the server.
+                    clean_func["parameters"] = {"type": "object"}
+                    simplified.append({"type": "function", "function": clean_func})
+                payload["tools"] = simplified
+                lib_logger.info(
+                    f"[NvidiaProvider] Simplified 'tools' ({len(tools)} items) "
+                    f"for model '{model_name}' — stripped nested parameter schemas."
+                )
 
         # --- Step 3: Handle reasoning/thinking for supported models ---
         reasoning_effort = payload.get("reasoning_effort")
@@ -269,7 +362,23 @@ class NvidiaProvider(ProviderInterface, BaseQuotaTracker):
                     f"[NvidiaProvider] Qwen model '{model_name}' without reasoning_effort; "
                     f"thinking not enabled."
                 )
-        
+
+        # Moonshot AI models (kimi-k2.6, etc.)
+        # NOTE: NVIDIA NIM endpoint for Moonshot crashes with
+        # "unhashable type: 'dict'" when extra_body.chat_template_kwargs is present.
+        # Native thinking for kimi-k2.6 on NVIDIA NIM is not enabled via extra_body.
+        elif model_name in _MOONSHOT_THINKING_MODELS:
+            if reasoning_effort:
+                lib_logger.info(
+                    f"[NvidiaProvider] Moonshot model '{model_name}' with "
+                    f"reasoning_effort='{reasoning_effort}' — thinking control is not "
+                    f"supported on NVIDIA NIM for this model family."
+                )
+            else:
+                lib_logger.debug(
+                    f"[NvidiaProvider] Moonshot model '{model_name}' without reasoning_effort."
+                )
+
         # Other models
         else:
             # Non-DeepSeek/Qwen models: log if reasoning_effort was present but not actionable
@@ -278,6 +387,24 @@ class NvidiaProvider(ProviderInterface, BaseQuotaTracker):
                     f"[NvidiaProvider] Model '{model_name}' does not support native thinking; "
                     f"reasoning_effort='{reasoning_effort}' will be left for litellm to handle or ignore."
                 )
+
+        # Strip reasoning_effort after processing — it is Anthropic/OpenAI-specific
+        # and NVIDIA NIM does not document this parameter.
+        payload.pop("reasoning_effort", None)
+
+        # --- Final diagnostic log ---
+        # Log the remaining payload keys and the type of message content so we
+        # can verify in production that sanitization actually ran.
+        remaining_keys = list(payload.keys())
+        msg_content_type = None
+        messages = payload.get("messages")
+        if isinstance(messages, list) and messages:
+            first_content = messages[0].get("content") if isinstance(messages[0], dict) else None
+            msg_content_type = type(first_content).__name__ if first_content is not None else "missing"
+        lib_logger.info(
+            f"[NvidiaProvider] Sanitization complete for '{model_name}'. "
+            f"Remaining keys: {remaining_keys}, first_msg_content_type={msg_content_type}"
+        )
 
     # =========================================================================
     # QUOTA TRACKING METHODS

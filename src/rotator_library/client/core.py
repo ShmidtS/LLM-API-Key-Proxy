@@ -59,8 +59,8 @@ _STREAM_REQUIRED_PROVIDERS = {
 }
 
 # Providers that don't support stream_options parameter
-# These providers return 400/406 errors when stream_options is sent
-_STREAM_OPTIONS_UNSUPPORTED_PROVIDERS = frozenset({"iflow", "kilocode"})
+# These providers return 400/406 errors or internal server errors when stream_options is sent
+_STREAM_OPTIONS_UNSUPPORTED_PROVIDERS = frozenset({"iflow", "kilocode", "nvidia"})
 from ..usage_manager import UsageManager
 
 from ..error_types import mask_credential
