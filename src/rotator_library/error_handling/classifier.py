@@ -54,6 +54,9 @@ _UPSTREAM_ERROR_PATTERNS = (
     "upstream error",
     "upstream temporarily unavailable",
     "upstream service unavailable",
+    "service overloaded",
+    "overloaded",
+    "try again later",
 )
 
 _ACCOUNT_BILLING_ERROR_PATTERNS = (
