@@ -2,5 +2,6 @@
 # Copyright (c) 2026 ShmidtS
 
 from .core import RotatingClient
+from .client_config import ClientConfig
 
-__all__ = ["RotatingClient"]
+__all__ = ["RotatingClient", "ClientConfig"]

@@ -73,12 +73,8 @@ from ..utils.model_utils import (
 )
 from ..utils.provider_locks import ProviderLockManager
 from ..utils.provider_registry import get_provider_registry
-from ..config import (
-    DEFAULT_MAX_RETRIES,
-    DEFAULT_GLOBAL_TIMEOUT,
-    DEFAULT_ROTATION_TOLERANCE,
-    CIRCUIT_BREAKER_PROVIDER_OVERRIDES,
-)
+from ..config import CIRCUIT_BREAKER_PROVIDER_OVERRIDES
+from .client_config import ClientConfig
 
 
 # Import mixin classes for method inheritance
@@ -110,65 +106,52 @@ class RotatingClient(
 
     def __init__(
         self,
-        api_keys: Optional[dict[str, list[str]]] = None,
-        oauth_credentials: Optional[dict[str, list[str]]] = None,
-        max_retries: int = DEFAULT_MAX_RETRIES,
-        usage_file_path: Optional[Union[str, Path]] = None,
-        configure_logging: bool = True,
-        global_timeout: int = DEFAULT_GLOBAL_TIMEOUT,
-        abort_on_callback_error: bool = True,
-        litellm_provider_params: Optional[dict[str, Any]] = None,
-        ignore_models: Optional[dict[str, list[str]]] = None,
-        whitelist_models: Optional[dict[str, list[str]]] = None,
-        enable_request_logging: bool = False,
-        max_concurrent_requests_per_key: Optional[dict[str, int]] = None,
-        rotation_tolerance: float = DEFAULT_ROTATION_TOLERANCE,
-        data_dir: Optional[Union[str, Path]] = None,
+        config: Optional[ClientConfig] = None,
+        **kwargs,
     ):
         """
         Initialize the RotatingClient with intelligent credential rotation.
 
+        Accepts either a ``ClientConfig`` object via the *config* parameter,
+        or individual keyword arguments for backward compatibility.
+
         Args:
-            api_keys: Dictionary mapping provider names to lists of API keys
-            oauth_credentials: Dictionary mapping provider names to OAuth credential paths
-            max_retries: Maximum number of retry attempts per credential
-            usage_file_path: Path to store usage statistics. If None, uses data_dir/key_usage.json
-            configure_logging: Whether to configure library logging
-            global_timeout: Global timeout for requests in seconds
-            abort_on_callback_error: Whether to abort on pre-request callback errors
-            litellm_provider_params: Provider-specific parameters for LiteLLM
-            ignore_models: Models to ignore/blacklist per provider
-            whitelist_models: Models to explicitly whitelist per provider
-            enable_request_logging: Whether to enable detailed request logging
-            max_concurrent_requests_per_key: Max concurrent requests per key by provider
-            rotation_tolerance: Tolerance for weighted random credential rotation.
-                - 0.0: Deterministic, least-used credential always selected
-                - 2.0 - 4.0 (default, recommended): Balanced randomness, can pick credentials within 2 uses of max
-                - 5.0+: High randomness, more unpredictable selection patterns
-            data_dir: Root directory for all data files (logs, cache, oauth_creds, key_usage.json).
-                      If None, auto-detects: EXE directory if frozen, else current working directory.
+            config: A ``ClientConfig`` instance holding all configuration.
+                When provided, any additional *kwargs are ignored (with a warning).
+            **kwargs: Individual constructor arguments (backward compatible).
+                See :class:`ClientConfig` for field descriptions.
         """
+        if config is None:
+            config = ClientConfig(**kwargs)
+        elif kwargs:
+            import warnings
+            warnings.warn(
+                "RotatingClient: kwargs ignored when config is provided",
+                UserWarning,
+                stacklevel=2,
+            )
+
         # Resolve data_dir early - this becomes the root for all file operations
-        if data_dir is not None:
-            self.data_dir = Path(data_dir).resolve()
+        if config.data_dir is not None:
+            self.data_dir = Path(config.data_dir).resolve()
         else:
             self.data_dir = get_default_root()
 
-        configure_client_logging(self.data_dir, configure_logging)
+        configure_client_logging(self.data_dir, config.configure_logging)
         configure_litellm_runtime()
 
-        self.max_retries = max_retries
-        self.global_timeout = global_timeout
-        self.abort_on_callback_error = abort_on_callback_error
+        self.max_retries = config.max_retries
+        self.global_timeout = config.global_timeout
+        self.abort_on_callback_error = config.abort_on_callback_error
 
-        self._init_credential_setup(api_keys, oauth_credentials)
+        self._init_credential_setup(config.api_keys, config.oauth_credentials)
         self._init_provider_resolver()
-        self._init_usage_manager(usage_file_path, rotation_tolerance)
+        self._init_usage_manager(config.usage_file_path, config.rotation_tolerance)
         self._init_http_pool()
         self._init_resilience()
         self._init_model_patterns(
-            litellm_provider_params, ignore_models, whitelist_models,
-            enable_request_logging, max_concurrent_requests_per_key,
+            config.litellm_provider_params, config.ignore_models, config.whitelist_models,
+            config.enable_request_logging, config.max_concurrent_requests_per_key,
         )
         self._init_semaphores()
 
