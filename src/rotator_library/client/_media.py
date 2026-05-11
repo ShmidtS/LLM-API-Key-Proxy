@@ -596,3 +596,17 @@ class MediaMixin:
             pre_request_callback=pre_request_callback,
             **kwargs,
         )
+
+    def amoderation(
+        self,
+        request: Optional[Any] = None,
+        pre_request_callback: Optional[Callable] = None,
+        **kwargs,
+    ) -> Any:
+        """Moderate content via the moderation endpoint."""
+        return self._media_request(
+            litellm.amoderation,
+            request=request,
+            pre_request_callback=pre_request_callback,
+            **kwargs,
+        )
