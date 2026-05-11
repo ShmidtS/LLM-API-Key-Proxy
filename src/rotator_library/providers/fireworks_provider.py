@@ -16,6 +16,8 @@ class FireworksProvider(SimpleModelProvider):
     _models_url = "https://api.fireworks.ai/inference/v1/models"
     _provider_prefix = "fireworks"
 
+    stream_required_max_tokens = 4096
+
     async def native_image_generation(
         self, client: httpx.AsyncClient, api_key: str, **kwargs
     ) -> Dict[str, Any]:

@@ -287,12 +287,3 @@ async def proxy_provider_status_call(
     id_value: str,
 ) -> Any:
     return await client.call_provider_method(provider, method, **{id_name: id_value})
-
-
-async def proxy_client_method(
-    request: Request, client: RotatingClient, method_name: str
-):
-    """Parse request body, log it, and forward via an arbitrary ``client`` method."""
-    request_data = await _parse_and_log(request, method_name)
-    handler = getattr(client, method_name)
-    return await handler(request=request, **request_data)

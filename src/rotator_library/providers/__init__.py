@@ -154,7 +154,18 @@ def _load_provider(provider_name: str):
     # Try module-based provider (e.g., openai_provider.py)
     module_name = _get_provider_module_name(provider_name)
     result = _try_load_from_module(f"{__name__}.{module_name}", provider_name)
-    return result
+    if result:
+        return result
+
+    # Try simple provider registry (config-only providers without files)
+    from ._simple_model_base import get_simple_provider
+    provider_class = get_simple_provider(provider_name)
+    if provider_class is not None:
+        PROVIDER_PLUGINS[provider_name] = provider_class
+        lib_logger.debug(f"Registry-loaded provider: {provider_name}")
+        return provider_class
+
+    return None
 
 
 def get_provider(name: str):
@@ -187,6 +198,10 @@ def list_providers():
         elif is_pkg:
             # Package-based provider (e.g., antigravity/)
             providers.add(module_name)
+
+    # Add simple registry providers
+    from ._simple_model_base import _SIMPLE_PROVIDER_REGISTRY
+    providers.update(_SIMPLE_PROVIDER_REGISTRY.keys())
 
     # Add dynamic providers from environment variables
     from ..provider_routing_config import KNOWN_PROVIDERS

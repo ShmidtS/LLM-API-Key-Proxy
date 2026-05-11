@@ -74,3 +74,38 @@ class SimpleModelProvider(ProviderInterface):
                 "Failed to fetch %s models: %s", self._provider_prefix, e,
             )
             return []
+
+
+_SIMPLE_PROVIDER_REGISTRY: dict[str, dict] = {
+    "openrouter": {
+        "models_url": "https://openrouter.ai/api/v1/models",
+        "prefix": "openrouter",
+    },
+    "xai": {
+        "models_url": "https://api.x.ai/v1/models",
+        "prefix": "xai",
+    },
+    "kilocode": {
+        "models_url": "https://kilo.ai/api/openrouter/models",
+        "prefix": "kilocode",
+        "quota_error_patterns": [
+            ("extract", "error.metadata.retry_after", "RATE_LIMIT_EXCEEDED"),
+            ("json", "error.code", 429, 30, "RATE_LIMIT_EXCEEDED"),
+            ("body", "upstream error", 5, "UPSTREAM_ERROR"),
+            ("body", "provider error", 5, "UPSTREAM_ERROR"),
+        ],
+    },
+}
+
+
+def get_simple_provider(name: str) -> type[SimpleModelProvider] | None:
+    config = _SIMPLE_PROVIDER_REGISTRY.get(name)
+    if config is None:
+        return None
+    attrs = {
+        "_models_url": config["models_url"],
+        "_provider_prefix": config["prefix"],
+    }
+    if "quota_error_patterns" in config:
+        attrs["_quota_error_patterns"] = config["quota_error_patterns"]
+    return type(f"{name.title()}Provider", (SimpleModelProvider,), attrs)

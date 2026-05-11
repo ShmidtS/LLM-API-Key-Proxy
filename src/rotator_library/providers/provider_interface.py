@@ -149,6 +149,13 @@ class ProviderInterface(ABC):
     has_custom_logic: bool = False
     """Returns True if the provider implements its own acompletion logic."""
 
+    # Streaming behavior attributes (override in subclass as needed)
+    stream_required_max_tokens: Optional[int] = None
+    """If set, force stream=true when max_tokens exceeds this threshold."""
+
+    stream_options_unsupported: bool = False
+    """If True, strip stream_options from requests to this provider."""
+
     async def acompletion(
         self, client: httpx.AsyncClient, **kwargs
     ) -> Union[litellm.ModelResponse, AsyncGenerator[litellm.ModelResponse, None]]:

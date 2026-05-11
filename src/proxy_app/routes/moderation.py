@@ -30,6 +30,5 @@ async def moderations(
     Analyzes text for policy violations (hate, violence, sexual content, etc.).
     Supports providers via LiteLLM: OpenAI, Azure, etc.
     """
-    request_data = await _parse_and_log(request)
-    response = await client.amoderation(request=request, **request_data)
-    return response
+    request_data = await _parse_and_log(request, "amoderation")
+    return await client.amoderation(request=request, **request_data)

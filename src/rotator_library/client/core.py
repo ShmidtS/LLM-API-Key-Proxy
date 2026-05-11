@@ -51,16 +51,6 @@ except ValueError:
     )
     DEFAULT_API_KEY_MAX_CONCURRENT_REQUESTS = 40
 
-# Providers that require stream=true when max_tokens exceeds a threshold.
-# {provider_prefix: max_tokens_threshold}
-# Fireworks API returns 400 "Requests with max_tokens > 4096 must have stream=true"
-_STREAM_REQUIRED_PROVIDERS = {
-    "fireworks": 4096,
-}
-
-# Providers that don't support stream_options parameter
-# These providers return 400/406 errors or internal server errors when stream_options is sent
-_STREAM_OPTIONS_UNSUPPORTED_PROVIDERS = frozenset({"iflow", "kilocode", "nvidia"})
 from ..usage_manager import UsageManager
 
 from ..error_types import mask_credential
@@ -490,7 +480,10 @@ class RotatingClient(
                 )
 
         # Remove stream_options for providers that don't support it
-        stream_options_supported = provider not in _STREAM_OPTIONS_UNSUPPORTED_PROVIDERS
+        provider_plugin = self._get_provider_instance(provider)
+        stream_options_supported = not (
+            provider_plugin and getattr(provider_plugin, "stream_options_unsupported", False)
+        )
 
         if not stream_options_supported and "stream_options" in kwargs:
             lib_logger.debug(
@@ -506,7 +499,7 @@ class RotatingClient(
         stream = kwargs.get("stream")
         if not stream:
             max_tokens = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
-            threshold = _STREAM_REQUIRED_PROVIDERS.get(provider)
+            threshold = getattr(provider_plugin, "stream_required_max_tokens", None) if provider_plugin else None
             if max_tokens and threshold is not None and max_tokens > threshold:
                 lib_logger.info(
                     "Forcing stream=true for %s provider (max_tokens=%s > threshold=%s)",

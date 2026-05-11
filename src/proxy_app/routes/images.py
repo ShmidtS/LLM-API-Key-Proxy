@@ -13,7 +13,7 @@ from fastapi import APIRouter, Request, Depends
 from proxy_app.dependencies import get_rotating_client, verify_api_key
 from proxy_app.routes.error_handler import handle_route_errors
 from proxy_app.routes._helpers import (
-    proxy_client_method,
+    _parse_and_log,
     proxy_provider_status_call,
     proxy_zai_route,
 )
@@ -35,7 +35,8 @@ async def image_generations(
     Accepts model, prompt, n, size, quality, response_format and other
     parameters, proxies through litellm.aimage_generation with key rotation.
     """
-    return await proxy_client_method(request, client, "aimage_generation")
+    request_data = await _parse_and_log(request, "aimage_generation")
+    return await client.aimage_generation(request=request, **request_data)
 
 
 @router.post("/v1/images/edits")
@@ -51,7 +52,8 @@ async def image_edits(
     Accepts image, mask, prompt and other parameters, proxies through
     litellm.aimage_edit with key rotation.
     """
-    return await proxy_client_method(request, client, "aimage_edit")
+    request_data = await _parse_and_log(request, "aimage_edit")
+    return await client.aimage_edit(request=request, **request_data)
 
 
 @router.post("/v1/images/variations")
@@ -67,7 +69,8 @@ async def image_variations(
     Accepts image and other parameters, proxies through
     litellm.aimage_variation with key rotation.
     """
-    return await proxy_client_method(request, client, "aimage_variation")
+    request_data = await _parse_and_log(request, "aimage_variation")
+    return await client.aimage_variation(request=request, **request_data)
 
 
 @router.post("/v1/images/generations/async")
