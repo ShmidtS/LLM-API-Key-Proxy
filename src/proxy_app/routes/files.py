@@ -26,7 +26,7 @@ async def upload_file(
     with a file and purpose parameter.
     """
     file_tuple = (file.filename or "upload.jsonl", file.file)
-    response = await litellm.acreate_file(file=file_tuple, purpose=cast(Literal["assistants", "batch", "fine-tune"], purpose))
+    response = await litellm.acreate_file(file=file_tuple, purpose=cast(Literal["assistants", "batch", "fine-tune"], purpose))  # type: ignore[misc]
     return response
 
 
@@ -38,7 +38,7 @@ async def list_files(
     """
     OpenAI-compatible endpoint for listing uploaded files.
     """
-    response = await litellm.afile_list()
+    response = await litellm.afile_list()  # type: ignore[misc]
     return response
 
 
@@ -51,7 +51,7 @@ async def retrieve_file(
     """
     OpenAI-compatible endpoint for retrieving file metadata.
     """
-    response = await litellm.afile_retrieve(file_id=file_id)
+    response = await litellm.afile_retrieve(file_id=file_id)  # type: ignore[misc]
     return response
 
 
@@ -64,7 +64,7 @@ async def delete_file(
     """
     OpenAI-compatible endpoint for deleting an uploaded file.
     """
-    response = await litellm.afile_delete(file_id=file_id)
+    response = await litellm.afile_delete(file_id=file_id)  # type: ignore[misc]
     return response
 
 
@@ -77,5 +77,5 @@ async def retrieve_file_content(
     """
     OpenAI-compatible endpoint for retrieving file content.
     """
-    response = await litellm.afile_content(file_id=file_id)
+    response = await litellm.afile_content(file_id=file_id)  # type: ignore[misc]
     return response

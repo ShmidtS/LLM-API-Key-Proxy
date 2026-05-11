@@ -50,7 +50,7 @@ class DataMerger:
         # Extract parent model ID from origin for transparency
         parent_model_id = DataMerger._extract_model_id_from_origin(best_origin)
 
-        return ModelMetadata(
+        return ModelMetadata(  # type: ignore[call-arg]
             model_id=queried_model_id,
             display_name=best_record.get("name", queried_model_id.split("/")[-1]),
             # Use QUERIED provider, not source provider
