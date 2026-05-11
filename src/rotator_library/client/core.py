@@ -22,7 +22,7 @@ from collections.abc import Callable
 import httpx
 import litellm  # type: ignore[import-untyped]
 from pathlib import Path
-from typing import Any, AsyncGenerator, Optional, Union, TYPE_CHECKING
+from typing import Any, AsyncGenerator, Dict, Optional, Union, TYPE_CHECKING
 
 from ..env_cache import get_provider_env_cache
 
@@ -83,8 +83,8 @@ from ._streaming import StreamingMixin
 from ._retry import RetryMixin
 from ._media import MediaMixin, _IMAGE_PASSTHROUGH_PARAMS, _IMAGE_NATIVE_PROVIDERS
 from ._models import ModelsMixin
-from ._quota import QuotaMixin
-from ._anthropic import AnthropicCompatibilityMixin
+from ..quota_reporter import QuotaReporter
+from ..anthropic_adapter import AnthropicAdapter
 from .provider_resolution import ProviderResolver
 
 
@@ -94,8 +94,6 @@ class RotatingClient(
     RetryMixin,
     MediaMixin,
     ModelsMixin,
-    QuotaMixin,
-    AnthropicCompatibilityMixin,
 ):
     """
     A client that intelligently rotates and retries API keys using LiteLLM,
@@ -154,6 +152,10 @@ class RotatingClient(
             config.enable_request_logging, config.max_concurrent_requests_per_key,
         )
         self._init_semaphores()
+
+        # Lazy-init placeholders for composition delegates
+        self._quota_reporter_instance: Optional[Any] = None
+        self._anthropic_adapter_instance: Optional[Any] = None
 
     # --- Core methods that remain in this module ---
 
@@ -619,6 +621,66 @@ class RotatingClient(
         )
 
     # --- Anthropic API Compatibility Methods ---
+
+    @property
+    def quota_reporter(self):
+        if self._quota_reporter_instance is None:
+            self._quota_reporter_instance = QuotaReporter(
+                self.usage_manager,
+                self._provider_plugins,
+                self._provider_instances,
+                self.all_credentials,
+            )
+        return self._quota_reporter_instance
+
+    async def get_quota_stats(
+        self,
+        provider_filter: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await self.quota_reporter.get_quota_stats(provider_filter)
+
+    async def reload_usage_from_disk(self) -> None:
+        """Force reload usage data from disk.
+
+        Useful when wanting fresh stats without making external API calls.
+        """
+        await self.usage_manager.reload_from_disk()
+
+    async def force_refresh_quota(
+        self,
+        provider: Optional[str] = None,
+        credential: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await self.quota_reporter.force_refresh_quota(provider, credential)
+
+    @property
+    def anthropic_adapter(self):
+        if self._anthropic_adapter_instance is None:
+            self._anthropic_adapter_instance = AnthropicAdapter(
+                self.acompletion,
+                self.token_count,
+                extract_provider_from_model,
+                self.all_credentials,
+                self.enable_request_logging,
+            )
+        return self._anthropic_adapter_instance
+
+    async def anthropic_messages(
+        self,
+        request: "AnthropicMessagesRequest",
+        raw_request: Optional[Any] = None,
+        pre_request_callback: Optional[Callable] = None,
+        raw_body_data: Optional[dict] = None,
+    ) -> Any:
+        return await self.anthropic_adapter.anthropic_messages(
+            request, raw_request, pre_request_callback, raw_body_data
+        )
+
+    async def anthropic_count_tokens(
+        self,
+        request: "AnthropicCountTokensRequest",
+    ) -> dict:
+        return await self.anthropic_adapter.anthropic_count_tokens(request)
 
 
 
