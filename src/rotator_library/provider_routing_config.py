@@ -281,6 +281,16 @@ class ProviderConfig:
 
         if not api_base:
             # No override configured for this provider
+            # Force v1beta for Gemini 3 models to avoid v1alpha thoughtSignature issues
+            if provider == "gemini":
+                model_name = model.split("/", 1)[1] if "/" in model else model
+                if "gemini-3" in model_name:
+                    kwargs = kwargs.copy()
+                    kwargs["api_base"] = "https://generativelanguage.googleapis.com/v1beta"
+                    lib_logger.info(
+                        f"Forcing v1beta API for Gemini 3 model: {model}"
+                    )
+                    return kwargs
             return kwargs
 
         # Create a copy to avoid modifying the original

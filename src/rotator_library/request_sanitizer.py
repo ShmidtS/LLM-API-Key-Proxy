@@ -30,7 +30,13 @@ FIREWORKS_UNSUPPORTED_PARAMS: Set[str] = {
     "reasoning_budget",
 }
 
-_GEMINI_THINKING_MODELS = frozenset({"gemini/gemini-2.5-pro", "gemini/gemini-2.5-flash"})
+_GEMINI_THINKING_MODELS = frozenset({
+    "gemini/gemini-2.5-pro",
+    "gemini/gemini-2.5-flash",
+    "gemini/gemini-3-pro-preview",
+    "gemini/gemini-3-flash",
+    "gemini/gemini-3-flash-preview",
+})
 
 # Models that don't support the temperature parameter at all.
 # OpenAI returns 400 "Only the default (1) value is supported" for these.
