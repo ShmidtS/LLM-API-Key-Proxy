@@ -125,36 +125,43 @@ class GzipRequestTransport(httpx.AsyncHTTPTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         """Compress request body if eligible before sending."""
-        if self._compress_enabled and request.content:
-            content_len = len(request.content)
+        if self._compress_enabled:
+            # Safely access request content — streaming requests (e.g. after
+            # follow_redirects rewrites) may not have materialised the body
+            # yet, which raises RequestNotRead.  Skip compression in that case.
+            try:
+                content = request.content
+            except httpx.RequestNotRead:
+                return await super().handle_async_request(request)
 
-            if content_len >= self._compress_min_size:
-                content_type = request.headers.get("content-type", "")
-                if "application/json" in content_type:
-                    if "content-encoding" not in {k.lower() for k in request.headers}:
-                        loop = asyncio.get_running_loop()
-                        compressed = await loop.run_in_executor(
-                            _get_gzip_executor(), gzip.compress, request.content
-                        )
+            if content:
+                content_len = len(content)
 
-                        if len(compressed) < content_len * _COMPRESSION_THRESHOLD:
-                            # Create new request with compressed content
-                            # (request.content is read-only in httpx)
-                            headers = dict(request.headers)
-                            headers["content-encoding"] = "gzip"
-                            headers["content-length"] = str(len(compressed))
-                            request = httpx.Request(
-                                method=request.method,
-                                url=request.url,
-                                content=compressed,
-                                headers=headers,
+                if content_len >= self._compress_min_size:
+                    content_type = request.headers.get("content-type", "")
+                    if "application/json" in content_type:
+                        if "content-encoding" not in {k.lower() for k in request.headers}:
+                            loop = asyncio.get_running_loop()
+                            compressed = await loop.run_in_executor(
+                                _get_gzip_executor(), gzip.compress, content
                             )
 
-                            lib_logger.debug(
-                                "Gzip compressed: %d -> %d bytes (%.1f%% reduction)",
-                                content_len, len(compressed),
-                                100 * (1 - len(compressed) / content_len),
-                            )
+                            if len(compressed) < content_len * _COMPRESSION_THRESHOLD:
+                                headers = dict(request.headers)
+                                headers["content-encoding"] = "gzip"
+                                headers["content-length"] = str(len(compressed))
+                                request = httpx.Request(
+                                    method=request.method,
+                                    url=request.url,
+                                    content=compressed,
+                                    headers=headers,
+                                )
+
+                                lib_logger.debug(
+                                    "Gzip compressed: %d -> %d bytes (%.1f%% reduction)",
+                                    content_len, len(compressed),
+                                    100 * (1 - len(compressed) / content_len),
+                                )
 
         return await super().handle_async_request(request)
 
@@ -455,11 +462,14 @@ class HttpClientPool(metaclass=SingletonMeta):
         if not client:
             return
 
-        # Build list of all warmup tasks (parallel execution)
+        # Build list of all warmup tasks (parallel execution).
+        # follow_redirects=False: the goal is TCP+TLS handshake only —
+        # chasing redirects can trigger RequestNotRead on streaming
+        # redirect bodies and wastes bandwidth on unrelated hosts.
         warmup_tasks = []
         for host in self._warmup_hosts[:HTTP_WARMUP_HOST_LIMIT]:  # Limit to 5 hosts for warmup
             for _ in range(self._warmup_count):
-                warmup_tasks.append(client.get(host, follow_redirects=True))
+                warmup_tasks.append(client.get(host, follow_redirects=False))
 
         # Execute all warmup requests in parallel with graceful error handling
         results = await asyncio.gather(*warmup_tasks, return_exceptions=True)
