@@ -254,6 +254,7 @@ def _classify_http_status_error(
             error_type="authentication",
             original_exception=e,
             status_code=status_code,
+            raw_response_body=response_text_raw,
         )
     if status_code == 403:
         if "edge_ip_restricted" in error_body_lower or "error 1034" in error_body_lower or (
@@ -263,15 +264,17 @@ def _classify_http_status_error(
                 error_type="ip_rate_limit",
                 original_exception=e,
                 status_code=status_code,
+                raw_response_body=response_text_raw,
             )
         return ClassifiedError(
             error_type="forbidden",
             original_exception=e,
             status_code=status_code,
+            raw_response_body=response_text_raw,
         )
     if status_code == 429:
         retry_after = get_retry_after(e)
-        return classify_rate_limit(
+        result = classify_rate_limit(
             e,
             error_text=error_body_lower,
             status_code=status_code,
@@ -279,20 +282,32 @@ def _classify_http_status_error(
             provider=provider,
             response_text=response_text_raw,
         )
+        # Attach raw response body to rate limit errors
+        result.raw_response_body = response_text_raw
+        return result
     if status_code == 400:
-        return _classify_http_400(e, status_code, error_body_lower)
+        result = _classify_http_400(e, status_code, error_body_lower)
+        result.raw_response_body = response_text_raw
+        return result
     if 400 <= status_code < 500:
         return ClassifiedError(
             error_type="invalid_request",
             original_exception=e,
             status_code=status_code,
+            raw_response_body=response_text_raw,
         )
     if 500 <= status_code:
         return ClassifiedError(
-            error_type="server_error", original_exception=e, status_code=status_code
+            error_type="server_error",
+            original_exception=e,
+            status_code=status_code,
+            raw_response_body=response_text_raw,
         )
     return ClassifiedError(
-        error_type="unknown", original_exception=e, status_code=status_code
+        error_type="unknown",
+        original_exception=e,
+        status_code=status_code,
+        raw_response_body=response_text_raw,
     )
 
 

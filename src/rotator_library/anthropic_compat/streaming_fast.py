@@ -113,15 +113,18 @@ def _make_message_start_event(request_id: str, model: str, input_tokens: int = 0
     return f"event: message_start\ndata: {json_dumps(message_start)}\n\n"
 
 
-def _make_content_block_start_event(index: int, block_type: str, **extra) -> str:
+def _make_content_block_start_event(index: int, block_type: str, cache_control: Optional[dict] = None, **extra) -> str:
     """Build content_block_start event string."""
-    block = {"type": block_type}
+    block: dict[str, Any] = {"type": block_type}
     if block_type == "text":
         block["text"] = ""
     elif block_type == "thinking":
         block["thinking"] = ""
     elif block_type == "tool_use":
         block.update(extra)
+
+    if cache_control:
+        block["cache_control"] = cache_control
 
     event = {
         "type": "content_block_start",
@@ -245,6 +248,7 @@ class _StreamTranslator:
         "input_tokens", "output_tokens", "cached_tokens", "cache_creation_tokens",
         "_text_parts", "_thinking_parts",
         "last_event_time", "_chunk_count",
+        "_cache_control_map",
     )
 
     def __init__(
@@ -254,6 +258,7 @@ class _StreamTranslator:
         is_disconnected: Optional[Callable[[], Awaitable[bool]]],
         transaction_logger: Optional["TransactionLogger"],
         precomputed_input_tokens: Optional[int],
+        cache_control_map: Optional[dict] = None,
     ):
         self.request_id = request_id
         self.original_model = original_model
@@ -281,6 +286,7 @@ class _StreamTranslator:
 
         self.last_event_time = monotonic()
         self._chunk_count = 0
+        self._cache_control_map = cache_control_map or {}
 
     # ------------------------------------------------------------------
     # Chunk parsing
@@ -409,7 +415,9 @@ class _StreamTranslator:
             events.extend(self._close_thinking_block())
 
         if not self.content_block_started:
-            event_str = _make_content_block_start_event(self.current_block_index, "text")
+            # Restore cache_control for text blocks if present in the map
+            text_cc = self._cache_control_map.get(self.current_block_index)
+            event_str = _make_content_block_start_event(self.current_block_index, "text", cache_control=text_cc)
             if event := self._batch_add(event_str):
                 events.append(event)
             self.content_block_started = True
@@ -647,6 +655,7 @@ async def anthropic_streaming_wrapper_fast(
     is_disconnected: Optional[Callable[[], Awaitable[bool]]] = None,
     transaction_logger: Optional["TransactionLogger"] = None,
     precomputed_input_tokens: Optional[int] = None,
+    cache_control_map: Optional[dict] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Convert OpenAI streaming format to Anthropic streaming format (optimized version).
@@ -672,6 +681,9 @@ async def anthropic_streaming_wrapper_fast(
         precomputed_input_tokens: Optional pre-computed input token count. Used as fallback
             when provider doesn't return usage in stream (e.g., Kilocode without stream_options).
             This is critical for Claude Code's context management to work correctly.
+        cache_control_map: Optional mapping of content block index to cache_control dict.
+            Used to restore cache_control metadata in streaming content_block_start events,
+            mirroring the cache_control sent in the original Anthropic request.
 
     Yields:
         SSE format strings in Anthropic's streaming format
@@ -685,6 +697,7 @@ async def anthropic_streaming_wrapper_fast(
         is_disconnected=is_disconnected,
         transaction_logger=transaction_logger,
         precomputed_input_tokens=precomputed_input_tokens,
+        cache_control_map=cache_control_map,
     )
     async for event in translator.translate(openai_stream):
         yield event

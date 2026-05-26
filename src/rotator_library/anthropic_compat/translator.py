@@ -9,13 +9,17 @@ Anthropic's Messages API format and OpenAI's Chat Completions API format.
 This enables any OpenAI-compatible provider to work with Anthropic clients.
 """
 
+import logging
 import uuid
 from typing import Any, Dict, List, Optional, Union
 
 from ..error_handler import validate_response_quality
 from ..utils.json_utils import json_dumps_str as _json_dumps, json_loads as _json_loads, JSONDecodeError as _json_decode_error
+from .translation_audit import TranslationAuditLog
 
 from .models import AnthropicMessagesRequest
+
+_tlog = logging.getLogger("rotator_library.anthropic_compat")
 
 MIN_THINKING_SIGNATURE_LENGTH = 100
 
@@ -150,6 +154,7 @@ def anthropic_to_openai_messages(
         List of messages in OpenAI format
     """
     openai_messages: List[Dict[str, Any]] = []
+    cache_control_metadata: Dict[int, Dict[str, Any]] = {}  # msg_index -> {block_idx -> cache_control}
 
     if all(isinstance(msg.get("content", ""), str) for msg in anthropic_messages):
         if system:
@@ -200,18 +205,26 @@ def anthropic_to_openai_messages(
             tool_calls: List[Dict[str, Any]] = []
             reasoning_parts: list[str] = []
             thinking_signature: str = ""
+            # Cache control metadata: maps content block index to cache_control dict
+            _cache_controls: Dict[int, Any] = {}
+            _openai_content_idx: int = -1  # tracks index into openai_content
 
             for block in content:
                 if isinstance(block, dict):
                     block_type: str = block.get("type", "text")
+                    _block_cc: Optional[dict] = block.get("cache_control")
 
                     if block_type == "text":
+                        _openai_content_idx = len(openai_content)
                         openai_content.append(
                             {"type": "text", "text": block.get("text", "")}
                         )
+                        if _block_cc:
+                            _cache_controls[_openai_content_idx] = _block_cc
                     elif block_type == "image":
                         # Convert Anthropic image format to OpenAI
                         source: Dict[str, Any] = block.get("source", {})
+                        _openai_content_idx = len(openai_content)
                         if source.get("type") == "base64":
                             openai_content.append(
                                 {
@@ -228,10 +241,13 @@ def anthropic_to_openai_messages(
                                     "image_url": {"url": source.get("url", "")},
                                 }
                             )
+                        if _block_cc:
+                            _cache_controls[_openai_content_idx] = _block_cc
                     elif block_type == "document":
                         # Convert Anthropic document format (e.g. PDF) to OpenAI
                         # Documents are treated similarly to images with appropriate mime type
                         doc_source: Dict[str, Any] = block.get("source", {})
+                        _openai_content_idx = len(openai_content)
                         if doc_source.get("type") == "base64":
                             openai_content.append(
                                 {
@@ -248,6 +264,8 @@ def anthropic_to_openai_messages(
                                     "image_url": {"url": doc_source.get("url", "")},
                                 }
                             )
+                        if _block_cc:
+                            _cache_controls[_openai_content_idx] = _block_cc
                     elif block_type == "thinking":
                         signature: str = block.get("signature", "")
                         thinking_text: str = block.get("thinking", "")
@@ -392,6 +410,8 @@ def anthropic_to_openai_messages(
                 if thinking_signature:
                     msg_dict["thinking_signature"] = thinking_signature
                 msg_dict["tool_calls"] = tool_calls
+                if _cache_controls:
+                    msg_dict["_cache_control_metadata"] = _cache_controls
                 openai_messages.append(msg_dict)
             elif openai_content:
                 # Check if it's just text or mixed content
@@ -404,6 +424,8 @@ def anthropic_to_openai_messages(
                         msg_dict["reasoning_content"] = reasoning_content
                     if thinking_signature:
                         msg_dict["thinking_signature"] = thinking_signature
+                    if _cache_controls:
+                        msg_dict["_cache_control_metadata"] = _cache_controls
                     openai_messages.append(msg_dict)
                 else:
                     msg_dict = {"role": role, "content": openai_content}
@@ -411,6 +433,8 @@ def anthropic_to_openai_messages(
                         msg_dict["reasoning_content"] = reasoning_content
                     if thinking_signature:
                         msg_dict["thinking_signature"] = thinking_signature
+                    if _cache_controls:
+                        msg_dict["_cache_control_metadata"] = _cache_controls
                     openai_messages.append(msg_dict)
             elif reasoning_content:
                 msg_dict = {"role": role, "content": ""}
@@ -634,18 +658,35 @@ def translate_anthropic_request(request: AnthropicMessagesRequest) -> Dict[str, 
         "stream": request.stream or False,
     }
 
+    # Audit tracking fields
+    _preserved: List[str] = []
+    _dropped: List[str] = []
+    _transformed: Dict[str, Any] = {}
+
     if request.temperature is not None:
         openai_request["temperature"] = request.temperature
+        _preserved.append("temperature")
     if request.top_p is not None:
         openai_request["top_p"] = request.top_p
+        _preserved.append("top_p")
     if request.top_k is not None:
+        # top_k is Anthropic-specific; pass through but log it.
+        # Most OpenAI-compatible providers silently ignore it.
         openai_request["top_k"] = request.top_k
+        _tlog.debug(
+            "top_k=%d passed through for model %s (provider may ignore it)",
+            request.top_k, request.model,
+        )
+        _transformed["top_k"] = {"before": request.top_k, "after": request.top_k}
     if request.stop_sequences:
         openai_request["stop"] = request.stop_sequences
+        _transformed["stop_sequences"] = {"before": "stop_sequences", "after": "stop"}
     if openai_tools:
         openai_request["tools"] = openai_tools
+        _preserved.append("tools")
     if openai_tool_choice:
         openai_request["tool_choice"] = openai_tool_choice
+        _transformed["tool_choice"] = {"before": tool_choice, "after": openai_tool_choice}
 
     # Note: request.metadata is intentionally not mapped.
     # OpenAI's API doesn't have an equivalent field for client-side metadata.
@@ -666,10 +707,188 @@ def translate_anthropic_request(request: AnthropicMessagesRequest) -> Dict[str, 
             _budget_tokens = getattr(thinking, "budget_tokens", None)
         if _thinking_type == "enabled":
             if _budget_tokens is not None:
-                openai_request["reasoning_effort"] = _budget_to_reasoning_effort(
-                    _budget_tokens, request.model
-                )
+                effort = _budget_to_reasoning_effort(_budget_tokens, request.model)
+                openai_request["reasoning_effort"] = effort
+                _transformed["thinking"] = {
+                    "before": {"type": "enabled", "budget_tokens": _budget_tokens},
+                    "after": effort,
+                }
         elif _thinking_type == "disabled":
             openai_request["reasoning_effort"] = "disable"
+            _transformed["thinking"] = {"before": {"type": "disabled"}, "after": "disable"}
+
+    # Check if any messages carry cache_control metadata
+    _has_cache_control = any(
+        "_cache_control_metadata" in m for m in openai_messages
+    )
+    if _has_cache_control:
+        _preserved.append("cache_control")
+
+    # Embed audit metadata in request for downstream consumers
+    openai_request["_translation_audit"] = {
+        "fields_preserved": _preserved,
+        "fields_dropped": _dropped,
+        "fields_transformed": _transformed,
+    }
 
     return openai_request
+
+
+def openai_to_anthropic_tool_choice(
+    openai_tool_choice: Optional[Union[str, Dict[str, Any]]],
+) -> Optional[Union[str, Dict[str, Any]]]:
+    """Reverse of :func:`anthropic_to_openai_tool_choice`.
+
+    Maps OpenAI tool_choice back to Anthropic format.
+
+    Args:
+        openai_tool_choice: Tool choice in OpenAI format
+
+    Returns:
+        Tool choice in Anthropic format, or None if not set
+    """
+    if not openai_tool_choice:
+        return None
+
+    if isinstance(openai_tool_choice, str):
+        if openai_tool_choice == "required":
+            return "any"
+        elif openai_tool_choice == "none":
+            return "none"
+        return "auto"
+
+    if isinstance(openai_tool_choice, dict):
+        if openai_tool_choice.get("type") == "function":
+            func = openai_tool_choice.get("function", {})
+            return {"type": "tool", "name": func.get("name", "")}
+
+    return "auto"
+
+
+def openai_to_anthropic_messages(
+    openai_messages: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], Optional[Union[str, List[Dict[str, Any]]]]]:
+    """
+    Convert OpenAI message format back to Anthropic format with cache_control restoration.
+
+    This is the reverse of :func:`anthropic_to_openai_messages`. It restores
+    cache_control metadata that was preserved during forward translation.
+
+    Args:
+        openai_messages: List of messages in OpenAI format
+
+    Returns:
+        Tuple of (anthropic_messages, system) where:
+        - anthropic_messages: List of messages in Anthropic format
+        - system: System message content (string or list of blocks), or None
+    """
+    anthropic_messages: List[Dict[str, Any]] = []
+    system: Optional[Union[str, List[Dict[str, Any]]]] = None
+
+    for msg in openai_messages:
+        role: str = msg.get("role", "user")
+        content: Union[str, List[Dict[str, Any]]] = msg.get("content", "")
+
+        if role == "system":
+            if isinstance(content, str):
+                system = content
+            elif isinstance(content, list):
+                system = [{"type": "text", "text": c.get("text", "")}
+                         for c in content if c.get("type") == "text"]
+            continue
+
+        cache_control_metadata = msg.get("_cache_control_metadata", {})
+
+        if isinstance(content, str):
+            if role == "tool":
+                anthropic_messages.append({
+                    "type": "tool_result",
+                    "tool_use_id": msg.get("tool_call_id", ""),
+                    "content": content,
+                })
+            elif cache_control_metadata:
+                # Restore list format when cache_control metadata is present
+                # This happens when forward translator flattened a single text block
+                anthropic_messages.append({
+                    "role": role,
+                    "content": [{
+                        "type": "text",
+                        "text": content,
+                        "cache_control": cache_control_metadata.get(0),
+                    }]
+                })
+            else:
+                anthropic_messages.append({"role": role, "content": content})
+        elif isinstance(content, list):
+            anthropic_content: List[Dict[str, Any]] = []
+            openai_idx = 0
+
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+
+                block_type: str = block.get("type", "text")
+
+                if block_type == "text":
+                    text_block: Dict[str, Any] = {
+                        "type": "text",
+                        "text": block.get("text", ""),
+                    }
+                    if openai_idx in cache_control_metadata:
+                        text_block["cache_control"] = cache_control_metadata[openai_idx]
+                    anthropic_content.append(text_block)
+                    openai_idx += 1
+                elif block_type == "image_url":
+                    image_url: str = block.get("image_url", {}).get("url", "")
+                    if image_url.startswith("data:"):
+                        parts = image_url.split(",", 1)
+                        media_type = parts[0].split(";")[0].replace("data:", "")
+                        image_block: Dict[str, Any] = {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": parts[1] if len(parts) > 1 else "",
+                            }
+                        }
+                        if openai_idx in cache_control_metadata:
+                            image_block["cache_control"] = cache_control_metadata[openai_idx]
+                        anthropic_content.append(image_block)
+                    else:
+                        image_block = {
+                            "type": "image",
+                            "source": {"type": "url", "url": image_url}
+                        }
+                        if openai_idx in cache_control_metadata:
+                            image_block["cache_control"] = cache_control_metadata[openai_idx]
+                        anthropic_content.append(image_block)
+                    openai_idx += 1
+
+            if role == "tool":
+                anthropic_messages.append({
+                    "type": "tool_result",
+                    "tool_use_id": msg.get("tool_call_id", ""),
+                    "content": anthropic_content,
+                })
+            else:
+                anthropic_messages.append({"role": role, "content": anthropic_content})
+
+        tool_calls = msg.get("tool_calls", [])
+        if tool_calls:
+            for tc in tool_calls:
+                func = tc.get("function", {})
+                try:
+                    input_data = _json_loads(func.get("arguments", "{}"))
+                except _json_decode_error:
+                    input_data = {}
+                anthropic_messages.append({
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": tc.get("id", ""),
+                        "name": func.get("name", ""),
+                        "input": input_data,
+                    }]
+                })
+
+    return anthropic_messages, system

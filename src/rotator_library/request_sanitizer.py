@@ -107,6 +107,11 @@ def sanitize_request_payload(
         for param in FIREWORKS_UNSUPPORTED_PARAMS:
             if param in payload:
                 del payload[param]
+        # Strip internal Anthropic metadata from messages — Fireworks rejects unknown keys
+        # like '_cache_control_metadata' with HTTP 400 "Extra inputs are not permitted"
+        for msg in payload.get("messages", []):
+            if isinstance(msg, dict):
+                msg.pop("_cache_control_metadata", None)
 
     # Strip temperature for models that don't support it at all (400 error)
     if "temperature" in payload:

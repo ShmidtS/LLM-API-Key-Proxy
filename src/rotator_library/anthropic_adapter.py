@@ -49,6 +49,7 @@ class AnthropicAdapter:
             translate_anthropic_request,
             openai_to_anthropic_response,
             anthropic_streaming_wrapper,
+            TranslationAuditLog,
         )
         from .token_calculator import count_input_tokens
         import uuid
@@ -78,6 +79,17 @@ class AnthropicAdapter:
 
         # Translate Anthropic request to OpenAI format
         openai_request = translate_anthropic_request(request)
+
+        # Emit translation audit log
+        TranslationAuditLog.log_from_metadata(
+            request_id=request_id,
+            direction="anthropic_to_openai",
+            translation_metadata=openai_request,
+        )
+
+        # Strip internal metadata keys before forwarding to provider
+        # _cache_control_metadata is preserved in messages for round-trip fidelity
+        openai_request.pop("_translation_audit", None)
 
         # Pass parent log directory to acompletion for nested logging
         if anthropic_logger and anthropic_logger.log_dir:
@@ -122,6 +134,12 @@ class AnthropicAdapter:
             if raw_request is not None and hasattr(raw_request, "is_disconnected"):
                 is_disconnected = raw_request.is_disconnected
 
+            # Extract cache_control metadata from messages for round-trip fidelity
+            cache_control_map = {}
+            for msg in openai_request.get("messages", []):
+                if isinstance(msg, dict) and "_cache_control_metadata" in msg:
+                    cache_control_map.update(msg["_cache_control_metadata"])
+
             # Return the streaming wrapper
             # Note: For streaming, the anthropic response logging happens in the wrapper
             return anthropic_streaming_wrapper(
@@ -131,6 +149,7 @@ class AnthropicAdapter:
                 is_disconnected=is_disconnected,
                 transaction_logger=anthropic_logger,
                 precomputed_input_tokens=precomputed_input_tokens,
+                cache_control_map=cache_control_map if cache_control_map else None,
             )
         else:
             # Non-streaming response

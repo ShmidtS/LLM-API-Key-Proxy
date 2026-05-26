@@ -10,7 +10,9 @@ from typing import Any, AsyncGenerator, Dict, Optional
 
 import httpx
 
+from ..config import RESPONSE_VALIDATION_ENABLED
 from ..error_types import mask_credential, NoAvailableKeysError
+from ..response_validator import ResponseValidator
 from ..utils.json_utils import STREAM_DONE
 
 lib_logger = logging.getLogger("rotator_library")
@@ -39,6 +41,7 @@ class StreamingMixin:
         model: str,
         request: Optional[Any] = None,
         provider_plugin: Optional[Any] = None,
+        respond_tool_active: bool = False,
     ) -> AsyncGenerator[Any, None]:
         """
         A hybrid wrapper for streaming that buffers fragmented JSON, handles client disconnections gracefully,
@@ -63,6 +66,21 @@ class StreamingMixin:
         has_usage_data = False  # Track if we ever saw usage data
         disconnect_check_countdown = 0
         _chunk_is_pydantic = None
+
+        # --- Phase 4: streaming response validation ---
+        # Validation is controlled ONLY by env var and per-provider level.
+        _validation_enabled = RESPONSE_VALIDATION_ENABLED
+        _validation_level = (
+            getattr(provider_plugin, "response_validation_level", "standard")
+            if provider_plugin
+            else "standard"
+        )
+        _validator = ResponseValidator() if _validation_enabled else None
+        had_validation_errors = False
+
+        # --- Phase 5: synthetic respond tool extraction ---
+        from ..synthetic_respond_tool import StreamingRespondExtractor
+        _respond_extractor = StreamingRespondExtractor() if respond_tool_active else None
 
         try:
             while True:
@@ -108,6 +126,30 @@ class StreamingMixin:
                     if not isinstance(chunk_dict, dict):
                         yield chunk_dict
                         continue
+
+                    # --- Phase 4: streaming chunk validation ---
+                    # If validation fails, pass chunk through unchanged (SSE integrity)
+                    # but skip further processing of this malformed chunk.
+                    if _validator is not None:
+                        vr = _validator.validate_streaming_chunk(chunk_dict, _validation_level)
+                        if not vr.valid:
+                            had_validation_errors = True
+                            lib_logger.warning(
+                                "Streaming validation failed at chunk %s for model %s: %s (field: %s). "
+                                "Passing chunk through to preserve SSE integrity.",
+                                chunk_index, model, vr.error, vr.field_path,
+                            )
+                            yield chunk_dict
+                            continue
+                    # --- Phase 5: respond tool extraction ---
+                    # When the respond tool is active, intercept tool_call chunks
+                    # and buffer them. At stream end, emit text instead of tool_calls.
+                    if _respond_extractor is not None:
+                        processed = _respond_extractor.process_chunk(chunk_dict)
+                        if processed is None:
+                            continue
+                        chunk_dict = processed
+
                     choices = chunk_dict.get("choices")
                     usage = chunk_dict.get("usage")
                     if choices is None and usage is None:
@@ -274,6 +316,26 @@ class StreamingMixin:
                 if stream_completed and (
                     not request or not await request.is_disconnected()
                 ):
+                    # --- Phase 5: emit respond tool text at stream end ---
+                    if _respond_extractor is not None and _respond_extractor.saw_respond_tool:
+                        text = _respond_extractor.extract_text()
+                        if text:
+                            final_chunk = _respond_extractor.build_final_text_chunk(text, model)
+                            yield final_chunk
+                            lib_logger.debug(
+                                "Respond tool extracted and emitted as text for model %s", model
+                            )
+
+                    # --- Phase 4: emit validation error chunk at stream end ---
+                    if had_validation_errors:
+                        error_chunk = {
+                            "error": {
+                                "message": "Stream had one or more chunks that failed schema validation",
+                                "type": "proxy_stream_error",
+                                "code": "SCHEMA_VALIDATION_STREAM_ERROR",
+                            }
+                        }
+                        yield error_chunk
                     yield STREAM_DONE
             except (httpx.HTTPError, ConnectionError, RuntimeError) as e:
                 lib_logger.exception("Error during stream cleanup: %s", e)

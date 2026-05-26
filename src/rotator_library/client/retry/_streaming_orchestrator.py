@@ -42,6 +42,11 @@ async def _streaming_acompletion_with_retry(
     """A dedicated generator for retrying streaming completions with full request preparation and per-key retries."""
     from .._streaming import _StreamedException
 
+    # --- Phase 5: respond tool flag ---
+    # Injected by core.py::acompletion() into kwargs. Pop before retry context
+    # so it doesn't leak into litellm or provider kwargs.
+    _respond_tool_injected = kwargs.pop("_respond_tool_injected", False)
+
     rc = await self._prepare_retry_context(**kwargs)
     kwargs["model"] = rc.model
     model = rc.model
@@ -170,6 +175,7 @@ async def _streaming_acompletion_with_retry(
                                     model,
                                     request,
                                     provider_plugin,
+                                    respond_tool_active=_respond_tool_injected,
                                 )
 
                                 # Release the key when the stream consumer finishes iterating.
@@ -330,6 +336,7 @@ async def _streaming_acompletion_with_retry(
                                 model,
                                 request,
                                 provider_plugin,
+                                respond_tool_active=_respond_tool_injected,
                             )
 
                             # Release the key when the stream consumer finishes iterating.
@@ -450,7 +457,8 @@ async def _streaming_acompletion_with_retry(
 
                         # Record in accumulator for client reporting
                         error_accumulator.record_error(
-                            current_cred, classified_error, error_message_text
+                            current_cred, classified_error, error_message_text,
+                            attempt_number=attempt + 1,
                         )
 
                         if (

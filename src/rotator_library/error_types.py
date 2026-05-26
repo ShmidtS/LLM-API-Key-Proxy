@@ -21,6 +21,8 @@ class ClassifiedError:
         "quota_value",
         "quota_id",
         "reason",
+        "raw_response_body",
+        "attempt_number",
     )
 
     def __init__(
@@ -34,6 +36,8 @@ class ClassifiedError:
         quota_value: Optional[str] = None,
         quota_id: Optional[str] = None,
         reason: Optional[str] = None,
+        raw_response_body: Optional[str] = None,
+        attempt_number: int = 0,
     ):
         self.error_type = error_type
         self.original_exception = original_exception
@@ -49,6 +53,10 @@ class ClassifiedError:
         self.quota_id = quota_id
         # Provider-specific reason (e.g., INSUFFICIENT_BALANCE, QUOTA_EXHAUSTED)
         self.reason = reason
+        # Raw response body from provider (max 2KB stored internally)
+        self.raw_response_body = raw_response_body
+        # Which attempt number produced this error (1-based, 0 = unset)
+        self.attempt_number = attempt_number
 
     def __str__(self):
         parts = [
@@ -159,6 +167,33 @@ class GarbageResponseError(Exception):
         super().__init__(self.message)
 
 
+class SchemaValidationError(GarbageResponseError):
+    """Raised when a provider response fails structural schema validation.
+
+    Unlike content-quality garbage detection, this catches malformed structure:
+    missing required fields, wrong types, invalid enum values.
+
+    Attributes:
+        provider: The provider name
+        model: The model that was requested
+        reason: Description of the schema violation
+        field_path: Dotted path to the violated field (e.g. ``choices[0].message``)
+        attempt_count: How many attempts were made before giving up
+    """
+
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        reason: str = "",
+        field_path: str = "",
+        attempt_count: int = 0,
+    ):
+        self.field_path = field_path
+        self.attempt_count = attempt_count
+        super().__init__(provider=provider, model=model, reason=reason)
+
+
 class TransientQuotaError(Exception):
     """
     Raised when a provider returns a 429 without retry timing information.
@@ -197,14 +232,35 @@ class ContextOverflowError(Exception):
 
     Attributes:
         model: The model that was requested
+        tokens_over_limit: How many tokens over the limit (0 if unknown)
+        current_tokens: Current token count (0 if unknown)
+        context_limit: Context window limit in tokens (0 if unknown)
         message: Human-readable message about the error
     """
 
-    def __init__(self, model: str, message: str = ""):
+    def __init__(
+        self,
+        model: str,
+        message: str = "",
+        *,
+        tokens_over_limit: int = 0,
+        current_tokens: int = 0,
+        context_limit: int = 0,
+    ):
         self.model = model
-        self.message = (
-            message or f"Input tokens exceed context window for model {model}"
-        )
+        self.tokens_over_limit = tokens_over_limit
+        self.current_tokens = current_tokens
+        self.context_limit = context_limit
+        if not message:
+            if tokens_over_limit:
+                message = (
+                    f"Input tokens exceed context window for model {model}: "
+                    f"{current_tokens} tokens, limit {context_limit}, "
+                    f"{tokens_over_limit} tokens over limit"
+                )
+            else:
+                message = f"Input tokens exceed context window for model {model}"
+        self.message = message
         super().__init__(self.message)
 
 

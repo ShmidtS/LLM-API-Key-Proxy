@@ -141,6 +141,10 @@ class ProviderInterface(ABC):
         Union[int, Tuple[int, ...], str], Dict[str, Dict[str, Any]]
     ] = {}
 
+    # --- Response validation (Phase 4) ---
+    # "strict" | "standard" | "lenient" | "off"
+    response_validation_level: str = "standard"
+
     @abstractmethod
     async def get_models(self, api_key: str, client: httpx.AsyncClient) -> List[str]:
         """Fetch the list of available model names from the provider's API."""

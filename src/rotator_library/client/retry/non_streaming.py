@@ -14,12 +14,18 @@ import httpx
 from litellm.exceptions import APIConnectionError, InternalServerError, RateLimitError, ServiceUnavailableError  # type: ignore[import-untyped]
 
 from ..retry_base import HalfOpenSlot
+from ...config import (
+    RESPONSE_VALIDATION_ENABLED,
+    RESPONSE_VALIDATION_MAX_RETRIES,
+)
 from ...error_types import (
     ClassifiedError,
     GarbageResponseError,
     NoAvailableKeysError,
+    SchemaValidationError,
     mask_credential,
 )
+from ...response_validator import ResponseValidator
 
 lib_logger = logging.getLogger("rotator_library")
 
@@ -54,6 +60,17 @@ class NonStreamingRetryMixin:
         account_billing_error_count = 0
         total_api_attempts = 0
         remaining_budget = deadline - time.monotonic()
+
+        # --- Phase 4: response validation setup ---
+        # Validation is controlled ONLY by env var and per-provider level.
+        _validation_enabled = RESPONSE_VALIDATION_ENABLED
+        _validation_level = (
+            getattr(provider_plugin, "response_validation_level", "standard")
+            if provider_plugin
+            else "standard"
+        )
+        _validator = ResponseValidator() if _validation_enabled else None
+        _validation_retries = 0
 
         while len(tried_creds) < len(credentials_for_provider) and remaining_budget > 0:
             now = time.monotonic()
@@ -111,8 +128,39 @@ class NonStreamingRetryMixin:
                                 current_cred, model, provider,
                                 response=response, transaction_logger=transaction_logger,
                             )
+
+                            # --- Phase 4: validate custom provider response ---
+                            if _validator is not None:
+                                resp_dict = response
+                                if hasattr(response, "model_dump"):
+                                    resp_dict = response.model_dump()
+                                elif hasattr(response, "dict"):
+                                    resp_dict = response.dict()
+                                vr = _validator.validate_non_streaming(resp_dict, _validation_level)
+                                if not vr.valid:
+                                    lib_logger.warning(
+                                        "Schema validation failed for %s/%s (attempt %d): %s (field: %s)",
+                                        provider, model, attempt + 1, vr.error, vr.field_path,
+                                    )
+                                    if _validation_retries < RESPONSE_VALIDATION_MAX_RETRIES:
+                                        _validation_retries += 1
+                                        msgs = litellm_kwargs.get("messages", [])
+                                        msgs.append({"role": "system", "content": "Your previous response was malformed. Please ensure valid JSON output."})
+                                        litellm_kwargs["messages"] = msgs
+                                        continue
+                                    raise SchemaValidationError(
+                                        provider=provider,
+                                        model=model,
+                                        reason=vr.error,
+                                        field_path=vr.field_path,
+                                        attempt_count=attempt + 1,
+                                    )
+
                             key_acquired = False
                             _cb_slot_held = False  # record_success already released the slot
+                            # --- Phase 5: unwrap respond tool calls ---
+                            from ...synthetic_respond_tool import extract_respond_from_response
+                            response = extract_respond_from_response(response)
                             return response
 
                         except (
@@ -215,8 +263,39 @@ class NonStreamingRetryMixin:
                                 current_cred, model, provider,
                                 response=response, transaction_logger=transaction_logger,
                             )
+
+                            # --- Phase 4: validate standard provider response ---
+                            if _validator is not None:
+                                resp_dict = response
+                                if hasattr(response, "model_dump"):
+                                    resp_dict = response.model_dump()
+                                elif hasattr(response, "dict"):
+                                    resp_dict = response.dict()
+                                vr = _validator.validate_non_streaming(resp_dict, _validation_level)
+                                if not vr.valid:
+                                    lib_logger.warning(
+                                        "Schema validation failed for %s/%s (attempt %d): %s (field: %s)",
+                                        provider, model, attempt + 1, vr.error, vr.field_path,
+                                    )
+                                    if _validation_retries < RESPONSE_VALIDATION_MAX_RETRIES:
+                                        _validation_retries += 1
+                                        msgs = litellm_kwargs.get("messages", [])
+                                        msgs.append({"role": "system", "content": "Your previous response was malformed. Please ensure valid JSON output."})
+                                        litellm_kwargs["messages"] = msgs
+                                        continue
+                                    raise SchemaValidationError(
+                                        provider=provider,
+                                        model=model,
+                                        reason=vr.error,
+                                        field_path=vr.field_path,
+                                        attempt_count=attempt + 1,
+                                    )
+
                             key_acquired = False
                             _cb_slot_held = False  # record_success already released the slot
+                            # --- Phase 5: unwrap respond tool calls ---
+                            from ...synthetic_respond_tool import extract_respond_from_response
+                            response = extract_respond_from_response(response)
                             return response
 
                         except RateLimitError as e:
@@ -289,7 +368,8 @@ class NonStreamingRetryMixin:
                             )
                             error_accumulator.record_error(
                                 current_cred, classified_error,
-                                "Garbage response detected, rotating"
+                                "Garbage response detected, rotating",
+                                attempt_number=attempt + 1,
                             )
                             if _cb_slot_held:
                                 async with HalfOpenSlot(self._resilience, provider):

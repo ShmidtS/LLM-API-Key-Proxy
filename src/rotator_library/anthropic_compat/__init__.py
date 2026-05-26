@@ -25,11 +25,15 @@ from .models import (
 from .translator import (
     anthropic_to_openai_messages,
     anthropic_to_openai_tools,
+    anthropic_to_openai_tool_choice,
+    openai_to_anthropic_messages,
     openai_to_anthropic_response,
+    openai_to_anthropic_tool_choice,
     translate_anthropic_request,
 )
 
 from .streaming_fast import anthropic_streaming_wrapper
+from .translation_audit import TranslationAuditLog
 
 __all__ = [
     # Models
@@ -38,8 +42,13 @@ __all__ = [
     # Translator functions
     "anthropic_to_openai_messages",
     "anthropic_to_openai_tools",
+    "anthropic_to_openai_tool_choice",
+    "openai_to_anthropic_messages",
     "openai_to_anthropic_response",
+    "openai_to_anthropic_tool_choice",
     "translate_anthropic_request",
     # Streaming
     "anthropic_streaming_wrapper",
+    # Audit
+    "TranslationAuditLog",
 ]

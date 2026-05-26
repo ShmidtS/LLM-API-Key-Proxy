@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 ShmidtS
 
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -28,8 +31,15 @@ from proxy_app.middleware import SecurityHeadersMiddleware, _NoGzipForSSE
 from proxy_app.onboarding import run_onboarding_if_needed
 
 
+def _register_routes(app: FastAPI) -> None:
+    from proxy_app.routes import all_routers
+
+    for router in all_routers:
+        app.include_router(router)
+
+
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from proxy_app.bootstrap import create_lifespan_from_environment
 
     if not getattr(app.state, "routes_registered", False):
@@ -64,12 +74,6 @@ app.add_middleware(
 )
 app.add_middleware(_NoGzipForSSE)
 app.add_middleware(SecurityHeadersMiddleware)
-
-def _register_routes(app: FastAPI) -> None:
-    from proxy_app.routes import all_routers
-
-    for router in all_routers:
-        app.include_router(router)
 
 
 if __name__ == "__main__":

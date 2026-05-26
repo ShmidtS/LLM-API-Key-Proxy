@@ -423,6 +423,84 @@ class RotatingClient(
         self._http_pool = None
         self._pool_initialized = False
 
+    def _maybe_apply_compaction(
+        self,
+        kwargs: dict,
+        model: str,
+        request: Optional[Any] = None,
+    ) -> None:
+        """Apply context compaction to kwargs['messages'] if enabled.
+
+        Checks CONTEXT_COMPACTION_ENABLED env var and per-request
+        X-Context-Compaction header. Mutates kwargs in-place (replaces
+        the messages list with the compacted copy).
+
+        Raises ContextOverflowError if compaction cannot fit messages.
+        """
+        from ..config.defaults import (
+            CONTEXT_COMPACTION_ENABLED,
+            CONTEXT_COMPACTION_THRESHOLD,
+            COMPACTION_KEEP_RECENT_TOOLS,
+            COMPACTION_KEEP_RECENT_ASSISTANT,
+        )
+        from ..context_compactor import CompactionConfig, ContextCompactor
+        from ..token_calculator import count_input_tokens, get_context_window
+
+        # Determine if compaction is requested
+        header_value = None
+        if request is not None:
+            headers = getattr(request, "headers", None)
+            if headers:
+                header_value = headers.get("x-context-compaction")
+        compaction_enabled = CONTEXT_COMPACTION_ENABLED or (
+            isinstance(header_value, str) and header_value.lower() == "auto"
+        )
+        if not compaction_enabled:
+            return
+
+        messages = kwargs.get("messages")
+        if not messages:
+            return
+
+        # Get context window
+        context_window = get_context_window(model, self._model_registry)
+        if context_window is None:
+            lib_logger.debug(
+                "Context compaction skipped: unknown context window for %s", model,
+            )
+            return
+
+        config = CompactionConfig(
+            enabled=True,
+            threshold=CONTEXT_COMPACTION_THRESHOLD,
+            keep_recent_tools=COMPACTION_KEEP_RECENT_TOOLS,
+            keep_recent_assistant=COMPACTION_KEEP_RECENT_ASSISTANT,
+        )
+
+        def _counter(msgs: list, mdl: str) -> int:
+            return count_input_tokens(msgs, mdl)
+
+        compactor = ContextCompactor(config=config, token_counter=_counter)
+        # Build a minimal request_data dict for the compactor
+        request_data = {"messages": messages}
+        tools = kwargs.get("tools")
+        if tools:
+            request_data["tools"] = tools
+
+        compacted = compactor.compact(
+            request_data,
+            context_window=context_window,
+            model=model,
+        )
+
+        # Replace messages with compacted copy
+        if compacted["messages"] is not messages:
+            kwargs["messages"] = compacted["messages"]
+            lib_logger.debug(
+                "Context compaction applied: model=%s original=%d compacted=%d messages",
+                model, len(messages), len(compacted["messages"]),
+            )
+
     def acompletion(
         self,
         request: Optional[Any] = None,
@@ -445,6 +523,27 @@ class RotatingClient(
         model = normalize_model_string(kwargs.get("model", ""))
         kwargs["model"] = model
         provider = extract_provider_from_model(model)
+
+        # Apply tiered context compaction if enabled (env var or per-request header)
+        self._maybe_apply_compaction(kwargs, model, request)
+
+        # Apply synthetic respond tool injection for matching models
+        from ..synthetic_respond_tool import inject_respond_tool, strip_respond_tool_from_history
+        kwargs = strip_respond_tool_from_history(kwargs)
+        _respond_tool_header = ""
+        if request and hasattr(request, "headers"):
+            try:
+                _respond_tool_header = str(request.headers.get("x-synthetic-respond-tool", "")).lower()
+            except Exception:
+                _respond_tool_header = ""
+        if _respond_tool_header == "true":
+            _respond_tool_injected = inject_respond_tool(kwargs)
+        elif _respond_tool_header == "false":
+            _respond_tool_injected = False
+        else:
+            _respond_tool_injected = inject_respond_tool(kwargs)
+        if _respond_tool_injected:
+            kwargs["_respond_tool_injected"] = True
 
         if self._is_image_only_model(model):
             prompt = self._extract_prompt_from_chat_messages(kwargs.get("messages", []))

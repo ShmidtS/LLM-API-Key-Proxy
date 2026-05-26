@@ -41,6 +41,7 @@ def env_float(key: str, default: float) -> float:
     except (TypeError, ValueError):
         return default
 
+
 # =============================================================================
 # ROTATION & SELECTION DEFAULTS
 # =============================================================================
@@ -260,7 +261,9 @@ HTTP_STREAMING_MAX_CONNECTIONS_WINDOWS: int = 64
 HTTP_STREAMING_MAX_CONNECTIONS_POSIX: int = 192
 HTTP_STREAMING_MAX_KEEPALIVE_WINDOWS: int = 32
 HTTP_STREAMING_MAX_KEEPALIVE_POSIX: int = 64
-HTTP_STREAMING_KEEPALIVE_EXPIRY: float = env_float("HTTP_STREAMING_KEEPALIVE_EXPIRY", 180.0)
+HTTP_STREAMING_KEEPALIVE_EXPIRY: float = env_float(
+    "HTTP_STREAMING_KEEPALIVE_EXPIRY", 180.0
+)
 HTTP_SSL_VERIFY_DEFAULT: bool = True
 HTTP_WARMUP_HOST_LIMIT: int = env_int("HTTP_WARMUP_HOST_LIMIT", 5)
 
@@ -421,6 +424,24 @@ GARBAGE_DETECTION_ENABLED: bool = env_bool("GARBAGE_DETECTION_ENABLED", True)
 GARBAGE_REPETITION_THRESHOLD: float = env_float("GARBAGE_REPETITION_THRESHOLD", 0.25)
 
 # =============================================================================
+# RESPONSE VALIDATION DEFAULTS
+# =============================================================================
+# Structural schema validation for provider responses (Phase 4).
+
+# Enable response schema validation
+# Override: RESPONSE_VALIDATION_ENABLED=true/false
+RESPONSE_VALIDATION_ENABLED: bool = env_bool("RESPONSE_VALIDATION_ENABLED", False)
+
+# Maximum content-retry attempts when non-streaming response fails validation
+# Override: RESPONSE_VALIDATION_MAX_RETRIES=<int>
+RESPONSE_VALIDATION_MAX_RETRIES: int = env_int("RESPONSE_VALIDATION_MAX_RETRIES", 1)
+
+# Default validation level when provider does not override
+# "strict" | "standard" | "lenient" | "off"
+# Override: RESPONSE_VALIDATION_LEVEL=<level>
+RESPONSE_VALIDATION_LEVEL: str = os.getenv("RESPONSE_VALIDATION_LEVEL", "standard")
+
+# =============================================================================
 # OAUTH & HOST DEFAULTS
 # =============================================================================
 
@@ -439,6 +460,27 @@ PROXY_DEFAULT_PORT: int = env_int("PROXY_DEFAULT_PORT", 8000)
 # =============================================================================
 # PROXY PROVIDERS DEFAULTS
 # =============================================================================
+
+# =============================================================================
+# CONTEXT COMPACTION DEFAULTS
+# =============================================================================
+# Tiered context compaction: deterministic message truncation before provider send.
+
+# Enable context compaction (deterministic three-phase message truncation)
+# Override: CONTEXT_COMPACTION_ENABLED=true/false
+CONTEXT_COMPACTION_ENABLED: bool = env_bool("CONTEXT_COMPACTION_ENABLED", True)
+
+# Threshold as fraction of context window (0.90 = 90%)
+# Override: CONTEXT_COMPACTION_THRESHOLD=<float>
+CONTEXT_COMPACTION_THRESHOLD: float = env_float("CONTEXT_COMPACTION_THRESHOLD", 0.90)
+
+# Number of recent tool messages to preserve during Phase 2
+# Override: COMPACTION_KEEP_RECENT_TOOLS=<int>
+COMPACTION_KEEP_RECENT_TOOLS: int = env_int("COMPACTION_KEEP_RECENT_TOOLS", 5)
+
+# Number of recent assistant messages to preserve text for during Phase 3
+# Override: COMPACTION_KEEP_RECENT_ASSISTANT=<int>
+COMPACTION_KEEP_RECENT_ASSISTANT: int = env_int("COMPACTION_KEEP_RECENT_ASSISTANT", 3)
 
 # Comma-separated list of providers that route through multiple backends.
 # IP throttle detection is unreliable for these providers.
@@ -516,7 +558,9 @@ PATCH_LITELLM_FINISH_REASON: bool = env_bool("PATCH_LITELLM_FINISH_REASON", True
 
 # Suppress Pydantic serialization warnings from litellm internals
 # Override: SUPPRESS_LITELLM_SERIALIZATION_WARNINGS=0/1
-SUPPRESS_LITELLM_SERIALIZATION_WARNINGS: bool = env_bool("SUPPRESS_LITELLM_SERIALIZATION_WARNINGS", True)
+SUPPRESS_LITELLM_SERIALIZATION_WARNINGS: bool = env_bool(
+    "SUPPRESS_LITELLM_SERIALIZATION_WARNINGS", True
+)
 
 # =============================================================================
 # HTTP CLIENT MISC DEFAULTS
@@ -527,8 +571,20 @@ SUPPRESS_LITELLM_SERIALIZATION_WARNINGS: bool = env_bool("SUPPRESS_LITELLM_SERIA
 HTTP2_ENABLED: bool = env_bool("HTTP2_ENABLED", os.name != "nt")
 
 # =============================================================================
+# SYNTHETIC RESPOND TOOL DEFAULTS
+# =============================================================================
+# Injects a synthetic ``respond`` tool for small models that lack native
+# tool-use support.  Tool calls are unwrapped into plain text completions.
+
+# Comma-separated list of model name patterns (supports * wildcards)
+# When empty (default), the respond tool adapter is fully disabled.
+# Override: SYNTHETIC_RESPOND_TOOL_MODELS=gemini-2.0-flash*,haiku*
+_env_respond_models = os.getenv("SYNTHETIC_RESPOND_TOOL_MODELS", "")
+SYNTHETIC_RESPOND_TOOL_MODELS: frozenset = frozenset(
+    m.strip() for m in _env_respond_models.split(",") if m.strip()
+)
+
+# =============================================================================
 # COOLDOWN DISABLE FLAGS (from theblazehen fork)
 # =============================================================================
 # Allows disabling cooldowns per-provider for debugging/emergency purposes.
-
-

@@ -271,7 +271,8 @@ class RetryCommonMixin:
 
         if attempt >= self.max_retries - 1:
             error_accumulator.record_error(
-                current_cred, classified_error, error_message
+                current_cred, classified_error, error_message,
+                attempt_number=attempt + 1,
             )
             lib_logger.warning(
                 "Cred %s failed after max retries. Rotating.",
@@ -288,7 +289,8 @@ class RetryCommonMixin:
         remaining_budget = deadline - time.monotonic()
         if wait_time > remaining_budget:
             error_accumulator.record_error(
-                current_cred, classified_error, error_message
+                current_cred, classified_error, error_message,
+                attempt_number=attempt + 1,
             )
             lib_logger.warning(
                 "Retry wait (%2.2fs) exceeds budget (%2.2fs). Rotating.",
@@ -329,7 +331,8 @@ class RetryCommonMixin:
         )
 
         error_accumulator.record_error(
-            current_cred, classified_error, error_message
+            current_cred, classified_error, error_message,
+            attempt_number=attempt + 1,
         )
 
         lib_logger.warning(
@@ -344,7 +347,8 @@ class RetryCommonMixin:
 
         if attempt >= self.max_retries - 1:
             error_accumulator.record_error(
-                current_cred, classified_error, error_message
+                current_cred, classified_error, error_message,
+                attempt_number=attempt + 1,
             )
             lib_logger.warning(
                 "Cred %s failed after max retries. Rotating.",
@@ -357,7 +361,8 @@ class RetryCommonMixin:
 
         if not self._sleep_within_budget(attempt, deadline, classified_error):
             error_accumulator.record_error(
-                current_cred, classified_error, error_message
+                current_cred, classified_error, error_message,
+                attempt_number=attempt + 1,
             )
             lib_logger.warning("Retry wait exceeds budget. Rotating.")
             return _ErrorDecision(
@@ -408,7 +413,8 @@ class RetryCommonMixin:
         )
 
         error_accumulator.record_error(
-            current_cred, classified_error, error_message
+            current_cred, classified_error, error_message,
+            attempt_number=attempt + 1,
         )
 
         if not should_rotate_on_error(classified_error):
