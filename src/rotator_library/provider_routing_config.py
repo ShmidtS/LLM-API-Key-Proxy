@@ -141,6 +141,82 @@ KNOWN_PROVIDERS.add("zai")  # ZAI has custom quota tracking provider
 KNOWN_PROVIDERS.add("fireworks")  # fireworks_ai alias — users specify "fireworks/" prefix
 
 
+def _normalize_reasoning_effort(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize non-standard reasoning_effort values for LiteLLM compatibility."""
+    effort = kwargs.get("reasoning_effort")
+    if not isinstance(effort, str):
+        return kwargs
+    effort_lower = effort.lower().strip()
+    mapping = {
+        "xhigh": "high",
+        "extreme": "high",
+        "maximum": "high",
+        "very_high": "high",
+        "extra_high": "high",
+        "medium_high": "high",
+        "low_medium": "medium",
+        "medium_low": "low",
+        "minimal": "low",
+        "xlow": "low",
+        "very_low": "low",
+    }
+    normalized = mapping.get(effort_lower)
+    if normalized and normalized != effort_lower:
+        kwargs = kwargs.copy()
+        kwargs["reasoning_effort"] = normalized
+        lib_logger.warning(
+            "Normalized reasoning_effort '%s' -> '%s' for LiteLLM compatibility",
+            effort,
+            normalized,
+        )
+    return kwargs
+
+
+def _convert_anthropic_thinking_to_adaptive(
+    kwargs: Dict[str, Any], model: str
+) -> Dict[str, Any]:
+    """Convert reasoning_effort to Anthropic adaptive thinking format for newer models.
+
+    Claude 4 models (e.g., claude-opus-4, claude-sonnet-4) reject the legacy
+    ``thinking.type.enabled`` parameter. They require ``thinking.type.adaptive``
+    and ``output_config.effort`` instead.
+    """
+    model_name = model.split("/", 1)[1] if "/" in model else model
+    if not (
+        model_name.startswith("claude-opus-4")
+        or model_name.startswith("claude-sonnet-4")
+    ):
+        return kwargs
+
+    reasoning_effort = kwargs.get("reasoning_effort")
+    if reasoning_effort is None:
+        return kwargs
+
+    effort_str = str(reasoning_effort).lower().strip()
+    if effort_str not in ("low", "medium", "high"):
+        return kwargs
+
+    # Don't override if user already provided thinking or output_config
+    if kwargs.get("thinking") is not None or kwargs.get("output_config") is not None:
+        return kwargs
+
+    kwargs = kwargs.copy()
+    kwargs.pop("reasoning_effort", None)
+
+    # Pass through as top-level kwargs — LiteLLM's Anthropic handler
+    # forwards unknown dict keys to the Anthropic SDK; extra_body is
+    # an OpenAI-concept that Anthropic's API itself rejects.
+    kwargs["thinking"] = {"type": "adaptive"}
+    kwargs["output_config"] = {"effort": effort_str}
+
+    lib_logger.info(
+        "Converted reasoning_effort='%s' to Anthropic adaptive thinking for %s",
+        effort_str,
+        model,
+    )
+    return kwargs
+
+
 class ProviderConfig:
     """
     Centralized provider configuration handling.
@@ -244,9 +320,12 @@ class ProviderConfig:
         Returns:
             Modified kwargs dict ready for LiteLLM
         """
+        kwargs = _normalize_reasoning_effort(kwargs)
         model = kwargs.get("model")
         if not model:
             return kwargs
+
+        kwargs = _convert_anthropic_thinking_to_adaptive(kwargs, model)
 
         # Extract provider from model string (e.g., "openai/gpt-4" -> "openai")
         provider = model.split("/")[0].lower()
