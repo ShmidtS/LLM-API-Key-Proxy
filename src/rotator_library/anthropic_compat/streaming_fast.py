@@ -28,6 +28,89 @@ from ..utils.json_utils import json_dumps_str as json_dumps, json_loads, STREAM_
 
 logger = logging.getLogger("rotator_library.anthropic_compat")
 
+_THINK_START = "<think>"
+_THINK_END = "</think>"
+
+
+class ThinkTagParser:
+    __slots__ = ("enabled", "in_thinking", "pending")
+
+    """Split streamed ``<think>`` tags into reasoning/text segments."""
+
+    def __init__(self, enabled: bool):
+        self.enabled = enabled
+        self.in_thinking = False
+        self.pending = ""
+
+    @staticmethod
+    def _suffix_prefix_len(text: str, marker: str) -> int:
+        max_len = min(len(text), len(marker) - 1)
+        for size in range(max_len, 0, -1):
+            if marker.startswith(text[-size:]):
+                return size
+        return 0
+
+    def feed(self, text: str, final: bool = False) -> list[tuple[str, str]]:
+        if not text:
+            return []
+        if not self.enabled:
+            return [("content", text)]
+
+        data = self.pending + text
+        self.pending = ""
+        parts: list[tuple[str, str]] = []
+        pos = 0
+
+        while pos < len(data):
+            marker = _THINK_END if self.in_thinking else _THINK_START
+            idx = data.find(marker, pos)
+            if idx >= 0:
+                if idx > pos:
+                    parts.append((
+                        "reasoning_content" if self.in_thinking else "content",
+                        data[pos:idx],
+                    ))
+                self.in_thinking = not self.in_thinking
+                pos = idx + len(marker)
+                continue
+
+            tail = data[pos:]
+            if not final:
+                hold_len = self._suffix_prefix_len(tail, marker)
+                if hold_len:
+                    emit_text = tail[:-hold_len]
+                    if emit_text:
+                        parts.append((
+                            "reasoning_content" if self.in_thinking else "content",
+                            emit_text,
+                        ))
+                    self.pending = tail[-hold_len:]
+                    return parts
+
+            parts.append((
+                "reasoning_content" if self.in_thinking else "content",
+                tail,
+            ))
+            return parts
+
+        return parts
+
+    def flush(self) -> list[tuple[str, str]]:
+        if not self.pending:
+            return []
+        text = self.pending
+        self.pending = ""
+        return [("reasoning_content" if self.in_thinking else "content", text)]
+
+
+def _should_parse_think_tags(model: str) -> bool:
+    model_lower = (model or "").lower()
+    return (
+        model_lower.startswith("minimax")
+        or "/minimax/" in model_lower
+        or "minimax-" in model_lower
+    )
+
 
 class ChunkBatcher:
     __slots__ = ("buffer", "current_size", "max_size", "max_delay_ms", "last_flush", "_first_event")
@@ -248,7 +331,7 @@ class _StreamTranslator:
         "input_tokens", "output_tokens", "cached_tokens", "cache_creation_tokens",
         "_text_parts", "_thinking_parts",
         "last_event_time", "_chunk_count",
-        "_cache_control_map",
+        "_cache_control_map", "_think_tag_parser",
     )
 
     def __init__(
@@ -287,6 +370,7 @@ class _StreamTranslator:
         self.last_event_time = monotonic()
         self._chunk_count = 0
         self._cache_control_map = cache_control_map or {}
+        self._think_tag_parser = ThinkTagParser(_should_parse_think_tags(original_model))
 
     # ------------------------------------------------------------------
     # Chunk parsing
@@ -379,6 +463,61 @@ class _StreamTranslator:
             events.append(event)
         return events
 
+    def _emit_thinking_segment(self, thinking: str, current_time: float) -> list[str]:
+        """Emit one thinking segment, switching block types if needed."""
+        if not thinking:
+            return []
+
+        events: list[str] = []
+        if self.content_block_started:
+            events.extend(self._close_content_block())
+
+        if not self.thinking_block_started:
+            event_str = _make_content_block_start_event(self.current_block_index, "thinking")
+            if event := self._batch_add(event_str):
+                events.append(event)
+            self.thinking_block_started = True
+
+        event_str = _make_thinking_delta_event(self.current_block_index, thinking)
+        if event := self._batch_add(event_str):
+            events.append(event)
+        self._thinking_parts.append(thinking)
+        self.last_event_time = current_time
+        return events
+
+    def _emit_text_segment(self, text: str, current_time: float) -> list[str]:
+        """Emit one text segment, switching block types if needed."""
+        if not text:
+            return []
+
+        events: list[str] = []
+        if self.thinking_block_started:
+            events.extend(self._close_thinking_block())
+
+        if not self.content_block_started:
+            text_cc = self._cache_control_map.get(self.current_block_index)
+            event_str = _make_content_block_start_event(self.current_block_index, "text", cache_control=text_cc)
+            if event := self._batch_add(event_str):
+                events.append(event)
+            self.content_block_started = True
+
+        event_str = _make_text_delta_event(self.current_block_index, text)
+        if event := self._batch_add(event_str):
+            events.append(event)
+        self._text_parts.append(text)
+        self.last_event_time = current_time
+        return events
+
+    def _emit_content_segments(self, segments: list[tuple[str, str]], current_time: float) -> list[str]:
+        """Emit parser-produced reasoning/text segments in order."""
+        events: list[str] = []
+        for field, text in segments:
+            if field == "reasoning_content":
+                events.extend(self._emit_thinking_segment(text, current_time))
+            else:
+                events.extend(self._emit_text_segment(text, current_time))
+        return events
+
     # ------------------------------------------------------------------
     # Delta handlers
     # ------------------------------------------------------------------
@@ -388,46 +527,14 @@ class _StreamTranslator:
         reasoning_content = delta.get("reasoning_content")
         if not reasoning_content:
             return []
-
-        events: list[str] = []
-        if not self.thinking_block_started:
-            event_str = _make_content_block_start_event(self.current_block_index, "thinking")
-            if event := self._batch_add(event_str):
-                events.append(event)
-            self.thinking_block_started = True
-
-        event_str = _make_thinking_delta_event(self.current_block_index, reasoning_content)
-        if event := self._batch_add(event_str):
-            events.append(event)
-        self._thinking_parts.append(reasoning_content)
-        self.last_event_time = current_time
-        return events
+        return self._emit_thinking_segment(reasoning_content, current_time)
 
     def _handle_text(self, delta: dict, current_time: float) -> list[str]:
         """Handle text content delta. Returns events to yield."""
         content = delta.get("content")
         if not content:
             return []
-
-        events: list[str] = []
-        # Close thinking block if we were in one
-        if self.thinking_block_started and not self.content_block_started:
-            events.extend(self._close_thinking_block())
-
-        if not self.content_block_started:
-            # Restore cache_control for text blocks if present in the map
-            text_cc = self._cache_control_map.get(self.current_block_index)
-            event_str = _make_content_block_start_event(self.current_block_index, "text", cache_control=text_cc)
-            if event := self._batch_add(event_str):
-                events.append(event)
-            self.content_block_started = True
-
-        event_str = _make_text_delta_event(self.current_block_index, content)
-        if event := self._batch_add(event_str):
-            events.append(event)
-        self._text_parts.append(content)
-        self.last_event_time = current_time
-        return events
+        return self._emit_content_segments(self._think_tag_parser.feed(content), current_time)
 
     def _handle_tool_calls(self, delta: dict, current_time: float) -> list[str]:
         """Handle tool call deltas. Returns events to yield."""
@@ -436,6 +543,7 @@ class _StreamTranslator:
             return []
 
         events: list[str] = []
+        events.extend(self._emit_content_segments(self._think_tag_parser.flush(), current_time))
         for tc in tool_calls:
             tc_index = tc.get("index", 0)
 
@@ -490,6 +598,9 @@ class _StreamTranslator:
 
     async def _finalize_stream(self) -> AsyncGenerator[str, None]:
         """Close all open content blocks and send final Anthropic stream events."""
+        for event in self._emit_content_segments(self._think_tag_parser.flush(), monotonic()):
+            yield event
+
         batch_add = self._batch_add
 
         if self.thinking_block_started:

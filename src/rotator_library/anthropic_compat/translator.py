@@ -18,6 +18,7 @@ from ..utils.json_utils import json_dumps_str as _json_dumps, json_loads as _jso
 from .translation_audit import TranslationAuditLog
 
 from .models import AnthropicMessagesRequest
+from .streaming_fast import ThinkTagParser, _should_parse_think_tags
 
 _tlog = logging.getLogger("rotator_library.anthropic_compat")
 
@@ -554,7 +555,17 @@ def openai_to_anthropic_response(openai_response: Dict[str, Any], original_model
     # Add text content if present
     text_content: Optional[str] = message.get("content")
     if text_content:
-        content_blocks.append({"type": "text", "text": text_content})
+        if _should_parse_think_tags(original_model):
+            parser = ThinkTagParser(enabled=True)
+            for field, text in parser.feed(text_content, final=True):
+                if not text:
+                    continue
+                if field == "reasoning_content":
+                    content_blocks.append({"type": "thinking", "thinking": text})
+                else:
+                    content_blocks.append({"type": "text", "text": text})
+        else:
+            content_blocks.append({"type": "text", "text": text_content})
 
     # Add tool use blocks if present
     tool_calls: List[Dict[str, Any]] = message.get("tool_calls") or []
