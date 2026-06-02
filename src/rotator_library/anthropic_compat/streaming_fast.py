@@ -15,8 +15,10 @@ Performance optimizations:
 """
 
 import asyncio
+import html
 import logging
 import httpx
+import re
 from time import monotonic
 import uuid
 from typing import AsyncGenerator, Callable, Optional, Awaitable, Any, TYPE_CHECKING
@@ -30,6 +32,16 @@ logger = logging.getLogger("rotator_library.anthropic_compat")
 
 _THINK_START = "<think>"
 _THINK_END = "</think>"
+_MINIMAX_SEPARATOR_LONG = "]<]minimax[>["
+_MINIMAX_SEPARATOR = "<]minimax[>["
+_TOOL_CALL_START = "<tool_call>"
+_TOOL_CALL_END = "</tool_call>"
+_INVOKE_END = "</invoke>"
+_INVOKE_START_RE = re.compile(r"<invoke\s+name=(['\"])(?P<name>.*?)\1\s*>", re.IGNORECASE | re.DOTALL)
+_PARAM_RE = re.compile(
+    r"<(?P<name>[A-Za-z_][\w.-]*)>(?P<value>.*?)</(?P=name)>",
+    re.DOTALL,
+)
 
 
 class ThinkTagParser:
@@ -110,6 +122,229 @@ def _should_parse_think_tags(model: str) -> bool:
         or "/minimax/" in model_lower
         or "minimax-" in model_lower
     )
+
+
+def _should_parse_text_tool_calls(model: str) -> bool:
+    return _should_parse_think_tags(model)
+
+
+def _strip_minimax_separators(text: str) -> str:
+    if not text:
+        return text
+    return text.replace(_MINIMAX_SEPARATOR_LONG, "").replace(_MINIMAX_SEPARATOR, "")
+
+
+def _coerce_tool_value(value: str) -> Any:
+    stripped = value.strip()
+    lowered = stripped.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered == "null":
+        return None
+    if re.fullmatch(r"-?\d+", stripped):
+        try:
+            return int(stripped)
+        except ValueError:
+            return value
+    if re.fullmatch(r"-?\d+\.\d+", stripped):
+        try:
+            return float(stripped)
+        except ValueError:
+            return value
+    return value
+
+
+class MiniMaxTextToolCallParser:
+    __slots__ = ("enabled", "pending", "in_tool_call", "_next_index")
+
+    """Recover MiniMax text-form tool calls from streamed content."""
+
+    _SAFE_TAIL_LEN = max(
+        len(_MINIMAX_SEPARATOR_LONG),
+        len(_TOOL_CALL_START),
+        len(_TOOL_CALL_END),
+        len("<invoke name=\""),
+    ) - 1
+
+    def __init__(self, enabled: bool):
+        self.enabled = enabled
+        self.pending = ""
+        self.in_tool_call = False
+        self._next_index = 0
+
+    @staticmethod
+    def _suffix_prefix_len(text: str) -> int:
+        markers = (
+            _MINIMAX_SEPARATOR_LONG,
+            _MINIMAX_SEPARATOR,
+            _TOOL_CALL_START,
+            _TOOL_CALL_END,
+            "<invoke",
+        )
+        max_len = min(len(text), max(len(marker) for marker in markers) - 1)
+        for size in range(max_len, 0, -1):
+            suffix = text[-size:]
+            if any(marker.startswith(suffix) for marker in markers):
+                return size
+        return 0
+
+    @staticmethod
+    def _clean_text(text: str) -> str:
+        return _strip_minimax_separators(text)
+
+    def _strip_orphan_tool_call_end(self) -> bool:
+        stripped = self.pending.lstrip()
+        lowered = stripped.lower()
+        if lowered.startswith(_TOOL_CALL_END):
+            self.pending = stripped[len(_TOOL_CALL_END):]
+            return True
+        if lowered.startswith("]" + _TOOL_CALL_END):
+            self.pending = stripped[len(_TOOL_CALL_END) + 1:]
+            return True
+        return False
+
+    def _make_tool_call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        tool_call = {
+            "index": self._next_index,
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": json_dumps(arguments),
+            },
+        }
+        self._next_index += 1
+        return tool_call
+
+    def _parse_invoke(self, raw: str) -> Optional[dict[str, Any]]:
+        match = _INVOKE_START_RE.search(raw)
+        if not match:
+            return None
+
+        name = html.unescape(match.group("name").strip())
+        if not name:
+            return None
+
+        end_idx = raw.lower().rfind(_INVOKE_END)
+        if end_idx < match.end():
+            return None
+
+        body = raw[match.end():end_idx]
+        arguments: dict[str, Any] = {}
+        for param in _PARAM_RE.finditer(body):
+            key = html.unescape(param.group("name"))
+            value = html.unescape(self._clean_text(param.group("value")))
+            arguments[key] = _coerce_tool_value(value)
+
+        return self._make_tool_call(name, arguments)
+
+    def feed(self, text: str, final: bool = False) -> list[tuple[str, Any]]:
+        if not text and not final:
+            return []
+        if not self.enabled:
+            return [("content", text)] if text else []
+
+        self.pending += text
+        parts: list[tuple[str, Any]] = []
+
+        while self.pending:
+            self.pending = self._clean_text(self.pending)
+            lower = self.pending.lower()
+
+            if not self.in_tool_call and self._strip_orphan_tool_call_end():
+                continue
+
+            if self.in_tool_call:
+                tool_end_idx = lower.find(_TOOL_CALL_END)
+                invoke_idx = lower.find("<invoke")
+
+                if invoke_idx < 0:
+                    if tool_end_idx >= 0:
+                        self.pending = self.pending[tool_end_idx + len(_TOOL_CALL_END):]
+                        self.in_tool_call = False
+                        continue
+                    if final:
+                        self.pending = ""
+                    break
+
+                if tool_end_idx >= 0 and tool_end_idx < invoke_idx:
+                    self.pending = self.pending[tool_end_idx + len(_TOOL_CALL_END):]
+                    self.in_tool_call = False
+                    continue
+
+                if invoke_idx > 0:
+                    self.pending = self.pending[invoke_idx:]
+                    lower = self.pending.lower()
+
+                invoke_end_idx = lower.find(_INVOKE_END)
+                if invoke_end_idx < 0:
+                    if final:
+                        self.pending = ""
+                    break
+
+                raw_invoke = self.pending[:invoke_end_idx + len(_INVOKE_END)]
+                if tool_call := self._parse_invoke(raw_invoke):
+                    parts.append(("tool_call", tool_call))
+
+                self.pending = self.pending[invoke_end_idx + len(_INVOKE_END):]
+                lower = self.pending.lower()
+                if lower.startswith(_TOOL_CALL_END):
+                    self.pending = self.pending[len(_TOOL_CALL_END):]
+                    self.in_tool_call = False
+                continue
+
+            tool_idx = lower.find(_TOOL_CALL_START)
+            invoke_idx = lower.find("<invoke")
+            candidates = [idx for idx in (tool_idx, invoke_idx) if idx >= 0]
+            start_idx = min(candidates) if candidates else -1
+
+            if start_idx < 0:
+                if final:
+                    emit_text = self.pending
+                    self.pending = ""
+                else:
+                    hold_len = max(self._suffix_prefix_len(self.pending), self._SAFE_TAIL_LEN)
+                    if len(self.pending) <= hold_len:
+                        break
+                    emit_text = self.pending[:-hold_len]
+                    self.pending = self.pending[-hold_len:]
+                if emit_text := self._clean_text(emit_text):
+                    parts.append(("content", emit_text))
+                break
+
+            if start_idx > 0:
+                emit_text = self.pending[:start_idx]
+                if emit_text := self._clean_text(emit_text):
+                    parts.append(("content", emit_text))
+                self.pending = self.pending[start_idx:]
+                lower = self.pending.lower()
+
+            if lower.startswith(_TOOL_CALL_START):
+                self.pending = self.pending[len(_TOOL_CALL_START):]
+                self.in_tool_call = True
+                continue
+
+            invoke_end_idx = lower.find(_INVOKE_END)
+            if invoke_end_idx < 0:
+                if final:
+                    self.pending = ""
+                break
+
+            raw_invoke = self.pending[:invoke_end_idx + len(_INVOKE_END)]
+            if tool_call := self._parse_invoke(raw_invoke):
+                parts.append(("tool_call", tool_call))
+                self.pending = self.pending[invoke_end_idx + len(_INVOKE_END):]
+            else:
+                emit_text = self.pending[:invoke_end_idx + len(_INVOKE_END)]
+                if emit_text := self._clean_text(emit_text):
+                    parts.append(("content", emit_text))
+                self.pending = self.pending[invoke_end_idx + len(_INVOKE_END):]
+
+        return parts
+
+    def flush(self) -> list[tuple[str, Any]]:
+        return self.feed("", final=True)
 
 
 class ChunkBatcher:
@@ -331,7 +566,7 @@ class _StreamTranslator:
         "input_tokens", "output_tokens", "cached_tokens", "cache_creation_tokens",
         "_text_parts", "_thinking_parts",
         "last_event_time", "_chunk_count",
-        "_cache_control_map", "_think_tag_parser",
+        "_cache_control_map", "_think_tag_parser", "_text_tool_parser",
     )
 
     def __init__(
@@ -371,6 +606,7 @@ class _StreamTranslator:
         self._chunk_count = 0
         self._cache_control_map = cache_control_map or {}
         self._think_tag_parser = ThinkTagParser(_should_parse_think_tags(original_model))
+        self._text_tool_parser = MiniMaxTextToolCallParser(_should_parse_text_tool_calls(original_model))
 
     # ------------------------------------------------------------------
     # Chunk parsing
@@ -518,6 +754,20 @@ class _StreamTranslator:
                 events.extend(self._emit_text_segment(text, current_time))
         return events
 
+    def _emit_text_tool_segments(self, segments: list[tuple[str, Any]], current_time: float) -> list[str]:
+        """Emit content and recovered text-form tool calls in stream order."""
+        events: list[str] = []
+        for field, value in segments:
+            if field == "tool_call":
+                events.extend(self._emit_content_segments(self._think_tag_parser.flush(), current_time))
+                events.extend(self._emit_structured_tool_calls([value], current_time))
+            else:
+                events.extend(self._emit_content_segments(
+                    self._think_tag_parser.feed(value),
+                    current_time,
+                ))
+        return events
+
     # ------------------------------------------------------------------
     # Delta handlers
     # ------------------------------------------------------------------
@@ -527,14 +777,16 @@ class _StreamTranslator:
         reasoning_content = delta.get("reasoning_content")
         if not reasoning_content:
             return []
-        return self._emit_thinking_segment(reasoning_content, current_time)
+        events = self._emit_text_tool_segments(self._text_tool_parser.flush(), current_time)
+        events.extend(self._emit_thinking_segment(reasoning_content, current_time))
+        return events
 
     def _handle_text(self, delta: dict, current_time: float) -> list[str]:
         """Handle text content delta. Returns events to yield."""
         content = delta.get("content")
         if not content:
             return []
-        return self._emit_content_segments(self._think_tag_parser.feed(content), current_time)
+        return self._emit_text_tool_segments(self._text_tool_parser.feed(content), current_time)
 
     def _handle_tool_calls(self, delta: dict, current_time: float) -> list[str]:
         """Handle tool call deltas. Returns events to yield."""
@@ -543,7 +795,14 @@ class _StreamTranslator:
             return []
 
         events: list[str] = []
+        events.extend(self._emit_text_tool_segments(self._text_tool_parser.flush(), current_time))
         events.extend(self._emit_content_segments(self._think_tag_parser.flush(), current_time))
+        events.extend(self._emit_structured_tool_calls(tool_calls, current_time))
+        return events
+
+    def _emit_structured_tool_calls(self, tool_calls: list[dict], current_time: float) -> list[str]:
+        """Emit OpenAI-format tool call deltas as Anthropic tool_use blocks."""
+        events: list[str] = []
         for tc in tool_calls:
             tc_index = tc.get("index", 0)
 
@@ -598,6 +857,8 @@ class _StreamTranslator:
 
     async def _finalize_stream(self) -> AsyncGenerator[str, None]:
         """Close all open content blocks and send final Anthropic stream events."""
+        for event in self._emit_text_tool_segments(self._text_tool_parser.flush(), monotonic()):
+            yield event
         for event in self._emit_content_segments(self._think_tag_parser.flush(), monotonic()):
             yield event
 

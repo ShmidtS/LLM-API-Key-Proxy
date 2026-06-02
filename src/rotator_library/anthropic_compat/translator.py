@@ -18,7 +18,12 @@ from ..utils.json_utils import json_dumps_str as _json_dumps, json_loads as _jso
 from .translation_audit import TranslationAuditLog
 
 from .models import AnthropicMessagesRequest
-from .streaming_fast import ThinkTagParser, _should_parse_think_tags
+from .streaming_fast import (
+    MiniMaxTextToolCallParser,
+    ThinkTagParser,
+    _should_parse_text_tool_calls,
+    _should_parse_think_tags,
+)
 
 _tlog = logging.getLogger("rotator_library.anthropic_compat")
 
@@ -552,10 +557,40 @@ def openai_to_anthropic_response(openai_response: Dict[str, Any], original_model
             }
         )
 
+    recovered_tool_calls: List[Dict[str, Any]] = []
+
     # Add text content if present
     text_content: Optional[str] = message.get("content")
     if text_content:
-        if _should_parse_think_tags(original_model):
+        if _should_parse_text_tool_calls(original_model):
+            tool_parser = MiniMaxTextToolCallParser(enabled=True)
+            think_parser = ThinkTagParser(enabled=_should_parse_think_tags(original_model))
+            for field, value in tool_parser.feed(text_content, final=True):
+                if field == "tool_call":
+                    for sub_field, sub_text in think_parser.flush():
+                        if not sub_text:
+                            continue
+                        if sub_field == "reasoning_content":
+                            content_blocks.append({"type": "thinking", "thinking": sub_text})
+                        else:
+                            content_blocks.append({"type": "text", "text": sub_text})
+                    recovered_tool_calls.append(value)
+                    continue
+                for sub_field, sub_text in think_parser.feed(value):
+                    if not sub_text:
+                        continue
+                    if sub_field == "reasoning_content":
+                        content_blocks.append({"type": "thinking", "thinking": sub_text})
+                    else:
+                        content_blocks.append({"type": "text", "text": sub_text})
+            for sub_field, sub_text in think_parser.flush():
+                if not sub_text:
+                    continue
+                if sub_field == "reasoning_content":
+                    content_blocks.append({"type": "thinking", "thinking": sub_text})
+                else:
+                    content_blocks.append({"type": "text", "text": sub_text})
+        elif _should_parse_think_tags(original_model):
             parser = ThinkTagParser(enabled=True)
             for field, text in parser.feed(text_content, final=True):
                 if not text:
@@ -568,7 +603,7 @@ def openai_to_anthropic_response(openai_response: Dict[str, Any], original_model
             content_blocks.append({"type": "text", "text": text_content})
 
     # Add tool use blocks if present
-    tool_calls: List[Dict[str, Any]] = message.get("tool_calls") or []
+    tool_calls: List[Dict[str, Any]] = (message.get("tool_calls") or []) + recovered_tool_calls
     for tc in tool_calls:
         func: Dict[str, Any] = tc.get("function", {})
         try:
@@ -598,7 +633,7 @@ def openai_to_anthropic_response(openai_response: Dict[str, Any], original_model
         "content_filter": "end_turn",
         "function_call": "tool_use",
     }
-    stop_reason: str = stop_reason_map.get(finish_reason, "end_turn")
+    stop_reason: str = "tool_use" if recovered_tool_calls else stop_reason_map.get(finish_reason, "end_turn")
 
     # Build usage
     # Note: Google's promptTokenCount INCLUDES cached tokens, but Anthropic's
